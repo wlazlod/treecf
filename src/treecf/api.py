@@ -78,6 +78,9 @@ class Explainer:
         self.ir = model if isinstance(model, EnsembleIR) else parse_model(model)
         names = self.ir.feature_names
         self.compiled = compile_constraints(constraints, names)
+        self.background = (
+            None if background is None else np.asarray(background, dtype=np.float64)
+        )
         self.sigma = _resolve_sigma(names, background, normalizers)
         self.weights = np.array([(weights or {}).get(name, 1.0) for name in names])
         self.value_policy = value_policy or {}
@@ -95,9 +98,12 @@ class Explainer:
         time_budget_s: float = 10.0,
         sparsity_weight: float = 0.0,
         num_workers: int = 0,
+        seed: int | None = None,
     ) -> Counterfactual | Infeasible:
         x = np.asarray(x, dtype=np.float64)
         interval = target.raw_interval(self.ir.link)
+        if backend == "genetic":
+            return self._explain_genetic(x, interval, time_budget_s, sparsity_weight, seed)
         solver = _select_backend(backend)
 
         scale_k = 10**6
@@ -142,6 +148,37 @@ class Explainer:
         return Infeasible(
             reason=f"fixed-point verification failed after retries: {last_reason}"
         )
+
+    def _explain_genetic(
+        self,
+        x: FloatArray,
+        interval: tuple[float, float],
+        time_budget_s: float,
+        sparsity_weight: float,
+        seed: int | None,
+    ) -> Counterfactual | Infeasible:
+        from treecf.backends.genetic import solve_genetic
+
+        result = solve_genetic(
+            self.ir,
+            x,
+            interval,
+            self.compiled,
+            self.sigma,
+            self.weights,
+            lam=sparsity_weight,
+            background=self.background,
+            seed=seed,
+            time_budget_s=time_budget_s,
+        )
+        if result.x_cf is None:
+            return Infeasible(reason="heuristic search exhausted (genetic backend, §8.2)")
+        x_cf = result.x_cf
+        verification = self._verify(x, x_cf, interval)
+        if verification is not None:  # defensive: the GA only returns checked individuals
+            return Infeasible(reason=f"heuristic solution failed verification: {verification}")
+        x_cf, snapped = self._apply_value_policies(x, x_cf, interval)
+        return self._result(x, x_cf, "heuristic", None, result.stats, snapped)
 
     def _verify(
         self, x: FloatArray, x_cf: FloatArray, interval: tuple[float, float]
@@ -319,8 +356,6 @@ def _select_backend(name: str) -> Backend:
         from treecf.backends.cpsat import CpsatBackend
 
         return CpsatBackend()
-    if name == "genetic":
-        raise NotImplementedError("the genetic backend arrives in M3")
     if name == "highs":
         from treecf.backends.highs import HighsBackend
 

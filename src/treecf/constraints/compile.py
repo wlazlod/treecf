@@ -70,6 +70,80 @@ class CompiledConstraints:
     allow_missing: dict[int, tuple[float, float]] = field(default_factory=dict)
     binary_features: frozenset[int] = frozenset()
 
+    def check_matrix(self, X: FloatArray, x: FloatArray) -> BoolArray:
+        """Vectorized feasibility of candidate rows against every constraint (§7.3)."""
+        n, p = X.shape
+        ok = np.ones(n, dtype=bool)
+        lo, hi, _ = self.instance_bounds(x)
+        lo = np.where(np.isnan(lo), -math.inf, lo)
+        hi = np.where(np.isnan(hi), math.inf, hi)
+        nan_x = np.isnan(X)
+        with np.errstate(invalid="ignore"):
+            in_bounds = (lo <= X) | nan_x
+            in_bounds &= (hi >= X) | nan_x
+        ok &= in_bounds.all(axis=1)
+        for j in range(p):
+            if j not in self.allow_missing and not math.isnan(x[j]):
+                ok &= ~nan_x[:, j]
+            if math.isnan(x[j]) and j not in self.allow_missing:
+                ok &= nan_x[:, j]
+        for lin in self.linears:
+            cols = X[:, list(lin.indices)]
+            any_nan = np.isnan(cols).any(axis=1)
+            total = np.nansum(cols * np.array(lin.coefs), axis=1)
+            holds = (
+                total <= lin.rhs + 1e-9
+                if lin.op == "<="
+                else total >= lin.rhs - 1e-9
+                if lin.op == ">="
+                else np.abs(total - lin.rhs) <= 1e-9
+            )
+            if lin.missing_policy == "satisfied":
+                ok &= holds | any_nan
+            else:
+                ok &= holds & ~any_nan
+        for imp in self.implications:
+            cond = X[:, imp.cond_index] == imp.cond_value
+            cons = X[:, imp.cons_index] == imp.cons_value
+            ok &= ~cond | cons
+        for group in self.onehot_groups:
+            ok &= X[:, list(group)].sum(axis=1) == 1.0
+        return ok
+
+    def repair_matrix(self, X: FloatArray, x: FloatArray) -> FloatArray:
+        """Best-effort repair hints (§7.3): clip to bounds, fix NaN legality, order pairs."""
+        X = X.copy()
+        p = X.shape[1]
+        lo, hi, _ = self.instance_bounds(x)
+        lo = np.where(np.isnan(lo), -math.inf, lo)
+        hi = np.where(np.isnan(hi), math.inf, hi)
+        for j in range(p):
+            nan_col = np.isnan(X[:, j])
+            if j not in self.allow_missing:
+                if math.isnan(x[j]):
+                    X[:, j] = math.nan  # fixed missing
+                    continue
+                X[nan_col, j] = x[j]
+            valid = ~np.isnan(X[:, j])
+            X[valid, j] = np.clip(X[valid, j], lo[j], hi[j])
+        for lin in self.linears:
+            # repair hint only for the canonical order pair a - b <= 0: clip a to b
+            if lin.op == "<=" and lin.rhs == 0.0 and sorted(lin.coefs) == [-1.0, 1.0]:
+                a = lin.indices[lin.coefs.index(1.0)]
+                b = lin.indices[lin.coefs.index(-1.0)]
+                both = ~np.isnan(X[:, a]) & ~np.isnan(X[:, b])
+                X[both, a] = np.minimum(X[both, a], X[both, b])
+        for imp in self.implications:
+            cond = X[:, imp.cond_index] == imp.cond_value
+            X[cond, imp.cons_index] = imp.cons_value
+        for group in self.onehot_groups:
+            cols = list(group)
+            block = X[:, cols]
+            winner = np.argmax(np.nan_to_num(block, nan=-1.0), axis=1)
+            X[:, cols] = 0.0
+            X[np.arange(len(X)), [cols[w] for w in winner]] = 1.0
+        return X
+
     def instance_bounds(self, x: FloatArray) -> tuple[FloatArray, FloatArray, BoolArray]:
         """Per-feature (lo, hi, frozen) for factual ``x``; bounds are intersected."""
         p = len(self.feature_names)
