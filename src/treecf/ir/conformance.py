@@ -49,11 +49,15 @@ def threshold_adjacent_rows(ir: EnsembleIR, base_row: FloatArray) -> FloatArray:
                 continue
             assert node.threshold is not None
             t32 = np.float32(node.threshold)
-            for value in (
-                float(t32),
-                float(np.nextafter(t32, np.float32(-np.inf))),
-                float(np.nextafter(t32, np.float32(np.inf))),
-            ):
+            with np.errstate(over="ignore"):  # nextafter past float32 max is fine to skip
+                candidates = (
+                    float(t32),
+                    float(np.nextafter(t32, np.float32(-np.inf))),
+                    float(np.nextafter(t32, np.float32(np.inf))),
+                )
+            for value in candidates:
+                if not np.isfinite(value):
+                    continue
                 row = base_row.copy()
                 row[node.feature] = value
                 rows.append(row)

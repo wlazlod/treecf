@@ -26,6 +26,10 @@ def parse_dump(source: str | Path | dict[str, Any]) -> EnsembleIR:
         from treecf.ir.parsers.lightgbm import parse_lightgbm_dump
 
         return parse_lightgbm_dump(data)
+    if "oblivious_trees" in data:  # CatBoost JSON format
+        from treecf.ir.parsers.catboost import parse_catboost_dump
+
+        return parse_catboost_dump(data)
     raise UnsupportedModelError(
         "unrecognized dump format; expected an XGBoost or LightGBM JSON model (v0.1)"
     )

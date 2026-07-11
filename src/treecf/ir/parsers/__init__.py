@@ -32,6 +32,10 @@ def parse_model(model: object) -> EnsembleIR:
         from treecf.ir.parsers.sklearn import parse_sklearn
 
         return parse_sklearn(model)
+    if root_module == "catboost":
+        from treecf.ir.parsers.catboost import parse_catboost
+
+        return parse_catboost(model)
     raise UnsupportedModelError(
         f"cannot parse {type(model)!r}; supported in v0.1: xgboost/lightgbm models, JSON dumps"
     )
