@@ -129,4 +129,7 @@ filterwarnings = [
     # sklearn warns when a wrapper fitted on a DataFrame-less array is queried with
     # plain ndarrays; harmless in conformance tests (recorded in CLAUDE.md)
     "ignore:X does not have valid feature names:UserWarning",
+    # lightgbm 4.5 still passes force_all_finite to scikit-learn 1.6 (renamed there);
+    # only affects the pinned conformance-matrix cell (recorded in CLAUDE.md)
+    "ignore:'force_all_finite' was renamed to 'ensure_all_finite':FutureWarning",
 ]
