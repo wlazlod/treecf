@@ -28,3 +28,7 @@ site/
 
 # Claude Code local settings
 .claude/settings.local.json
+
+# Local-only working documents (kept out of the published repo)
+/CFE_SPEC.md
+/CLAUDE.md

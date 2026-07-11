@@ -6,7 +6,7 @@
 that the model's raw output lands in a target interval?"* — for XGBoost, LightGBM, CatBoost
 and scikit-learn tree ensembles.
 
-> Status: pre-release (v0.1 in development). See [CFE_SPEC.md](CFE_SPEC.md) for the full design.
+> Status: pre-release (v0.1). See the [documentation](https://wlazlod.github.io/treecf/) for concepts and tutorials.
 
 ## Why another counterfactual package?
 
