@@ -101,6 +101,9 @@ class Explainer:
             assert solution.values_scaled is not None
             x_cf = x.copy()
             for block in problem.features:
+                if solution.missing.get(block.index):
+                    x_cf[block.index] = math.nan
+                    continue
                 v_int = solution.values_scaled[block.index]
                 if block.x_cell is not None and v_int == block.x_scaled:
                     x_cf[block.index] = x[block.index]  # anchor value means "unchanged"
@@ -125,8 +128,12 @@ class Explainer:
         if not (interval[0] <= score <= interval[1]):
             return f"score {score} outside target {interval}"
         lo, hi, _frozen = self.compiled.instance_bounds(x)  # bounds anchor at the factual x
+        lo = np.where(np.isnan(lo), -math.inf, lo)
+        hi = np.where(np.isnan(hi), math.inf, hi)
         for j, value in enumerate(x_cf):
             if math.isnan(value):
+                if not math.isnan(x[j]) and j not in self.compiled.allow_missing:
+                    return f"feature {self.ir.feature_names[j]!r} became NaN without AllowMissing"
                 continue
             if not (lo[j] <= value <= hi[j]):
                 return f"feature {self.ir.feature_names[j]!r} violates its bounds"
@@ -167,10 +174,17 @@ class Explainer:
         changes: dict[str, tuple[float, float]] = {}
         distance = 0.0
         for j, name in enumerate(self.ir.feature_names):
-            same = (x[j] == x_cf[j]) or (math.isnan(x[j]) and math.isnan(x_cf[j]))
-            if not same:
-                changes[name] = (float(x[j]), float(x_cf[j]))
-                distance += self.weights[j] * abs(x_cf[j] - x[j]) / self.sigma[j]
+            x_nan, cf_nan = math.isnan(x[j]), math.isnan(x_cf[j])
+            if (x[j] == x_cf[j]) or (x_nan and cf_nan):
+                continue
+            changes[name] = (float(x[j]), float(x_cf[j]))
+            if cf_nan:  # value -> NaN priced by delta_miss (§4.2)
+                delta = self.compiled.allow_missing[j][0]
+            elif x_nan:  # NaN -> value priced by delta_from_miss
+                delta = self.compiled.allow_missing[j][1]
+            else:
+                delta = abs(x_cf[j] - x[j])
+            distance += self.weights[j] * delta / self.sigma[j]
         score = raw_score(self.ir, x_cf)
         return Counterfactual(
             x_cf=x_cf,

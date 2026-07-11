@@ -42,15 +42,24 @@ class FeatureBlock:
     x_cell: int | None  # position in `cells` holding the factual value, if allowed
     dist_coef: int
     binary: bool = False  # v restricted to {0, K} via a boolean (Equals/Implies/OneHot)
+    allow_missing: bool = False  # NaN is a feasible state (m boolean exists, §4.2)
+    factual_missing: bool = False  # the factual value is NaN ("unchanged" means m = 1)
+    delta_to_scaled: int = 0  # d when flipping value -> NaN (scale K)
+    delta_from_scaled: int = 0  # d when flipping NaN -> value (scale K)
 
 
 @dataclass(frozen=True)
 class ScaledLinear:
-    """sum(coef * v[block_pos]) op rhs, all integer at combined scale (spec §7.4)."""
+    """sum(coef * v[block_pos]) op rhs, all integer at combined scale (spec §7.4).
+
+    ``enforce_not_missing`` lists block positions whose m-booleans gate the
+    constraint (missing_policy "satisfied": enforced only when all are present).
+    """
 
     terms: tuple[tuple[int, int], ...]  # (block position, integer coefficient)
     op: str  # "<=" | ">=" | "=="
     rhs: int
+    enforce_not_missing: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -73,11 +82,16 @@ class ScaledOneHot:
 
 @dataclass(frozen=True)
 class LeafSpec:
-    """A reachable leaf: value plus per-feature sets of admissible cell positions."""
+    """A reachable leaf: value plus per-feature admissible states.
+
+    Each condition is (block position, admissible cell positions, missing_ok):
+    the leaf is reachable iff the feature is missing (when missing_ok) or its
+    cell is one of the listed positions.
+    """
 
     leaf_id: int
     value_scaled: int
-    conditions: tuple[tuple[int, tuple[int, ...]], ...]  # (feature index, cell positions)
+    conditions: tuple[tuple[int, tuple[int, ...], bool], ...]
 
 
 @dataclass(frozen=True)
@@ -98,6 +112,7 @@ class AimProblem:
     linears: tuple[ScaledLinear, ...] = ()
     implications: tuple[ScaledImplication, ...] = ()
     onehots: tuple[ScaledOneHot, ...] = ()
+    must_have_value: tuple[int, ...] = ()  # block positions where m is forced to 0
 
 
 @dataclass(frozen=True)

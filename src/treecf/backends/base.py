@@ -25,6 +25,7 @@ class BackendSolution:
     objective: float | None  # J units (descaled by K*Q)
     gap: float | None
     stats: dict[str, object] = field(default_factory=dict)
+    missing: dict[int, bool] = field(default_factory=dict)  # feature index -> chose NaN
 
 
 class Backend(Protocol):

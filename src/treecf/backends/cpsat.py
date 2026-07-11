@@ -24,25 +24,55 @@ class CpsatBackend:
         d_vars: list[Any] = []
         z_vars: list[Any] = []
         b_vars: dict[int, Any] = {}  # block position -> boolean for binary features
+        m_vars: dict[int, Any] = {}  # block position -> "is missing" boolean (§4.2)
         for pos, block in enumerate(problem.features):
             bools = [
                 model.NewBoolVar(f"cell_{block.index}_{d.cell_index}") for d in block.cells
             ]
-            model.AddExactlyOne(bools)
+            m = None
+            if block.allow_missing:
+                m = model.NewBoolVar(f"m_{block.index}")
+                m_vars[pos] = m
+                model.AddExactlyOne([*bools, m])
+            else:
+                model.AddExactlyOne(bools)
             v = model.NewIntVar(block.v_lo, block.v_hi, f"v_{block.index}")
             for domain, b in zip(block.cells, bools, strict=True):
                 model.Add(v >= domain.v_lo).OnlyEnforceIf(b)
                 model.Add(v <= domain.v_hi).OnlyEnforceIf(b)
-            d_hi = max(block.v_hi - block.x_scaled, block.x_scaled - block.v_lo, 0)
+            d_hi = max(
+                block.v_hi - block.x_scaled,
+                block.x_scaled - block.v_lo,
+                block.delta_to_scaled,
+                block.delta_from_scaled,
+                0,
+            )
             d = model.NewIntVar(0, d_hi, f"d_{block.index}")
-            model.Add(d >= v - block.x_scaled)
-            model.Add(d >= block.x_scaled - v)
             z = model.NewBoolVar(f"z_{block.index}")
-            if block.x_cell is None:
-                # factual value violates the constraints: the feature must change
-                model.Add(z == 1)
+
+            if block.factual_missing:
+                assert m is not None
+                # unchanged = stay NaN; taking a value costs delta_from and counts as change
+                model.Add(d == 0).OnlyEnforceIf(m)
+                model.Add(d == block.delta_from_scaled).OnlyEnforceIf(m.Not())
+                model.Add(m == 1).OnlyEnforceIf(z.Not())
+                model.AddImplication(m.Not(), z)
             else:
-                model.Add(v == block.x_scaled).OnlyEnforceIf(z.Not())
+                if m is not None:
+                    model.Add(d >= v - block.x_scaled).OnlyEnforceIf(m.Not())
+                    model.Add(d >= block.x_scaled - v).OnlyEnforceIf(m.Not())
+                    model.Add(d == block.delta_to_scaled).OnlyEnforceIf(m)
+                    model.AddImplication(m, z)
+                    model.AddImplication(z.Not(), m.Not())
+                else:
+                    model.Add(d >= v - block.x_scaled)
+                    model.Add(d >= block.x_scaled - v)
+                if block.x_cell is None:
+                    # factual value violates the constraints: the feature must change
+                    model.Add(z == 1)
+                else:
+                    model.Add(v == block.x_scaled).OnlyEnforceIf(z.Not())
+
             if block.binary:
                 b = model.NewBoolVar(f"b_{block.index}")
                 model.Add(v == problem.scale_k * b)
@@ -52,14 +82,20 @@ class CpsatBackend:
             d_vars.append(d)
             z_vars.append(z)
 
+        for pos in problem.must_have_value:
+            model.Add(m_vars[pos] == 0)
+
         for lin in problem.linears:
             expr = sum(coef * v_vars[pos] for pos, coef in lin.terms)
             if lin.op == "<=":
-                model.Add(expr <= lin.rhs)
+                ct = model.Add(expr <= lin.rhs)
             elif lin.op == ">=":
-                model.Add(expr >= lin.rhs)
+                ct = model.Add(expr >= lin.rhs)
             else:
-                model.Add(expr == lin.rhs)
+                ct = model.Add(expr == lin.rhs)
+            if lin.enforce_not_missing:
+                # missing_policy "satisfied": constraint applies only when all present
+                ct.OnlyEnforceIf([m_vars[pos].Not() for pos in lin.enforce_not_missing])
 
         for imp in problem.implications:
             cond = b_vars[imp.cond_pos] if imp.cond_is_one else b_vars[imp.cond_pos].Not()
@@ -76,10 +112,11 @@ class CpsatBackend:
             ]
             model.AddExactlyOne(leaf_bools)
             for leaf, lb in zip(tree.leaves, leaf_bools, strict=True):
-                for block_idx, positions in leaf.conditions:
-                    model.Add(
-                        sum(cell_bools[block_idx][pos] for pos in positions) >= 1
-                    ).OnlyEnforceIf(lb)
+                for block_idx, positions, missing_ok in leaf.conditions:
+                    terms = [cell_bools[block_idx][pos] for pos in positions]
+                    if missing_ok:
+                        terms.append(m_vars[block_idx])
+                    model.Add(sum(terms) >= 1).OnlyEnforceIf(lb)
             score_terms.extend(
                 leaf.value_scaled * lb
                 for leaf, lb in zip(tree.leaves, leaf_bools, strict=True)
@@ -119,12 +156,16 @@ class CpsatBackend:
             block.index: solver.Value(v)
             for block, v in zip(problem.features, v_vars, strict=True)
         }
+        missing = {
+            problem.features[pos].index: bool(solver.Value(m)) for pos, m in m_vars.items()
+        }
         return BackendSolution(
             status="optimal" if status == cp_model.OPTIMAL else "feasible",
             values_scaled=values_scaled,
             objective=objective,
             gap=gap,
             stats=stats,
+            missing=missing,
         )
 
 

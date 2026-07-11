@@ -49,6 +49,8 @@ def build_problem(
         return check
 
     lo_b, hi_b, frozen = compiled.instance_bounds(x)
+    lo_b = np.where(np.isnan(lo_b), -math.inf, lo_b)  # Monotone on a NaN factual: no bound
+    hi_b = np.where(np.isnan(hi_b), math.inf, hi_b)
 
     features: list[FeatureBlock] = []
     fixed_values: dict[int, float] = {}
@@ -58,14 +60,19 @@ def build_problem(
             return BuildInfeasible(
                 reason=f"contradictory constraints on feature {ir.feature_names[j]!r}"
             )
-        if math.isnan(x[j]) or frozen[j]:
+        allow = j in compiled.allow_missing and not frozen[j]
+        if frozen[j] or (math.isnan(x[j]) and not allow):
             # Fixed features carry no variables; their routing is resolved statically.
             fixed_values[j] = float(x[j])
             continue
+        deltas = compiled.allow_missing.get(j, (0.0, 0.0))
         block = _feature_block(
             j, ir.feature_names[j], per_feature_cells[j], x[j], lo_b[j], hi_b[j],
             weights[j], sigma[j], scale_k, scale_q,
             binary=j in compiled.binary_features,
+            allow_missing=allow,
+            delta_to_scaled=round(scale_k * deltas[0]),
+            delta_from_scaled=round(scale_k * deltas[1]),
         )
         if block is None:
             return BuildInfeasible(
@@ -98,10 +105,10 @@ def build_problem(
         return BuildInfeasible(reason="empty target interval")
 
     pos_of = {block.index: pos for pos, block in enumerate(features)}
-    encoded = _encode_relational(compiled, fixed_values, pos_of, scale_k, scale_q)
+    encoded = _encode_relational(compiled, fixed_values, pos_of, features, scale_k, scale_q)
     if isinstance(encoded, BuildInfeasible):
         return encoded
-    linears, implications, onehots = encoded
+    linears, implications, onehots, must_have_value = encoded
 
     return AimProblem(
         features=tuple(features),
@@ -115,6 +122,7 @@ def build_problem(
         linears=linears,
         implications=implications,
         onehots=onehots,
+        must_have_value=must_have_value,
     )
 
 
@@ -144,14 +152,19 @@ def _feature_block(
     scale_k: int,
     scale_q: int,
     binary: bool = False,
+    allow_missing: bool = False,
+    delta_to_scaled: int = 0,
+    delta_from_scaled: int = 0,
 ) -> FeatureBlock | None:
+    factual_missing = math.isnan(x_j)
+    anchor = 0.0 if factual_missing else x_j
     finite = [c.lo for c in cells if math.isfinite(c.lo)]
     if math.isfinite(lo_bound):
         finite.append(lo_bound)
     if math.isfinite(hi_bound):
         finite.append(hi_bound)
-    span_lo = min([x_j, *finite]) - 1.0
-    span_hi = max([x_j, *finite]) + 1.0
+    span_lo = min([anchor, *finite]) - 1.0
+    span_hi = max([anchor, *finite]) + 1.0
 
     domains: list[CellDomain] = []
     for c_idx, cell in enumerate(cells):
@@ -167,9 +180,10 @@ def _feature_block(
     if not domains:
         return None
 
-    x_scaled = round(scale_k * x_j)
+    x_scaled = round(scale_k * anchor)
     x_cell: int | None = None
-    if lo_bound <= x_j <= hi_bound:  # "unchanged" is only an option if x itself is feasible
+    if not factual_missing and lo_bound <= x_j <= hi_bound:
+        # "unchanged" is only an option if x itself is feasible
         factual_cell = cell_index(cells, x_j)
         for pos, domain in enumerate(domains):
             if domain.cell_index == factual_cell:
@@ -188,6 +202,10 @@ def _feature_block(
         x_cell=x_cell,
         dist_coef=round(scale_q * weight / sigma_j),
         binary=binary,
+        allow_missing=allow_missing,
+        factual_missing=factual_missing,
+        delta_to_scaled=delta_to_scaled,
+        delta_from_scaled=delta_from_scaled,
     )
 
 
@@ -195,18 +213,24 @@ def _encode_relational(
     compiled: CompiledConstraints,
     fixed_values: dict[int, float],
     pos_of: dict[int, int],
+    features: list[FeatureBlock],
     scale_k: int,
     scale_q: int,
 ) -> tuple[
-    tuple[ScaledLinear, ...], tuple[ScaledImplication, ...], tuple[ScaledOneHot, ...]
+    tuple[ScaledLinear, ...],
+    tuple[ScaledImplication, ...],
+    tuple[ScaledOneHot, ...],
+    tuple[int, ...],
 ] | BuildInfeasible:
     """Resolve Linear/Implies/OneHot to block positions, folding fixed features."""
     linears: list[ScaledLinear] = []
+    must_have_value: set[int] = set()
     for lin in compiled.linears:
         integral = all(float(c).is_integer() for c in lin.coefs)
         qc = 1 if integral else scale_q
         rhs_float = qc * scale_k * lin.rhs
         terms: list[tuple[int, int]] = []
+        gating: list[int] = []
         dropped = False
         for j, coef in zip(lin.indices, lin.coefs, strict=True):
             if j in fixed_values:
@@ -221,7 +245,13 @@ def _encode_relational(
                     )
                 rhs_float -= qc * coef * scale_k * value
             else:
-                terms.append((pos_of[j], round(qc * coef)))
+                pos = pos_of[j]
+                terms.append((pos, round(qc * coef)))
+                if features[pos].allow_missing:
+                    if lin.missing_policy == "satisfied":
+                        gating.append(pos)
+                    else:  # "violated" / "forbid_missing": NaN is not an option here
+                        must_have_value.add(pos)
         if dropped:
             continue
         rhs = round(rhs_float)
@@ -229,7 +259,11 @@ def _encode_relational(
             if not _op_holds(0, lin.op, rhs):
                 return BuildInfeasible(reason="Linear constraint over fixed features fails")
             continue
-        linears.append(ScaledLinear(terms=tuple(terms), op=lin.op, rhs=rhs))
+        linears.append(
+            ScaledLinear(
+                terms=tuple(terms), op=lin.op, rhs=rhs, enforce_not_missing=tuple(gating)
+            )
+        )
 
     implications: list[ScaledImplication] = []
     for imp in compiled.implications:
@@ -294,7 +328,7 @@ def _encode_relational(
             continue
         onehots.append(ScaledOneHot(positions=tuple(positions), required=required))
 
-    return tuple(linears), tuple(implications), tuple(onehots)
+    return tuple(linears), tuple(implications), tuple(onehots), tuple(sorted(must_have_value))
 
 
 def _op_holds(lhs: float, op: str, rhs: float) -> bool:
@@ -325,25 +359,31 @@ def _tree_leaves(
     fixed_values: dict[int, float],
     scale_k: int,
 ) -> list[LeafSpec]:
-    """Enumerate reachable leaves; conditions are per-feature admissible cell positions."""
+    """Enumerate reachable leaves with per-feature admissible (cells, missing) states."""
     leaves: list[LeafSpec] = []
+    State = tuple[frozenset[int], bool]  # (admissible cell positions, missing admissible)
 
-    def walk(node: Node, admissible: dict[int, set[int]], alive: bool) -> None:
+    def full_state(block_idx: int) -> State:
+        block = features[block_idx]
+        return frozenset(range(len(block.cells))), block.allow_missing
+
+    def walk(node: Node, admissible: dict[int, State], alive: bool) -> None:
+        if not alive:
+            return
         if node.feature is None:
             assert node.value is not None
-            if alive and all(positions for positions in admissible.values()):
-                conditions = tuple(
-                    (block_idx, tuple(sorted(positions)))
-                    for block_idx, positions in sorted(admissible.items())
-                    if len(positions) < len(features[block_idx].cells)
+            conditions = []
+            for block_idx, (positions, missing_ok) in sorted(admissible.items()):
+                if (positions, missing_ok) == full_state(block_idx):
+                    continue  # unconstrained
+                conditions.append((block_idx, tuple(sorted(positions)), missing_ok))
+            leaves.append(
+                LeafSpec(
+                    leaf_id=node.node_id,
+                    value_scaled=round(scale_k * node.value),
+                    conditions=tuple(conditions),
                 )
-                leaves.append(
-                    LeafSpec(
-                        leaf_id=node.node_id,
-                        value_scaled=round(scale_k * node.value),
-                        conditions=conditions,
-                    )
-                )
+            )
             return
         assert node.left is not None and node.right is not None
         j = node.feature
@@ -361,24 +401,27 @@ def _tree_leaves(
                     if node.op is SplitOp.LT
                     else value <= node.threshold
                 )
-            walk(left_node, admissible, alive and goes_left)
-            walk(right_node, admissible, alive and not goes_left)
+            walk(left_node if goes_left else right_node, admissible, alive)
             return
 
         block_idx = block_of[j]
         block = features[block_idx]
-        current = admissible.get(block_idx, set(range(len(block.cells))))
+        positions, missing_ok = admissible.get(block_idx, full_state(block_idx))
         left_set, right_set = set(), set()
-        for pos in current:
+        for pos in positions:
             cell = cells_by_block[block_idx][block.cells[pos].cell_index]
             if _cell_on_left(cell, node):
                 left_set.add(pos)
             else:
                 right_set.add(pos)
-        for child, side_set in ((left_node, left_set), (right_node, right_set)):
+        missing_goes_left = bool(node.missing_left) if block.allow_missing else False
+        for child, side_set, side_missing in (
+            (left_node, left_set, missing_ok and missing_goes_left),
+            (right_node, right_set, missing_ok and not missing_goes_left),
+        ):
             child_admissible = dict(admissible)
-            child_admissible[block_idx] = side_set
-            walk(child, child_admissible, alive and bool(side_set))
+            child_admissible[block_idx] = (frozenset(side_set), side_missing)
+            walk(child, child_admissible, bool(side_set) or side_missing)
 
     walk(tree.nodes[0], {}, alive=True)
     return leaves

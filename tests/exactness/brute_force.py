@@ -40,19 +40,24 @@ def solve_brute_force(
     weights: FloatArray,
     lam: float = 0.0,
 ) -> OracleResult:
-    lo_b, hi_b, _frozen = compiled.instance_bounds(x)
+    lo_b, hi_b, frozen = compiled.instance_bounds(x)
+    lo_b = np.where(np.isnan(lo_b), -math.inf, lo_b)  # Monotone on a NaN factual: no bound
+    hi_b = np.where(np.isnan(hi_b), math.inf, hi_b)
     per_feature = feature_cells(ir)
     p = ir.n_features
 
-    # Candidate values per feature: nearest-in-(cell ∩ bounds) to x_j; NaN factuals stay NaN.
+    # Candidate values per feature: nearest-in-(cell ∩ bounds) to x_j, plus the NaN
+    # state when AllowMissing permits it; NaN factuals without AllowMissing stay NaN.
     options: list[list[float]] = []
     for j in range(p):
-        if math.isnan(x[j]):
+        allow = j in compiled.allow_missing and not frozen[j]
+        if math.isnan(x[j]) and not allow:
             options.append([math.nan])
             continue
-        values: list[float] = []
+        values: list[float] = [math.nan] if allow else []
+        anchor = 0.0 if math.isnan(x[j]) else x[j]
         for cell in per_feature[j]:
-            v = _nearest_in_cell_and_bounds(cell, x[j], lo_b[j], hi_b[j])
+            v = _nearest_in_cell_and_bounds(cell, anchor, lo_b[j], hi_b[j])
             if v is not None:
                 values.append(v)
         if not values:
@@ -71,10 +76,38 @@ def solve_brute_force(
         score = raw_score(ir, candidate)
         if not (lo_t <= score <= hi_t):
             continue
-        objective = _objective(candidate, x, sigma, weights, lam)
+        if not _relational_ok(candidate, compiled):
+            continue
+        objective = _objective(candidate, x, sigma, weights, lam, compiled.allow_missing)
         if objective < best.objective:
             best = OracleResult(feasible=True, objective=objective, x_cf=candidate.copy())
     return best
+
+
+def _relational_ok(candidate: FloatArray, compiled: CompiledConstraints) -> bool:
+    for lin in compiled.linears:
+        values = [candidate[j] for j in lin.indices]
+        if any(math.isnan(v) for v in values):
+            if lin.missing_policy == "satisfied":
+                continue
+            return False
+        total = sum(c * v for c, v in zip(lin.coefs, values, strict=True))
+        ok = (
+            total <= lin.rhs + 1e-9
+            if lin.op == "<="
+            else total >= lin.rhs - 1e-9
+            if lin.op == ">="
+            else abs(total - lin.rhs) <= 1e-9
+        )
+        if not ok:
+            return False
+    for imp in compiled.implications:
+        if (
+            candidate[imp.cond_index] == imp.cond_value
+            and candidate[imp.cons_index] != imp.cons_value
+        ):
+            return False
+    return all(sum(candidate[j] for j in group) == 1.0 for group in compiled.onehot_groups)
 
 
 def _nearest_in_cell_and_bounds(cell: Cell, x_j: float, lo: float, hi: float) -> float | None:
@@ -86,13 +119,24 @@ def _nearest_in_cell_and_bounds(cell: Cell, x_j: float, lo: float, hi: float) ->
 
 
 def _objective(
-    candidate: FloatArray, x: FloatArray, sigma: FloatArray, weights: FloatArray, lam: float
+    candidate: FloatArray,
+    x: FloatArray,
+    sigma: FloatArray,
+    weights: FloatArray,
+    lam: float,
+    allow_missing: dict[int, tuple[float, float]],
 ) -> float:
     total = 0.0
     for j in range(len(x)):
-        if math.isnan(x[j]) and math.isnan(candidate[j]):
+        x_nan, cf_nan = math.isnan(x[j]), math.isnan(candidate[j])
+        if x_nan and cf_nan:
             continue
-        delta = abs(candidate[j] - x[j])
-        if delta > 0:
-            total += weights[j] * delta / sigma[j] + lam
+        if cf_nan:  # value -> NaN
+            total += weights[j] * allow_missing[j][0] / sigma[j] + lam
+        elif x_nan:  # NaN -> value
+            total += weights[j] * allow_missing[j][1] / sigma[j] + lam
+        else:
+            delta = abs(candidate[j] - x[j])
+            if delta > 0:
+                total += weights[j] * delta / sigma[j] + lam
     return total
