@@ -122,4 +122,9 @@ ignore_missing_imports = true
 testpaths = ["tests"]
 addopts = "-q --strict-markers -m 'not bench'"
 markers = ["bench: non-gating performance smoke benchmarks (run with -m bench)"]
-filterwarnings = ["error"]
+filterwarnings = [
+    "error",
+    # sklearn warns when a wrapper fitted on a DataFrame-less array is queried with
+    # plain ndarrays; harmless in conformance tests (recorded in CLAUDE.md)
+    "ignore:X does not have valid feature names:UserWarning",
+]

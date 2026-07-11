@@ -24,6 +24,14 @@ def parse_model(model: object) -> EnsembleIR:
         from treecf.ir.parsers.xgboost import parse_xgboost
 
         return parse_xgboost(model)
+    if root_module == "lightgbm":
+        from treecf.ir.parsers.lightgbm import parse_lightgbm
+
+        return parse_lightgbm(model)
+    if root_module == "sklearn":
+        from treecf.ir.parsers.sklearn import parse_sklearn
+
+        return parse_sklearn(model)
     raise UnsupportedModelError(
-        f"cannot parse {type(model)!r}; supported in v0.1: xgboost models, JSON dumps"
+        f"cannot parse {type(model)!r}; supported in v0.1: xgboost/lightgbm models, JSON dumps"
     )

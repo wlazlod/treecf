@@ -22,6 +22,10 @@ def parse_dump(source: str | Path | dict[str, Any]) -> EnsembleIR:
         from treecf.ir.parsers.xgboost import parse_xgboost_dump
 
         return parse_xgboost_dump(data)
+    if "tree_info" in data:  # LightGBM dump_model() format
+        from treecf.ir.parsers.lightgbm import parse_lightgbm_dump
+
+        return parse_lightgbm_dump(data)
     raise UnsupportedModelError(
-        "unrecognized dump format; expected an XGBoost JSON model (v0.1)"
+        "unrecognized dump format; expected an XGBoost or LightGBM JSON model (v0.1)"
     )
