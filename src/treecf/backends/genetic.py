@@ -37,6 +37,7 @@ def solve_genetic(
     weights: FloatArray,
     lam: float,
     background: FloatArray | None = None,
+    plausibility: tuple[EnsembleIR, float] | None = None,
     seed: int | None = None,
     population: int = 80,
     max_generations: int = 200,
@@ -88,6 +89,9 @@ def solve_genetic(
         """Deb ranking: (tier, key). Tier 0 = fully feasible (key = J)."""
         scores = raw_score_batch(ir, X)
         ok = compiled.check_matrix(X, x)
+        if plausibility is not None:
+            if_ir, min_total_path = plausibility
+            ok &= raw_score_batch(if_ir, X) >= min_total_path
         target_ok = (scores >= lo_t) & (scores <= hi_t)
         tier = np.where(ok & target_ok, 0.0, np.where(ok, 1.0, 2.0))
         target_gap = np.maximum(0.0, lo_t - scores) + np.maximum(0.0, scores - hi_t)

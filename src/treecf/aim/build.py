@@ -42,8 +42,12 @@ def build_problem(
     lam: float,
     scale_k: int = 10**6,
     scale_q: int = 10**6,
+    plausibility: tuple[EnsembleIR, float] | None = None,
 ) -> AimProblem | BuildInfeasible:
-    per_feature_cells = feature_cells(ir)
+    if plausibility is not None:
+        per_feature_cells = feature_cells(ir, plausibility[0])
+    else:
+        per_feature_cells = feature_cells(ir)
     check = _check_breakpoint_resolution(per_feature_cells, scale_k)
     if check is not None:
         return check
@@ -104,6 +108,20 @@ def build_problem(
     if score_lo > score_hi:
         return BuildInfeasible(reason="empty target interval")
 
+    plaus_trees: tuple[TreeBlock, ...] = ()
+    plaus_lo = 0
+    if plausibility is not None:
+        if_ir, min_total_path = plausibility
+        blocks = []
+        for tree in if_ir.trees:
+            leaves = _tree_leaves(tree, features, cells_by_block, block_of, fixed_values, scale_k)
+            if not leaves:
+                return BuildInfeasible(reason="isolation forest tree has no reachable leaf")
+            blocks.append(TreeBlock(leaves=tuple(leaves)))
+        plaus_trees = tuple(blocks)
+        # widened outward like the target (§5.4); float verification closes the gap
+        plaus_lo = math.floor(scale_k * min_total_path - (len(if_ir.trees) + 1) / 2.0)
+
     pos_of = {block.index: pos for pos, block in enumerate(features)}
     encoded = _encode_relational(compiled, fixed_values, pos_of, features, scale_k, scale_q)
     if isinstance(encoded, BuildInfeasible):
@@ -123,7 +141,22 @@ def build_problem(
         implications=implications,
         onehots=onehots,
         must_have_value=must_have_value,
+        plaus_trees=plaus_trees,
+        plaus_lo=plaus_lo,
     )
+
+
+def swap_target(problem: AimProblem, interval: tuple[float, float]) -> AimProblem:
+    """Rebind only the score bounds — the ladder amortization (§6: 1 build, N solves)."""
+    import dataclasses
+
+    n_trees = len(problem.trees)
+    widen = (n_trees + 1) / 2.0
+    natural_lo, natural_hi = _score_range(list(problem.trees), problem.base_scaled)
+    lo_t, hi_t = interval
+    score_lo = natural_lo if lo_t == -math.inf else math.floor(problem.scale_k * lo_t - widen)
+    score_hi = natural_hi if hi_t == math.inf else math.ceil(problem.scale_k * hi_t + widen)
+    return dataclasses.replace(problem, score_lo=score_lo, score_hi=score_hi)
 
 
 def _check_breakpoint_resolution(

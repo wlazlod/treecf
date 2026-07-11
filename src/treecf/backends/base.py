@@ -26,6 +26,23 @@ class BackendSolution:
     gap: float | None
     stats: dict[str, object] = field(default_factory=dict)
     missing: dict[int, bool] = field(default_factory=dict)  # feature index -> chose NaN
+    changed_positions: tuple[int, ...] = ()  # block positions with z = 1
+    chosen_cells: tuple[tuple[int, int], ...] = ()  # (block position, cell position | -1=NaN)
+
+
+@dataclass(frozen=True)
+class DiversityCut:
+    """No-good cut derived from a previous solution (spec §8.3).
+
+    mode "distinct_changes" forbids repeating the exact change-set (a NaN flip
+    counts as a change, OQ3); "distinct_solution" forbids the exact cell/missing
+    assignment.
+    """
+
+    mode: str
+    changed: tuple[int, ...] = ()
+    unchanged: tuple[int, ...] = ()
+    chosen: tuple[tuple[int, int], ...] = ()
 
 
 class Backend(Protocol):

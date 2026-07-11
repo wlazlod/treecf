@@ -10,16 +10,17 @@ import numpy as np
 import numpy.typing as npt
 
 from treecf._errors import TreecfError
-from treecf.aim.build import build_problem
+from treecf.aim.build import build_problem, swap_target
 from treecf.aim.cells import cell_index, feature_cells
-from treecf.aim.model import BuildInfeasible
-from treecf.backends.base import Backend
+from treecf.aim.model import AimProblem, BuildInfeasible
+from treecf.backends.base import Backend, BackendSolution, DiversityCut
 from treecf.constraints.compile import compile_constraints
 from treecf.constraints.objects import Constraint
 from treecf.ir.evaluate import apply_link, raw_score
 from treecf.ir.model import EnsembleIR, Link
 from treecf.ir.parsers import parse_model
 from treecf.objective import fit_normalizers
+from treecf.plausibility import Plausibility
 from treecf.targets import Target
 
 FloatArray = npt.NDArray[np.float64]
@@ -74,10 +75,20 @@ class Explainer:
         weights: dict[str, float] | None = None,
         normalizers: FloatArray | dict[str, float] | None = None,
         value_policy: dict[str, ValuePolicy] | None = None,
+        plausibility: Plausibility | None = None,
     ) -> None:
         self.ir = model if isinstance(model, EnsembleIR) else parse_model(model)
         names = self.ir.feature_names
         self.compiled = compile_constraints(constraints, names)
+        self.plausibility = plausibility
+        if plausibility is not None:
+            if plausibility.if_ir.n_features != self.ir.n_features:
+                raise TreecfError("plausibility forest must share the model's feature space")
+            if self.compiled.allow_missing:
+                raise TreecfError(
+                    "plausibility with AllowMissing is not supported in v0.1 "
+                    "(isolation forests define no NaN routing)"
+                )
         self.background = (
             None if background is None else np.asarray(background, dtype=np.float64)
         )
@@ -99,12 +110,29 @@ class Explainer:
         sparsity_weight: float = 0.0,
         num_workers: int = 0,
         seed: int | None = None,
-    ) -> Counterfactual | Infeasible:
+        n_counterfactuals: int = 1,
+        diversity_mode: str = "distinct_changes",
+    ) -> Counterfactual | Infeasible | list[Counterfactual] | dict[str, object]:
         x = np.asarray(x, dtype=np.float64)
+        if self.plausibility is not None and np.isnan(x).any():
+            raise TreecfError(
+                "plausibility with missing factual values is not supported in v0.1"
+            )
+        if target.bands_spec is not None:
+            return self._explain_bands(
+                x, target, backend, time_budget_s, sparsity_weight, num_workers, seed
+            )
         interval = target.raw_interval(self.ir.link)
         if backend == "genetic":
+            if n_counterfactuals > 1:
+                raise TreecfError("n_counterfactuals > 1 requires backend='cpsat' in v0.1 (§8.3)")
             return self._explain_genetic(x, interval, time_budget_s, sparsity_weight, seed)
         solver = _select_backend(backend)
+        if n_counterfactuals > 1:
+            return self._explain_diverse(
+                x, interval, solver, time_budget_s, sparsity_weight, num_workers,
+                n_counterfactuals, diversity_mode,
+            )
 
         scale_k = 10**6
         last_reason = "unknown"
@@ -112,6 +140,7 @@ class Explainer:
             problem = build_problem(
                 self.ir, x, interval, self.compiled, self.sigma, self.weights,
                 lam=sparsity_weight, scale_k=scale_k,
+                plausibility=self._plausibility_bound(),
             )
             if isinstance(problem, BuildInfeasible):
                 if problem.resolution_related:
@@ -122,19 +151,12 @@ class Explainer:
 
             solution = solver.solve(problem, time_budget_s=time_budget_s, num_workers=num_workers)
             if solution.status == "infeasible":
-                return Infeasible(reason="no counterfactual satisfies target and constraints")
+                return Infeasible(
+                    reason="no counterfactual satisfies target and constraints",
+                    relaxation_hint=self._relaxation_hint(x, interval, time_budget_s),
+                )
 
-            assert solution.values_scaled is not None
-            x_cf = x.copy()
-            for block in problem.features:
-                if solution.missing.get(block.index):
-                    x_cf[block.index] = math.nan
-                    continue
-                v_int = solution.values_scaled[block.index]
-                if block.x_cell is not None and v_int == block.x_scaled:
-                    x_cf[block.index] = x[block.index]  # anchor value means "unchanged"
-                else:
-                    x_cf[block.index] = v_int / problem.scale_k
+            x_cf = _extract_x_cf(problem, solution, x)
             verification = self._verify(x, x_cf, interval)
             if verification is None:
                 x_cf, snapped = self._apply_value_policies(x, x_cf, interval)
@@ -147,6 +169,165 @@ class Explainer:
 
         return Infeasible(
             reason=f"fixed-point verification failed after retries: {last_reason}"
+        )
+
+    def _explain_bands(
+        self,
+        x: FloatArray,
+        target: Target,
+        backend: str,
+        time_budget_s: float,
+        sparsity_weight: float,
+        num_workers: int,
+        seed: int | None,
+    ) -> dict[str, object]:
+        """Rating ladder: one AIM compilation, one solve per band (§6, D9)."""
+        intervals = target.band_intervals(self.ir.link)
+        results: dict[str, object] = {}
+
+        def full_solve(interval: tuple[float, float]) -> Counterfactual | Infeasible:
+            single = Target.raw(range=interval)
+            out = self.explain(
+                x, single, backend=backend, time_budget_s=time_budget_s,
+                sparsity_weight=sparsity_weight, num_workers=num_workers, seed=seed,
+            )
+            assert isinstance(out, Counterfactual | Infeasible)
+            return out
+
+        if backend == "genetic":
+            return {name: full_solve(iv) for name, iv in intervals.items()}
+
+        solver = _select_backend(backend)
+        first = next(iter(intervals.values()))
+        problem = build_problem(
+            self.ir, x, first, self.compiled, self.sigma, self.weights,
+            lam=sparsity_weight, plausibility=self._plausibility_bound(),
+        )
+        if isinstance(problem, BuildInfeasible):
+            return {name: full_solve(iv) for name, iv in intervals.items()}
+
+        for name, interval in intervals.items():
+            band_problem = swap_target(problem, interval)
+            if band_problem.score_lo > band_problem.score_hi:
+                results[name] = Infeasible(reason="empty target interval")
+                continue
+            solution = solver.solve(
+                band_problem, time_budget_s=time_budget_s, num_workers=num_workers
+            )
+            if solution.status == "infeasible":
+                results[name] = Infeasible(
+                    reason=f"band {name!r} is unreachable under the constraints"
+                )
+                continue
+            x_cf = _extract_x_cf(band_problem, solution, x)
+            if self._verify(x, x_cf, interval) is not None:
+                results[name] = full_solve(interval)  # rare fixed-point retry path
+                continue
+            x_cf, snapped = self._apply_value_policies(x, x_cf, interval)
+            results[name] = self._result(
+                x, x_cf, solution.status, solution.gap, solution.stats, snapped
+            )
+        return results
+
+    def _explain_diverse(
+        self,
+        x: FloatArray,
+        interval: tuple[float, float],
+        solver: Backend,
+        time_budget_s: float,
+        sparsity_weight: float,
+        num_workers: int,
+        n_counterfactuals: int,
+        diversity_mode: str,
+    ) -> list[Counterfactual] | Infeasible:
+        """Iterative no-good cuts (§8.3); NaN flips count as changes (OQ3)."""
+        if diversity_mode not in ("distinct_changes", "distinct_solution"):
+            raise TreecfError("diversity_mode must be 'distinct_changes' or 'distinct_solution'")
+        problem = build_problem(
+            self.ir, x, interval, self.compiled, self.sigma, self.weights,
+            lam=sparsity_weight, plausibility=self._plausibility_bound(),
+        )
+        if isinstance(problem, BuildInfeasible):
+            return Infeasible(reason=problem.reason)
+
+        results: list[Counterfactual] = []
+        cuts: list[DiversityCut] = []
+        from treecf.backends.cpsat import CpsatBackend
+
+        assert isinstance(solver, CpsatBackend), "diversity requires the CP-SAT backend"
+        for _ in range(n_counterfactuals):
+            solution = solver.solve(
+                problem, time_budget_s=time_budget_s, num_workers=num_workers, cuts=cuts
+            )
+            if solution.status == "infeasible":
+                break
+            x_cf = _extract_x_cf(problem, solution, x)
+            if self._verify(x, x_cf, interval) is not None:
+                break
+            x_cf, snapped = self._apply_value_policies(x, x_cf, interval)
+            results.append(
+                self._result(x, x_cf, solution.status, solution.gap, solution.stats, snapped)
+            )
+            all_positions = range(len(problem.features))
+            cuts.append(
+                DiversityCut(
+                    mode=diversity_mode,
+                    changed=solution.changed_positions,
+                    unchanged=tuple(
+                        p for p in all_positions if p not in solution.changed_positions
+                    ),
+                    chosen=solution.chosen_cells,
+                )
+            )
+        if not results:
+            return Infeasible(reason="no counterfactual satisfies target and constraints")
+        return results
+
+    def _relaxation_hint(
+        self, x: FloatArray, interval: tuple[float, float], time_budget_s: float
+    ) -> str | None:
+        """Greedy relaxation ladder (§8.1): smallest constraint group whose removal helps."""
+        from treecf.constraints.objects import (
+            AllowMissing,
+            Equals,
+            Freeze,
+            Monotone,
+            Range,
+        )
+
+        constraints = self.compiled.constraints
+        if not constraints:
+            return None
+        freedom: list[Constraint] = [c for c in constraints if isinstance(c, AllowMissing)]
+        bounds: list[Constraint] = [
+            c for c in constraints if isinstance(c, Freeze | Monotone | Range | Equals)
+        ]
+        budget = min(2.0, time_budget_s)
+
+        def feasible_with(subset: list[Constraint]) -> bool:
+            compiled = compile_constraints(subset, self.ir.feature_names)
+            plaus = self._plausibility_bound()
+            problem = build_problem(
+                self.ir, x, interval, compiled, self.sigma, self.weights,
+                lam=0.0, plausibility=plaus,
+            )
+            if isinstance(problem, BuildInfeasible):
+                return False
+            from treecf.backends.cpsat import CpsatBackend
+
+            solution = CpsatBackend().solve(problem, time_budget_s=budget)
+            return solution.status != "infeasible"
+
+        if not feasible_with(freedom):
+            return "the target interval is unreachable for this model even without constraints"
+        if not feasible_with(freedom + bounds):
+            return (
+                "per-feature constraints (Freeze/Range/Monotone/Equals) make the target "
+                "unreachable; relaxing them restores feasibility"
+            )
+        return (
+            "relational constraints (Linear/Implies/OneHot) make the target unreachable; "
+            "relaxing them restores feasibility"
         )
 
     def _explain_genetic(
@@ -168,6 +349,7 @@ class Explainer:
             self.weights,
             lam=sparsity_weight,
             background=self.background,
+            plausibility=self._plausibility_bound(),
             seed=seed,
             time_budget_s=time_budget_s,
         )
@@ -221,7 +403,16 @@ class Explainer:
         for group in self.compiled.onehot_groups:
             if sum(x_cf[j] for j in group) != 1.0:
                 return "OneHot constraint violated"
+        if self.plausibility is not None:
+            score_anomaly = self.plausibility.anomaly_score(x_cf)
+            if score_anomaly > self.plausibility.max_anomaly_score + 1e-12:
+                return f"anomaly score {score_anomaly:.4f} exceeds plausibility bound"
         return None
+
+    def _plausibility_bound(self) -> tuple[EnsembleIR, float] | None:
+        if self.plausibility is None:
+            return None
+        return self.plausibility.if_ir, self.plausibility.min_total_path
 
     def _apply_value_policies(
         self, x: FloatArray, x_cf: FloatArray, interval: tuple[float, float]
@@ -302,6 +493,22 @@ class Explainer:
             solver_stats=stats,
             snapped=snapped or {},
         )
+
+
+def _extract_x_cf(problem: AimProblem, solution: BackendSolution, x: FloatArray) -> FloatArray:
+    """Map solver values back to floats; the factual anchor means 'unchanged'."""
+    assert solution.values_scaled is not None
+    x_cf = x.copy()
+    for block in problem.features:
+        if solution.missing.get(block.index):
+            x_cf[block.index] = math.nan
+            continue
+        v_int = solution.values_scaled[block.index]
+        if block.x_cell is not None and v_int == block.x_scaled:
+            x_cf[block.index] = x[block.index]
+        else:
+            x_cf[block.index] = v_int / problem.scale_k
+    return x_cf
 
 
 def _snap(

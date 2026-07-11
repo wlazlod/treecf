@@ -113,6 +113,8 @@ class AimProblem:
     implications: tuple[ScaledImplication, ...] = ()
     onehots: tuple[ScaledOneHot, ...] = ()
     must_have_value: tuple[int, ...] = ()  # block positions where m is forced to 0
+    plaus_trees: tuple[TreeBlock, ...] = ()  # isolation forest (§9); not part of the score
+    plaus_lo: int = 0  # sum of plausibility leaf values must be >= this (scale K)
 
 
 @dataclass(frozen=True)

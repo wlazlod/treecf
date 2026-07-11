@@ -20,6 +20,7 @@ from treecf.constraints import (
     Range,
     constraint,
 )
+from treecf.plausibility import Plausibility
 from treecf.targets import Target
 
 __version__ = "0.1.0.dev0"
@@ -39,6 +40,7 @@ __all__ = [
     "MissingExtraError",
     "Monotone",
     "OneHot",
+    "Plausibility",
     "Range",
     "Target",
     "TargetError",
