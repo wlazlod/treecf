@@ -32,4 +32,55 @@ class Range:
     hi: float
 
 
-Constraint = Freeze | Monotone | Range
+@dataclass(frozen=True)
+class Linear:
+    """Linear inter-feature constraint: sum(coef * feature) op rhs (spec §7.1).
+
+    ``missing_policy`` resolves the constraint when a referenced feature is NaN
+    in the counterfactual: "satisfied" (vacuously true, the default),
+    "violated"/"forbid_missing" (the counterfactual may not use NaN there).
+    """
+
+    coefficients: dict[str, float]
+    op: str  # "<=" | ">=" | "=="
+    rhs: float
+    missing_policy: str = "satisfied"
+
+
+@dataclass(frozen=True)
+class Equals:
+    """Binary-feature equality (used standalone or inside Implies)."""
+
+    feature: str
+    value: float
+
+
+@dataclass(frozen=True)
+class Implies:
+    """If `condition` holds then `consequence` must hold; binary features only (v0.1)."""
+
+    condition: Equals
+    consequence: Equals
+
+
+@dataclass(frozen=True)
+class OneHot:
+    """The listed binary columns sum to exactly one."""
+
+    features: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class AllowMissing:
+    """NaN is a feasible counterfactual value for this feature (spec §4.2).
+
+    ``delta_miss`` prices the value<->NaN transition; pass ``delta_from_miss``
+    for an asymmetric NaN->value cost (defaults to ``delta_miss``).
+    """
+
+    feature: str
+    delta_miss: float
+    delta_from_miss: float | None = None
+
+
+Constraint = Freeze | Monotone | Range | Linear | Equals | Implies | OneHot | AllowMissing
