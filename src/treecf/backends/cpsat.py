@@ -178,6 +178,13 @@ class CpsatBackend:
             + problem.lambda_scaled * sum(z_vars)
         )
 
+        # Warm start from the factual assignment: even when it misses the target, it
+        # anchors most variables and dramatically speeds up the first incumbent.
+        for block, v, z in zip(problem.features, v_vars, z_vars, strict=True):
+            if block.x_cell is not None:
+                model.AddHint(v, block.x_scaled)
+                model.AddHint(z, 0)
+
         solver = cp_model.CpSolver()
         solver.parameters.max_time_in_seconds = time_budget_s
         if num_workers:
@@ -189,9 +196,14 @@ class CpsatBackend:
             "wall_time_s": solver.WallTime(),
             "branches": solver.NumBranches(),
         }
-        if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        if status == cp_model.INFEASIBLE:
             return BackendSolution(
                 status="infeasible", values_scaled=None, objective=None, gap=None, stats=stats
+            )
+        if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            # UNKNOWN: the time budget ran out before any incumbent — NOT proven infeasible
+            return BackendSolution(
+                status="unknown", values_scaled=None, objective=None, gap=None, stats=stats
             )
 
         descale = float(problem.scale_k) * float(problem.scale_q)

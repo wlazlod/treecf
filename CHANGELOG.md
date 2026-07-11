@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-07-11
+
 ### Added
 
 - M4 breadth: LightGBM / sklearn (RF, GB, HistGB) / CatBoost parsers, all
@@ -28,4 +30,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Range` constraints, raw/probability targets, MAD-chain normalizers,
   float-space verification with K×10 retry, and a brute-force exactness oracle
   gating the backend (50-case randomized suite).
+- M5 release engineering: CI conformance matrix over library versions,
+  mkdocs-material docs with three executed tutorial notebooks
+  (quickstart, credit-risk walkthrough, no-solver environments),
+  performance smoke benchmark, clean-venv packaging verification.
 - Project skeleton: packaging, CI, docs infrastructure (M0).
+
+### Known limitations
+
+- CP-SAT solve time misses the <1s P3 target at 300+ trees (~40s median on
+  the §12.8 bench); planned v0.2 optimization via table-constraint encoding.
+- Plausibility cannot combine with AllowMissing/NaN factuals.
+- `n_counterfactuals > 1` requires the CP-SAT backend.

@@ -150,6 +150,11 @@ class Explainer:
                 return Infeasible(reason=problem.reason)
 
             solution = solver.solve(problem, time_budget_s=time_budget_s, num_workers=num_workers)
+            if solution.status == "unknown":
+                return Infeasible(
+                    reason="time budget exhausted before any feasible solution was found "
+                    "(not proven infeasible; raise time_budget_s)"
+                )
             if solution.status == "infeasible":
                 return Infeasible(
                     reason="no counterfactual satisfies target and constraints",
@@ -214,10 +219,13 @@ class Explainer:
             solution = solver.solve(
                 band_problem, time_budget_s=time_budget_s, num_workers=num_workers
             )
-            if solution.status == "infeasible":
-                results[name] = Infeasible(
-                    reason=f"band {name!r} is unreachable under the constraints"
+            if solution.status not in ("optimal", "feasible"):
+                reason = (
+                    f"band {name!r} is unreachable under the constraints"
+                    if solution.status == "infeasible"
+                    else f"band {name!r}: time budget exhausted before a solution was found"
                 )
+                results[name] = Infeasible(reason=reason)
                 continue
             x_cf = _extract_x_cf(band_problem, solution, x)
             if self._verify(x, x_cf, interval) is not None:
@@ -259,7 +267,7 @@ class Explainer:
             solution = solver.solve(
                 problem, time_budget_s=time_budget_s, num_workers=num_workers, cuts=cuts
             )
-            if solution.status == "infeasible":
+            if solution.status not in ("optimal", "feasible"):
                 break
             x_cf = _extract_x_cf(problem, solution, x)
             if self._verify(x, x_cf, interval) is not None:

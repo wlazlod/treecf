@@ -1,6 +1,6 @@
 [project]
 name = "treecf"
-version = "0.1.0.dev0"
+version = "0.1.0"
 description = "Constrained, threshold-aware counterfactual explanations for tree ensembles (XGBoost, LightGBM, CatBoost, sklearn) via CP-SAT and a solver-free genetic backend."
 readme = "README.md"
 license = { text = "MIT" }
@@ -67,6 +67,7 @@ docs = [
     "mkdocstrings[python]>=0.27",
     "pymdown-extensions>=10.9",
     "mkdocs-jupyter>=0.24",
+    "ipykernel>=6.29",
 ]
 
 [project.urls]

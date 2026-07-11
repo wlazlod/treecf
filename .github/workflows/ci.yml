@@ -34,3 +34,37 @@ jobs:
 
       - name: Run tests
         run: uv run pytest
+
+  conformance:
+    name: conformance ${{ matrix.library }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        library:
+          - "xgboost==3.1.*"
+          - "xgboost==3.2.*"
+          - "lightgbm==4.5.*"
+          - "lightgbm==4.6.*"
+          - "catboost==1.2.*"
+          - "scikit-learn==1.6.*"
+          - "scikit-learn==1.7.*"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Sync dev environment
+        run: uv sync --all-extras --dev
+
+      - name: Pin library under test
+        run: uv pip install "${{ matrix.library }}"
+
+      - name: Run IR conformance suite
+        run: uv run pytest tests/ir/

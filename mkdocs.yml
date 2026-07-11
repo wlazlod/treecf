@@ -45,6 +45,19 @@ markdown_extensions:
   - toc:
       permalink: true
 
-# Notebooks (docs/notebooks/) join the nav in M5 once they exist.
 nav:
   - Home: index.md
+  - Getting started: getting-started.md
+  - Concepts:
+      - Models and the IR: concepts/models.md
+      - Targets: concepts/targets.md
+      - Constraints: concepts/constraints.md
+      - Backends and proofs: concepts/backends.md
+      - Missing values: concepts/missing-values.md
+      - Plausibility: concepts/plausibility.md
+  - Tutorials:
+      - Quickstart: notebooks/01-quickstart.ipynb
+      - Credit-risk walkthrough: notebooks/02-credit-risk-tutorial.ipynb
+      - No-solver environments: notebooks/03-no-solver-environments.ipynb
+  - API reference: api.md
+  - FAQ: faq.md

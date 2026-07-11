@@ -25,7 +25,10 @@ jobs:
         run: uv python install 3.12
 
       - name: Install docs dependencies
-        run: uv sync --extra docs
+        run: uv sync --all-extras --dev
+
+      - name: Re-execute notebooks (they must not rot)
+        run: uv run python scripts/make_notebooks.py
 
       - name: Build site
         run: uv run mkdocs build --strict
