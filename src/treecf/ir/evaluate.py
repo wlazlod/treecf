@@ -7,7 +7,7 @@ import math
 import numpy as np
 import numpy.typing as npt
 
-from treecf.ir.model import EnsembleIR, Link, SplitOp, Tree
+from treecf.ir.model import EnsembleIR, Link, Node, SplitOp, Tree
 
 
 def raw_score(ir: EnsembleIR, x: npt.NDArray[np.float64]) -> float:
@@ -24,7 +24,18 @@ def apply_link(link: Link, score: float) -> float:
     return score
 
 
+def leaf_assignment(ir: EnsembleIR, x: npt.NDArray[np.float64]) -> tuple[int, ...]:
+    """Leaf node_id reached in each tree — the routing fingerprint of ``x``."""
+    return tuple(_leaf_node(tree, x).node_id for tree in ir.trees)
+
+
 def _leaf_value(tree: Tree, x: npt.NDArray[np.float64]) -> float:
+    value = _leaf_node(tree, x).value
+    assert value is not None
+    return value
+
+
+def _leaf_node(tree: Tree, x: npt.NDArray[np.float64]) -> Node:
     node = tree.nodes[0]
     while node.feature is not None:
         assert node.threshold is not None and node.left is not None and node.right is not None
@@ -40,5 +51,4 @@ def _leaf_value(tree: Tree, x: npt.NDArray[np.float64]) -> float:
             go_left = value < node.threshold if node.op is SplitOp.LT else value <= node.threshold
             child = node.left if go_left else node.right
         node = tree.nodes[child]
-    assert node.value is not None
-    return node.value
+    return node
