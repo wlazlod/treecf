@@ -1,0 +1,50 @@
+site_name: treecf
+site_description: Constrained, threshold-aware counterfactual explanations for tree ensembles.
+site_url: https://wlazlod.github.io/treecf/
+repo_url: https://github.com/wlazlod/treecf
+repo_name: wlazlod/treecf
+
+strict: true
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            docstring_style: google
+            show_source: true
+  - mkdocs-jupyter:
+      execute: false  # notebooks are committed executed; CI re-executes them separately
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.arithmatex
+  - toc:
+      permalink: true
+
+# Notebooks (docs/notebooks/) join the nav in M5 once they exist.
+nav:
+  - Home: index.md
