@@ -13,3 +13,11 @@ class UnsupportedModelError(TreecfError):
 
 class MissingExtraError(TreecfError):
     """An optional dependency is required; message carries the pip install command."""
+
+
+class ConstraintValidationError(TreecfError):
+    """The constraint set is invalid for this model's feature space."""
+
+
+class TargetError(TreecfError):
+    """The target specification is malformed or incompatible with the model link."""
