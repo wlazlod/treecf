@@ -41,6 +41,34 @@ class FeatureBlock:
     x_scaled: int  # factual value at scale K (clamped into its cell)
     x_cell: int | None  # position in `cells` holding the factual value, if allowed
     dist_coef: int
+    binary: bool = False  # v restricted to {0, K} via a boolean (Equals/Implies/OneHot)
+
+
+@dataclass(frozen=True)
+class ScaledLinear:
+    """sum(coef * v[block_pos]) op rhs, all integer at combined scale (spec §7.4)."""
+
+    terms: tuple[tuple[int, int], ...]  # (block position, integer coefficient)
+    op: str  # "<=" | ">=" | "=="
+    rhs: int
+
+
+@dataclass(frozen=True)
+class ScaledImplication:
+    """cond => cons over binary blocks: (block position, required boolean value)."""
+
+    cond_pos: int
+    cond_is_one: bool
+    cons_pos: int
+    cons_is_one: bool
+
+
+@dataclass(frozen=True)
+class ScaledOneHot:
+    """sum of binary blocks at `positions` equals `required` (fixed members folded)."""
+
+    positions: tuple[int, ...]
+    required: int
 
 
 @dataclass(frozen=True)
@@ -67,6 +95,9 @@ class AimProblem:
     lambda_scaled: int
     scale_k: int
     scale_q: int
+    linears: tuple[ScaledLinear, ...] = ()
+    implications: tuple[ScaledImplication, ...] = ()
+    onehots: tuple[ScaledOneHot, ...] = ()
 
 
 @dataclass(frozen=True)

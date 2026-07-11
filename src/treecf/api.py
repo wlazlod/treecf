@@ -130,6 +130,30 @@ class Explainer:
                 continue
             if not (lo[j] <= value <= hi[j]):
                 return f"feature {self.ir.feature_names[j]!r} violates its bounds"
+
+        slack = 1e-9  # integer-encoded constraints are exact; rounded coefs leave float dust
+        for lin in self.compiled.linears:
+            values = [x_cf[j] for j in lin.indices]
+            if any(math.isnan(v) for v in values):
+                if lin.missing_policy == "satisfied":
+                    continue
+                return "Linear constraint references a missing value"
+            total = sum(c * v for c, v in zip(lin.coefs, values, strict=True))
+            ok = (
+                total <= lin.rhs + slack
+                if lin.op == "<="
+                else total >= lin.rhs - slack
+                if lin.op == ">="
+                else abs(total - lin.rhs) <= slack
+            )
+            if not ok:
+                return f"Linear constraint violated: {lin.coefficients} {lin.op} {lin.rhs}"
+        for imp in self.compiled.implications:
+            if x_cf[imp.cond_index] == imp.cond_value and x_cf[imp.cons_index] != imp.cons_value:
+                return "Implies constraint violated"
+        for group in self.compiled.onehot_groups:
+            if sum(x_cf[j] for j in group) != 1.0:
+                return "OneHot constraint violated"
         return None
 
     def _result(

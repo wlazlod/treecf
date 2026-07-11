@@ -23,7 +23,8 @@ class CpsatBackend:
         v_vars: list[Any] = []
         d_vars: list[Any] = []
         z_vars: list[Any] = []
-        for block in problem.features:
+        b_vars: dict[int, Any] = {}  # block position -> boolean for binary features
+        for pos, block in enumerate(problem.features):
             bools = [
                 model.NewBoolVar(f"cell_{block.index}_{d.cell_index}") for d in block.cells
             ]
@@ -42,10 +43,31 @@ class CpsatBackend:
                 model.Add(z == 1)
             else:
                 model.Add(v == block.x_scaled).OnlyEnforceIf(z.Not())
+            if block.binary:
+                b = model.NewBoolVar(f"b_{block.index}")
+                model.Add(v == problem.scale_k * b)
+                b_vars[pos] = b
             cell_bools.append(bools)
             v_vars.append(v)
             d_vars.append(d)
             z_vars.append(z)
+
+        for lin in problem.linears:
+            expr = sum(coef * v_vars[pos] for pos, coef in lin.terms)
+            if lin.op == "<=":
+                model.Add(expr <= lin.rhs)
+            elif lin.op == ">=":
+                model.Add(expr >= lin.rhs)
+            else:
+                model.Add(expr == lin.rhs)
+
+        for imp in problem.implications:
+            cond = b_vars[imp.cond_pos] if imp.cond_is_one else b_vars[imp.cond_pos].Not()
+            cons = b_vars[imp.cons_pos] if imp.cons_is_one else b_vars[imp.cons_pos].Not()
+            model.AddImplication(cond, cons)
+
+        for onehot in problem.onehots:
+            model.Add(sum(b_vars[pos] for pos in onehot.positions) == onehot.required)
 
         score_terms = [problem.base_scaled]
         for t_idx, tree in enumerate(problem.trees):

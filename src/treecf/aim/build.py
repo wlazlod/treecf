@@ -21,6 +21,9 @@ from treecf.aim.model import (
     CellDomain,
     FeatureBlock,
     LeafSpec,
+    ScaledImplication,
+    ScaledLinear,
+    ScaledOneHot,
     TreeBlock,
 )
 from treecf.constraints.compile import CompiledConstraints
@@ -62,6 +65,7 @@ def build_problem(
         block = _feature_block(
             j, ir.feature_names[j], per_feature_cells[j], x[j], lo_b[j], hi_b[j],
             weights[j], sigma[j], scale_k, scale_q,
+            binary=j in compiled.binary_features,
         )
         if block is None:
             return BuildInfeasible(
@@ -93,6 +97,12 @@ def build_problem(
     if score_lo > score_hi:
         return BuildInfeasible(reason="empty target interval")
 
+    pos_of = {block.index: pos for pos, block in enumerate(features)}
+    encoded = _encode_relational(compiled, fixed_values, pos_of, scale_k, scale_q)
+    if isinstance(encoded, BuildInfeasible):
+        return encoded
+    linears, implications, onehots = encoded
+
     return AimProblem(
         features=tuple(features),
         trees=tuple(trees),
@@ -102,6 +112,9 @@ def build_problem(
         lambda_scaled=round(scale_q * scale_k * lam),
         scale_k=scale_k,
         scale_q=scale_q,
+        linears=linears,
+        implications=implications,
+        onehots=onehots,
     )
 
 
@@ -130,6 +143,7 @@ def _feature_block(
     sigma_j: float,
     scale_k: int,
     scale_q: int,
+    binary: bool = False,
 ) -> FeatureBlock | None:
     finite = [c.lo for c in cells if math.isfinite(c.lo)]
     if math.isfinite(lo_bound):
@@ -173,7 +187,122 @@ def _feature_block(
         x_scaled=x_scaled,
         x_cell=x_cell,
         dist_coef=round(scale_q * weight / sigma_j),
+        binary=binary,
     )
+
+
+def _encode_relational(
+    compiled: CompiledConstraints,
+    fixed_values: dict[int, float],
+    pos_of: dict[int, int],
+    scale_k: int,
+    scale_q: int,
+) -> tuple[
+    tuple[ScaledLinear, ...], tuple[ScaledImplication, ...], tuple[ScaledOneHot, ...]
+] | BuildInfeasible:
+    """Resolve Linear/Implies/OneHot to block positions, folding fixed features."""
+    linears: list[ScaledLinear] = []
+    for lin in compiled.linears:
+        integral = all(float(c).is_integer() for c in lin.coefs)
+        qc = 1 if integral else scale_q
+        rhs_float = qc * scale_k * lin.rhs
+        terms: list[tuple[int, int]] = []
+        dropped = False
+        for j, coef in zip(lin.indices, lin.coefs, strict=True):
+            if j in fixed_values:
+                value = fixed_values[j]
+                if math.isnan(value):
+                    if lin.missing_policy == "satisfied":
+                        dropped = True  # vacuously true (§4.2)
+                        break
+                    return BuildInfeasible(
+                        reason=f"Linear over missing frozen feature index {j} "
+                        f"with missing_policy={lin.missing_policy!r}"
+                    )
+                rhs_float -= qc * coef * scale_k * value
+            else:
+                terms.append((pos_of[j], round(qc * coef)))
+        if dropped:
+            continue
+        rhs = round(rhs_float)
+        if not terms:  # fully static: check numerically
+            if not _op_holds(0, lin.op, rhs):
+                return BuildInfeasible(reason="Linear constraint over fixed features fails")
+            continue
+        linears.append(ScaledLinear(terms=tuple(terms), op=lin.op, rhs=rhs))
+
+    implications: list[ScaledImplication] = []
+    for imp in compiled.implications:
+        cond_fixed = imp.cond_index in fixed_values
+        cons_fixed = imp.cons_index in fixed_values
+        if cond_fixed:
+            if abs(fixed_values[imp.cond_index] - imp.cond_value) > 1e-9:
+                continue  # condition statically false: implication is vacuous
+            if cons_fixed:
+                if abs(fixed_values[imp.cons_index] - imp.cons_value) > 1e-9:
+                    return BuildInfeasible(reason="Implies over fixed features fails")
+                continue
+            # condition true: force the consequence
+            linears.append(
+                ScaledLinear(
+                    terms=((pos_of[imp.cons_index], 1),),
+                    op="==",
+                    rhs=round(scale_k * imp.cons_value),
+                )
+            )
+            continue
+        if cons_fixed:
+            if abs(fixed_values[imp.cons_index] - imp.cons_value) <= 1e-9:
+                continue  # consequence statically true
+            # consequence false: condition must not hold
+            linears.append(
+                ScaledLinear(
+                    terms=((pos_of[imp.cond_index], 1),),
+                    op="==",
+                    rhs=round(scale_k * (1.0 - imp.cond_value)),
+                )
+            )
+            continue
+        implications.append(
+            ScaledImplication(
+                cond_pos=pos_of[imp.cond_index],
+                cond_is_one=imp.cond_value == 1.0,
+                cons_pos=pos_of[imp.cons_index],
+                cons_is_one=imp.cons_value == 1.0,
+            )
+        )
+
+    onehots: list[ScaledOneHot] = []
+    for group in compiled.onehot_groups:
+        required = 1
+        positions: list[int] = []
+        for j in group:
+            if j in fixed_values:
+                value = fixed_values[j]
+                if math.isnan(value) or value not in (0.0, 1.0):
+                    return BuildInfeasible(
+                        reason="OneHot group contains a fixed non-binary value"
+                    )
+                required -= int(value)
+            else:
+                positions.append(pos_of[j])
+        if required < 0 or required > 1:
+            return BuildInfeasible(reason="OneHot group is over-determined by fixed features")
+        if not positions:
+            if required != 0:
+                return BuildInfeasible(reason="OneHot group of fixed features does not sum to 1")
+            continue
+        onehots.append(ScaledOneHot(positions=tuple(positions), required=required))
+
+    return tuple(linears), tuple(implications), tuple(onehots)
+
+
+def _op_holds(lhs: float, op: str, rhs: float) -> bool:
+    if op == "<=":
+        return lhs <= rhs
+    if op == ">=":
+        return lhs >= rhs
+    return lhs == rhs
 
 
 def _lower_int(lo: float, strict: bool, scale_k: int) -> int:
