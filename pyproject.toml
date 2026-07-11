@@ -104,7 +104,8 @@ ignore = ["N803", "N806", "RUF001", "RUF002"]
 "tests/**" = ["N802"]
 
 [tool.mypy]
-python_version = "3.11"
+# no python_version pin: numpy's stubs use PEP 695 `type` statements, which mypy
+# rejects when told to type-check as 3.11 while running under 3.12/3.13
 strict = true
 files = ["src/treecf"]
 

@@ -44,7 +44,8 @@ jobs:
         library:
           - "xgboost==3.1.*"
           - "xgboost==3.2.*"
-          - "lightgbm==4.5.*"
+          # lightgbm 4.5's sklearn wrapper predates scikit-learn 1.7's API cleanup
+          - "lightgbm==4.5.* scikit-learn==1.6.*"
           - "lightgbm==4.6.*"
           - "catboost==1.2.*"
           - "scikit-learn==1.6.*"
@@ -64,7 +65,7 @@ jobs:
         run: uv sync --all-extras --dev
 
       - name: Pin library under test
-        run: uv pip install "${{ matrix.library }}"
+        run: uv pip install ${{ matrix.library }}
 
       - name: Run IR conformance suite
         run: uv run pytest tests/ir/
