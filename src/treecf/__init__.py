@@ -20,6 +20,7 @@ from treecf.constraints import (
     Range,
     constraint,
 )
+from treecf.mining import DataQualityFinding, SuggestedConstraint, suggest_constraints
 from treecf.plausibility import Plausibility
 from treecf.targets import Target
 
@@ -30,6 +31,7 @@ __all__ = [
     "ConstraintParseError",
     "ConstraintValidationError",
     "Counterfactual",
+    "DataQualityFinding",
     "Equals",
     "Explainer",
     "Freeze",
@@ -42,10 +44,12 @@ __all__ = [
     "OneHot",
     "Plausibility",
     "Range",
+    "SuggestedConstraint",
     "Target",
     "TargetError",
     "TreecfError",
     "UnsupportedModelError",
     "__version__",
     "constraint",
+    "suggest_constraints",
 ]
