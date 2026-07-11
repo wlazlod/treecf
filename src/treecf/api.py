@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -11,6 +11,7 @@ import numpy.typing as npt
 
 from treecf._errors import TreecfError
 from treecf.aim.build import build_problem
+from treecf.aim.cells import cell_index, feature_cells
 from treecf.aim.model import BuildInfeasible
 from treecf.backends.base import Backend
 from treecf.constraints.compile import compile_constraints
@@ -27,6 +28,17 @@ _MAX_FIXED_POINT_RETRIES = 2
 
 
 @dataclass(frozen=True)
+class Grid:
+    """Value policy: snap to ``anchor + k * step`` (spec §5.6)."""
+
+    step: float
+    anchor: float = 0.0
+
+
+ValuePolicy = str | Grid | Callable[[float], float]
+
+
+@dataclass(frozen=True)
 class Counterfactual:
     x_cf: FloatArray
     changes: dict[str, tuple[float, float]]
@@ -37,6 +49,7 @@ class Counterfactual:
     proof: str  # "optimal" | "feasible" | "heuristic"
     gap: float | None = None
     solver_stats: dict[str, object] = field(default_factory=dict)
+    snapped: dict[str, bool] = field(default_factory=dict)  # value_policy outcome (§5.6)
 
 
 @dataclass(frozen=True)
@@ -60,12 +73,19 @@ class Explainer:
         constraints: Sequence[Constraint] = (),
         weights: dict[str, float] | None = None,
         normalizers: FloatArray | dict[str, float] | None = None,
+        value_policy: dict[str, ValuePolicy] | None = None,
     ) -> None:
         self.ir = model if isinstance(model, EnsembleIR) else parse_model(model)
         names = self.ir.feature_names
         self.compiled = compile_constraints(constraints, names)
         self.sigma = _resolve_sigma(names, background, normalizers)
         self.weights = np.array([(weights or {}).get(name, 1.0) for name in names])
+        self.value_policy = value_policy or {}
+        for name, policy in self.value_policy.items():
+            if name not in names:
+                raise TreecfError(f"value_policy references unknown feature {name!r}")
+            if isinstance(policy, str) and policy not in ("raw", "integer"):
+                raise TreecfError(f"unknown value policy {policy!r} for {name!r}")
 
     def explain(
         self,
@@ -111,7 +131,10 @@ class Explainer:
                     x_cf[block.index] = v_int / problem.scale_k
             verification = self._verify(x, x_cf, interval)
             if verification is None:
-                return self._result(x, x_cf, solution.status, solution.gap, solution.stats)
+                x_cf, snapped = self._apply_value_policies(x, x_cf, interval)
+                return self._result(
+                    x, x_cf, solution.status, solution.gap, solution.stats, snapped
+                )
             # Fixed-point artifact (should be prevented by §5.4 widening): retry finer.
             scale_k *= 10
             last_reason = verification
@@ -163,6 +186,49 @@ class Explainer:
                 return "OneHot constraint violated"
         return None
 
+    def _apply_value_policies(
+        self, x: FloatArray, x_cf: FloatArray, interval: tuple[float, float]
+    ) -> tuple[FloatArray, dict[str, bool]]:
+        """Snap changed values per policy inside their cells (§5.6); never break validity.
+
+        The unsnapped ``x_cf`` is already verified, so reverting offending features
+        one by one is guaranteed to terminate in a valid state.
+        """
+        applicable = [
+            (j, name, self.value_policy[name])
+            for j, name in enumerate(self.ir.feature_names)
+            if name in self.value_policy
+            and self.value_policy[name] != "raw"
+            and not math.isnan(x_cf[j])
+            and x_cf[j] != x[j]
+        ]
+        if not applicable:
+            return x_cf, {}
+
+        cells = feature_cells(self.ir)
+        lo_b, hi_b, _ = self.compiled.instance_bounds(x)
+        snapped: dict[str, bool] = {}
+        candidate = x_cf.copy()
+        for j, name, policy in applicable:
+            cell = cells[j][cell_index(cells[j], x_cf[j])]
+            value = _snap(x_cf[j], policy, cell.contains, float(lo_b[j]), float(hi_b[j]))
+            if value is None:
+                snapped[name] = False
+            else:
+                candidate[j] = value
+                snapped[name] = True
+
+        # Revert snapped features one at a time until the candidate verifies.
+        order = [name for name in snapped if snapped[name]]
+        while self._verify(x, candidate, interval) is not None and order:
+            name = order.pop()
+            j = self.ir.feature_names.index(name)
+            candidate[j] = x_cf[j]
+            snapped[name] = False
+        if self._verify(x, candidate, interval) is not None:
+            return x_cf, dict.fromkeys(snapped, False)
+        return candidate, snapped
+
     def _result(
         self,
         x: FloatArray,
@@ -170,6 +236,7 @@ class Explainer:
         status: str,
         gap: float | None,
         stats: dict[str, object],
+        snapped: dict[str, bool] | None = None,
     ) -> Counterfactual:
         changes: dict[str, tuple[float, float]] = {}
         distance = 0.0
@@ -196,7 +263,33 @@ class Explainer:
             proof=status,
             gap=gap,
             solver_stats=stats,
+            snapped=snapped or {},
         )
+
+
+def _snap(
+    value: float,
+    policy: ValuePolicy,
+    in_cell: Callable[[float], bool],
+    lo: float,
+    hi: float,
+) -> float | None:
+    """Nearest policy-conforming value inside the cell and bounds, or None."""
+    if callable(policy):
+        candidates = [float(policy(value))]
+    elif policy == "integer":
+        candidates = sorted({math.floor(value), math.ceil(value)}, key=lambda c: abs(c - value))
+    else:
+        assert isinstance(policy, Grid)
+        base = policy.anchor + policy.step * round((value - policy.anchor) / policy.step)
+        candidates = sorted(
+            {base, base - policy.step, base + policy.step}, key=lambda c: abs(c - value)
+        )
+    for c in candidates:
+        c = float(c)
+        if in_cell(c) and lo <= c <= hi:
+            return c
+    return None
 
 
 def _resolve_sigma(

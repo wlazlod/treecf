@@ -8,7 +8,7 @@ from treecf._errors import (
     TreecfError,
     UnsupportedModelError,
 )
-from treecf.api import Counterfactual, Explainer, Infeasible
+from treecf.api import Counterfactual, Explainer, Grid, Infeasible
 from treecf.constraints import (
     AllowMissing,
     Equals,
@@ -32,6 +32,7 @@ __all__ = [
     "Equals",
     "Explainer",
     "Freeze",
+    "Grid",
     "Implies",
     "Infeasible",
     "Linear",
