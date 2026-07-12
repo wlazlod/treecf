@@ -14,7 +14,7 @@ from treecf._errors import TreecfError
 from treecf.aim.cells import cell_index, feature_cells
 from treecf.constraints.compile import compile_constraints
 from treecf.constraints.objects import Constraint
-from treecf.ir.evaluate import apply_link, raw_score
+from treecf.ir.evaluate import TreeArrays, apply_link, prepare_tree_arrays, raw_score
 from treecf.ir.model import EnsembleIR, Link
 from treecf.ir.parsers import parse_model
 from treecf.objective import fit_normalizers
@@ -65,6 +65,7 @@ class Explainer:
     """
 
     _rust_cache: dict[str, object]  # marshaled Rust objects, created on first solve
+    _prepared_trees: tuple[TreeArrays, ...]  # vectorized-verify arrays, created on first batch
 
     def __init__(
         self,
@@ -241,13 +242,28 @@ class Explainer:
         x_cf: FloatArray,
         interval: tuple[float, float],
         stats: dict[str, object],
+        score: float | None = None,
     ) -> Counterfactual | Infeasible:
-        """Verify, snap, and package one solver candidate (§8.1 step 5)."""
-        verification = self._verify(x, x_cf, interval)
+        """Verify, snap, and package one solver candidate (§8.1 step 5).
+
+        ``score`` is an optional precomputed ``raw_score(self.ir, x_cf)``
+        (e.g. from a vectorized batch evaluation); it is recomputed whenever
+        value policies modify the candidate.
+        """
+        if score is None:
+            score = raw_score(self.ir, x_cf)
+        verification = self._verify(x, x_cf, interval, score=score)
         if verification is not None:  # defensive: the GA only returns checked individuals
             return Infeasible(reason=f"heuristic solution failed verification: {verification}")
-        x_cf, snapped = self._apply_value_policies(x, x_cf, interval)
-        return self._result(x, x_cf, "heuristic", stats, snapped)
+        final_cf, snapped = self._apply_value_policies(x, x_cf, interval)
+        if final_cf is not x_cf:
+            score = raw_score(self.ir, final_cf)
+        return self._result(x, final_cf, "heuristic", stats, snapped, score=score)
+
+    def _prepared_tree_arrays(self) -> tuple[TreeArrays, ...]:
+        if not hasattr(self, "_prepared_trees"):
+            self._prepared_trees = prepare_tree_arrays(self.ir)
+        return self._prepared_trees
 
     def _solve_batch(
         self,
@@ -278,10 +294,15 @@ class Explainer:
         )
 
     def _verify(
-        self, x: FloatArray, x_cf: FloatArray, interval: tuple[float, float]
+        self,
+        x: FloatArray,
+        x_cf: FloatArray,
+        interval: tuple[float, float],
+        score: float | None = None,
     ) -> str | None:
         """Float-space re-check of target and constraints. None = OK."""
-        score = raw_score(self.ir, x_cf)
+        if score is None:
+            score = raw_score(self.ir, x_cf)
         if not (interval[0] <= score <= interval[1]):
             return f"score {score} outside target {interval}"
         lo, hi, _frozen = self.compiled.instance_bounds(x)  # bounds anchor at the factual x
@@ -379,6 +400,7 @@ class Explainer:
         status: str,
         stats: dict[str, object],
         snapped: dict[str, bool] | None = None,
+        score: float | None = None,
     ) -> Counterfactual:
         changes: dict[str, tuple[float, float]] = {}
         distance = 0.0
@@ -394,7 +416,8 @@ class Explainer:
             else:
                 delta = abs(x_cf[j] - x[j])
             distance += self.weights[j] * delta / self.sigma[j]
-        score = raw_score(self.ir, x_cf)
+        if score is None:
+            score = raw_score(self.ir, x_cf)
         return Counterfactual(
             x_cf=x_cf,
             changes=changes,

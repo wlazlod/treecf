@@ -20,6 +20,7 @@ import numpy.typing as npt
 
 from treecf._errors import TreecfError
 from treecf._json import decode_floats, encode_floats
+from treecf.ir.evaluate import raw_score_batch_prepared
 
 if TYPE_CHECKING:
     from treecf.api import Counterfactual, Explainer
@@ -279,10 +280,26 @@ def _rows_by_seed_waves(
             for a in range(n)
         ]
         results = explainer._solve_batch(X, tasks, interval, time_budget_s, sparsity_weight)
-        for (i, attempt_seed), result in zip(tasks, results, strict=True):
+        # One vectorized IR pass scores the wave's candidates (§8.1 stays in
+        # float space through the IR). NaN candidates keep the scalar path so
+        # models without missing routing fail exactly as in a single explain.
+        candidates = {
+            t: result.x_cf for t, result in enumerate(results) if result.x_cf is not None
+        }
+        scorable = [t for t, cf in candidates.items() if not np.isnan(cf).any()]
+        scores: dict[int, float] = {}
+        if scorable:
+            stacked = np.stack([candidates[t] for t in scorable])
+            wave_scores = raw_score_batch_prepared(
+                explainer._prepared_tree_arrays(), explainer.ir.base_score, stacked
+            )
+            scores = dict(zip(scorable, (float(s) for s in wave_scores), strict=True))
+        for t, ((i, attempt_seed), result) in enumerate(zip(tasks, results, strict=True)):
             if len(found[i]) == n or result.x_cf is None:
                 continue
-            outcome = explainer._finalize_candidate(X[i], result.x_cf, interval, result.stats)
+            outcome = explainer._finalize_candidate(
+                X[i], result.x_cf, interval, result.stats, score=scores.get(t)
+            )
             if isinstance(outcome, Counterfactual):
                 key = frozenset(outcome.changes)
                 if key not in found[i]:
