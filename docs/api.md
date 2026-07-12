@@ -8,6 +8,12 @@
 
 ::: treecf.Infeasible
 
+## Batch production
+
+::: treecf.BatchResult
+
+::: treecf.BatchRecord
+
 ## Targets
 
 ::: treecf.Target

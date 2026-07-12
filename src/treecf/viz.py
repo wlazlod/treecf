@@ -91,6 +91,120 @@ def plot_ladder(bands_result: Mapping[str, object], ax: Any = None) -> Any:
     return ax
 
 
+def plot_waterfall(explainer: Any, cf: Counterfactual, target: Any = None, ax: Any = None) -> Any:
+    """SHAP-style waterfall: exact score deltas of the counterfactual's changes.
+
+    Starts at the factual score, applies the changes one at a time (largest
+    single effect first), each bar being the EXACT score delta from that change
+    (recomputed through the IR — endpoints are exact; per-bar attribution is
+    sequential and therefore order-dependent, like any sequential decomposition).
+    Sigmoid-link models are plotted in probability space.
+    """
+    import numpy as np
+
+    from treecf.ir.evaluate import apply_link, raw_score
+    from treecf.ir.model import Link
+
+    plt = _import_pyplot()
+    ir = explainer.ir
+    index = {name: j for j, name in enumerate(ir.feature_names)}
+
+    x = cf.x_cf.copy()
+    for name, (source, _) in cf.changes.items():
+        x[index[name]] = source
+
+    def single_delta(name: str) -> float:
+        probe = x.copy()
+        probe[index[name]] = cf.changes[name][1]
+        return raw_score(ir, probe) - raw_score(ir, x)
+
+    order = sorted(cf.changes, key=lambda f: abs(single_delta(f)), reverse=True)
+
+    sigmoid = ir.link is Link.SIGMOID
+    to_display = (lambda s: apply_link(Link.SIGMOID, s)) if sigmoid else (lambda s: s)
+
+    current = x.copy()
+    scores = [to_display(raw_score(ir, current))]
+    for name in order:
+        current[index[name]] = cf.changes[name][1]
+        scores.append(to_display(raw_score(ir, current)))
+
+    if ax is None:
+        _, ax = plt.subplots(figsize=(7, 0.7 * max(2, len(order)) + 1))
+    for i, _name in enumerate(order):
+        before, after = scores[i], scores[i + 1]
+        delta = after - before
+        color = "tab:blue" if delta < 0 else "tab:orange"
+        ax.barh(i, delta, left=before, color=color, height=0.6)
+        ax.plot([after, after], [i, i + 1], color="0.6", linestyle=":", linewidth=1)
+        ax.annotate(
+            f"{delta:+.4g}",
+            xy=(max(before, after), i),
+            xytext=(4, 0),
+            textcoords="offset points",
+            va="center",
+            fontsize=9,
+        )
+    ax.axvline(scores[0], color="0.4", linestyle="--", linewidth=1)
+    ax.text(scores[0], -0.55, f"f(x) = {scores[0]:.4g}", ha="center", va="top", fontsize=9)
+    ax.axvline(scores[-1], color="tab:green", linestyle="--", linewidth=1)
+    ax.text(
+        scores[-1], len(order) - 0.3, f"f(x') = {scores[-1]:.4g}",
+        ha="center", va="bottom", fontsize=9, color="tab:green",
+    )
+    if target is not None:
+        for bound in target.raw_interval(ir.link):
+            if np.isfinite(bound):
+                ax.axvline(to_display(bound), color="tab:red", linewidth=1)
+    ax.set_yticks(range(len(order)), order)
+    ax.invert_yaxis()  # largest effect on top, like SHAP
+    ax.set_xlabel("model probability" if sigmoid else "raw score")
+    ax.set_title("what moves the score (sequential, exact)")
+    if sigmoid:
+        low = min(0.0, min(scores))
+        high = max(1.0, max(scores))
+        ax.set_xlim(low - 0.02, min(high + 0.05, 1.05))
+    return ax
+
+
+def plot_effort(explainer: Any, cf: Counterfactual, ax: Any = None) -> Any:
+    """Cost-space companion: how the distance J splits across the changes."""
+    import math as _math
+
+    plt = _import_pyplot()
+    names = explainer.ir.feature_names
+    index = {name: j for j, name in enumerate(names)}
+    allow = explainer.compiled.allow_missing
+
+    contributions: list[tuple[str, float]] = []
+    for name, (source, dest) in cf.changes.items():
+        j = index[name]
+        if _math.isnan(dest):
+            delta = allow[j][0]
+        elif _math.isnan(source):
+            delta = allow[j][1]
+        else:
+            delta = abs(dest - source)
+        contributions.append((name, float(explainer.weights[j] * delta / explainer.sigma[j])))
+    contributions.sort(key=lambda pair: pair[1], reverse=True)
+
+    if ax is None:
+        _, ax = plt.subplots(figsize=(7, 0.6 * max(2, len(contributions)) + 0.8))
+    labels = [name for name, _ in contributions]
+    efforts = [effort for _, effort in contributions]
+    ax.barh(range(len(labels)), efforts, color="tab:blue", height=0.6)
+    for i, effort in enumerate(efforts):
+        ax.annotate(
+            f"{effort:.3g}", xy=(effort, i), xytext=(4, 0),
+            textcoords="offset points", va="center", fontsize=9,
+        )
+    ax.set_yticks(range(len(labels)), labels)
+    ax.invert_yaxis()
+    ax.set_xlabel("effort contribution (w·|Δ|/σ)")
+    ax.set_title(f"where the effort goes — total J = {cf.distance:.3g}")
+    return ax
+
+
 def _import_pyplot() -> Any:
     try:
         import matplotlib.pyplot as plt

@@ -110,6 +110,7 @@ module = [
     "sklearn.*",
     "matplotlib.*",
     "treecf._treecf_core",
+    "pandas",
 ]
 ignore_missing_imports = true
 

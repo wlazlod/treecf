@@ -20,6 +20,7 @@ from typing import Any
 import numpy as np
 import numpy.typing as npt
 
+from treecf._json import decode_floats, encode_floats
 from treecf.backends.genetic import solve_genetic
 from treecf.constraints import (
     AllowMissing,
@@ -100,32 +101,6 @@ def build_constraints(descriptors: list[dict[str, Any]]) -> list[Constraint]:
         else:
             raise ValueError(f"unknown constraint descriptor type {kind!r}")
     return out
-
-
-def encode_floats(values: Any) -> Any:
-    """numpy/float -> JSON-portable (NaN -> None, ±inf -> '±inf' strings)."""
-    if isinstance(values, np.ndarray):
-        return [encode_floats(v) for v in values.tolist()]
-    if isinstance(values, list | tuple):
-        return [encode_floats(v) for v in values]
-    if isinstance(values, float):
-        if math.isnan(values):
-            return None
-        if math.isinf(values):
-            return "inf" if values > 0 else "-inf"
-    return values
-
-
-def decode_floats(values: Any) -> Any:
-    if isinstance(values, list):
-        return [decode_floats(v) for v in values]
-    if values is None:
-        return math.nan
-    if values == "inf":
-        return math.inf
-    if values == "-inf":
-        return -math.inf
-    return values
 
 
 def _decode_array(values: Any) -> FloatArray:

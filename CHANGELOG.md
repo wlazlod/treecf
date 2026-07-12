@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Batch production**: `Explainer.explain_batch(X, target, n_per_example=k,
+  diversity="seeds"|"lever-blocking", ids=...)` mass-produces counterfactuals
+  for a dataset (~ms/row via the Rust engine); `BatchResult` persists to
+  portable JSON (`save`/`load`), supports `for_id` lookup and a lazy-pandas
+  `to_frame()`. Lever-blocking mode also records per-row *essential levers*.
+- **New visualizations**: `plot_waterfall` (SHAP-style waterfall of exact
+  score deltas per change, cutoff line, probability space for sigmoid models)
+  and `plot_effort` (decomposition of the distance J across changes).
+
 ### Removed
 
 - **The exact CP-SAT backend, entirely** (per the migration spec's §3.3,

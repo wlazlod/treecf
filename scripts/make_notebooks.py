@@ -91,6 +91,16 @@ def quickstart() -> nbf.NotebookNode:
         nbf.v4.new_code_cell(
             "from treecf.viz import plot_changes\n\nplot_changes(res);"
         ),
+        nbf.v4.new_markdown_cell(
+            "**Waterfall** (SHAP-style): each bar is the exact probability delta from "
+            "one change, applied largest-first; the red line is the policy cutoff. "
+            "**Effort** shows where the applicant's work goes instead."
+        ),
+        nbf.v4.new_code_cell(
+            "from treecf.viz import plot_effort, plot_waterfall\n\n"
+            "plot_waterfall(exp, res, target=Target.probability(range=(0.0, cutoff)));"
+        ),
+        nbf.v4.new_code_cell("plot_effort(exp, res);"),
     ]
     return nb
 
@@ -191,6 +201,42 @@ def tutorial() -> nbf.NotebookNode:
         ),
         nbf.v4.new_code_cell(
             "from treecf.viz import plot_counterfactuals\n\nplot_counterfactuals(alternatives);"
+        ),
+        nbf.v4.new_markdown_cell(
+            "## 5. Mass-producing counterfactuals for a day's declines\n\n"
+            "Score a day's applications, take the declines, and produce (up to) two "
+            "recourse plans per applicant in one call — then store the batch and look "
+            "plans up later without recomputing."
+        ),
+        nbf.v4.new_code_cell(
+            "import time\n\n"
+            "declined = np.flatnonzero(proba > cutoff)[:200]     # today's declines\n"
+            "app_ids = [f\"APP-{i:05d}\" for i in declined]\n\n"
+            "start = time.perf_counter()\n"
+            "batch = exp.explain_batch(\n"
+            "    X[declined],\n"
+            "    target=Target.probability(range=(0.0, cutoff)),\n"
+            "    n_per_example=2,           # counterfactuals per applicant\n"
+            "    diversity=\"seeds\",\n"
+            "    ids=app_ids,\n"
+            "    seed=0,\n"
+            ")\n"
+            "wall = time.perf_counter() - start\n"
+            "feasible = sum(r.feasible for r in batch)\n"
+            "print(f\"{len(batch)} plans for {len(declined)} applicants \"\n"
+            "      f\"in {wall:.1f}s ({1000 * wall / len(declined):.0f} ms/applicant)\")\n"
+            "print(f\"feasible plans: {feasible}\")"
+        ),
+        nbf.v4.new_code_cell(
+            "import pathlib, tempfile\n\n"
+            "store_path = pathlib.Path(tempfile.mkdtemp()) / \"counterfactuals_today.json\"\n"
+            "batch.save(store_path)                        # store once...\n\n"
+            "from treecf import BatchResult\n"
+            "stored = BatchResult.load(store_path)\n"
+            "stored.for_id(app_ids[0])                     # ...look up any time"
+        ),
+        nbf.v4.new_code_cell(
+            "stored.to_frame().head(6)      # or analyze the whole day as a DataFrame"
         ),
     ]
     return nb

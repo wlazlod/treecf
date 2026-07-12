@@ -64,3 +64,33 @@ algorithm.
 
 Every result is re-verified in float space against the IR before it is returned:
 the target and each constraint are checked on the actual returned values.
+
+## Visualize it
+
+```python
+from treecf.viz import plot_changes, plot_waterfall, plot_effort
+
+plot_changes(res)                       # dumbbells: from -> to per feature
+plot_waterfall(exp, res, target=t)      # SHAP-style: exact score deltas, cutoff line
+plot_effort(exp, res)                   # where the applicant's effort goes (J split)
+```
+
+## Mass-produce for a whole dataset
+
+```python
+batch = exp.explain_batch(
+    X_declined,                          # e.g. today's declined applications
+    target=Target.probability(range=(0.0, 0.30)),
+    n_per_example=2,                     # counterfactuals per example
+    diversity="seeds",                  # or "lever-blocking" (also finds essential levers)
+    ids=app_ids,
+    seed=0,
+)
+batch.save("counterfactuals_today.json")     # compute once, store...
+stored = BatchResult.load("counterfactuals_today.json")
+stored.for_id("APP-00042")                   # ...look up any time
+stored.to_frame()                            # or analyze as a pandas DataFrame
+```
+
+Roughly ~100 ms per applicant on a 100-tree model including two alternatives
+each (the Rust engine solves in milliseconds; see the tutorial notebook).

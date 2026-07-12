@@ -58,3 +58,83 @@ def test_plot_ladder_costs_and_infeasible() -> None:
     assert labels == ["C", "B", "A"]
     texts = " ".join(t.get_text() for t in ax.texts)
     assert "infeasible" in texts.lower()
+
+
+def _waterfall_setup():
+    from treecf import Explainer, Target
+    from treecf.ir.model import EnsembleIR, Link, Node, SplitOp, Tree
+
+    def stump(feature, threshold, right):
+        return Tree(
+            nodes=(
+                Node(0, feature, threshold, SplitOp.LT, True, 1, 2, None),
+                Node(1, None, None, None, None, None, None, 0.0),
+                Node(2, None, None, None, None, None, None, right),
+            )
+        )
+
+    ir = EnsembleIR(
+        trees=(stump(0, 1.0, 1.0), stump(1, 1.0, 0.4)),
+        base_score=-0.2,
+        link=Link.IDENTITY,
+        n_features=2,
+        feature_names=("big", "small"),
+        meta={},
+    )
+    exp = Explainer(ir, normalizers=np.ones(2))
+    res = exp.explain(
+        np.zeros(2), target=Target.raw(op=">=", value=1.1), seed=0
+    )
+    assert isinstance(res, Counterfactual) and res.n_changed == 2
+    return exp, res
+
+
+def test_plot_waterfall_bars_sum_to_score_move() -> None:
+    from treecf.viz import plot_waterfall
+
+    exp, res = _waterfall_setup()
+    ax = plot_waterfall(exp, res)
+    labels = [t.get_text() for t in ax.get_yticklabels()]
+    assert labels == ["big", "small"]  # largest single effect first
+    widths = [p.get_width() for p in ax.patches]
+    assert sum(abs(w) for w in widths) == pytest.approx(abs(res.score_raw - (-0.2)))
+    texts = " ".join(t.get_text() for t in ax.texts)
+    assert "-0.2" in texts or "−0.2" in texts  # factual score annotated
+
+
+def test_plot_waterfall_probability_space_for_sigmoid() -> None:
+    from treecf import Explainer, Target
+    from treecf.ir.model import EnsembleIR, Link, Node, SplitOp, Tree
+    from treecf.viz import plot_waterfall
+
+    nodes = (
+        Node(0, 0, 1.0, SplitOp.LT, True, 1, 2, None),
+        Node(1, None, None, None, None, None, None, -1.0),
+        Node(2, None, None, None, None, None, None, 1.0),
+    )
+    ir = EnsembleIR(
+        trees=(Tree(nodes=nodes),),
+        base_score=0.0,
+        link=Link.SIGMOID,
+        n_features=1,
+        feature_names=("x",),
+        meta={},
+    )
+    exp = Explainer(ir, normalizers=np.ones(1))
+    res = exp.explain(
+        np.zeros(1), target=Target.probability(op=">=", value=0.6), seed=0
+    )
+    ax = plot_waterfall(exp, res, target=Target.probability(op=">=", value=0.6))
+    assert ax.get_xlim()[0] >= -0.05 and ax.get_xlim()[1] <= 1.05  # probability axis
+    assert len(ax.patches) == 1
+
+
+def test_plot_effort_bars_sum_to_distance() -> None:
+    from treecf.viz import plot_effort
+
+    exp, res = _waterfall_setup()
+    ax = plot_effort(exp, res)
+    widths = [p.get_width() for p in ax.patches]
+    assert sum(widths) == pytest.approx(res.distance)
+    labels = [t.get_text() for t in ax.get_yticklabels()]
+    assert set(labels) == {"big", "small"}

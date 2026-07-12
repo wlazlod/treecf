@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -130,6 +131,48 @@ class Explainer:
         return self._explain_genetic(
             x, interval, time_budget_s, sparsity_weight, seed, rust=rust
         )
+
+    def explain_batch(
+        self,
+        X: FloatArray,
+        target: Target,
+        n_per_example: int = 1,
+        diversity: str = "seeds",
+        ids: Sequence[object] | None = None,
+        backend: str = "genetic",
+        time_budget_s: float = 10.0,
+        sparsity_weight: float = 0.0,
+        seed: int = 0,
+    ) -> Any:
+        """Mass-produce counterfactuals for a dataset; see ``treecf.batch``.
+
+        ``n_per_example`` alternatives per row via ``diversity="seeds"`` (distinct
+        change-sets from different seeds, best-effort) or ``"lever-blocking"``
+        (freeze each plan's biggest lever; also records essential levers).
+        The returned ``BatchResult`` supports save/load/for_id/to_frame.
+        """
+        from treecf.batch import explain_batch
+
+        return explain_batch(
+            self, X, target, n_per_example=n_per_example, diversity=diversity,
+            ids=ids, backend=backend, time_budget_s=time_budget_s,
+            sparsity_weight=sparsity_weight, seed=seed,
+        )
+
+    def _with_extra_freezes(self, features: Sequence[str]) -> Explainer:
+        """Clone with additional Freeze constraints (used by lever-blocking)."""
+        from treecf.constraints.objects import Freeze
+
+        clone = Explainer(
+            self.ir,
+            background=self.background,
+            constraints=list(self.compiled.constraints) + [Freeze(f) for f in features],
+            weights=dict(zip(self.ir.feature_names, self.weights.tolist(), strict=True)),
+            normalizers=self.sigma,
+            value_policy=self.value_policy,
+            plausibility=self.plausibility,
+        )
+        return clone
 
     def _explain_genetic(
         self,

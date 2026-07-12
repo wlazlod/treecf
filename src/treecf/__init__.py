@@ -9,6 +9,7 @@ from treecf._errors import (
     UnsupportedModelError,
 )
 from treecf.api import Counterfactual, Explainer, Grid, Infeasible
+from treecf.batch import BatchRecord, BatchResult
 from treecf.constraints import (
     AllowMissing,
     Equals,
@@ -28,6 +29,8 @@ __version__ = "0.0.1"
 
 __all__ = [
     "AllowMissing",
+    "BatchRecord",
+    "BatchResult",
     "ConstraintParseError",
     "ConstraintValidationError",
     "Counterfactual",
