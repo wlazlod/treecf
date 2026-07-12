@@ -205,7 +205,7 @@ impl RustConstraints {
         let mut data = x_matrix.as_slice()?.to_vec();
         self.inner.repair(&mut data, shape[0], x.as_slice()?);
         let arr = PyArray1::from_vec(py, data);
-        Ok(arr.reshape([shape[0], shape[1]])?)
+        arr.reshape([shape[0], shape[1]])
     }
 }
 

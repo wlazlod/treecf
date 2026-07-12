@@ -103,7 +103,7 @@ pub fn solve_genetic(
 
     // --- initialization: factual + single-feature cell moves + NaN flips + background mixes ---
     let mut pop: Vec<f64> = Vec::new();
-    let mut push_row = |pop: &mut Vec<f64>, row: &[f64]| pop.extend_from_slice(row);
+    let push_row = |pop: &mut Vec<f64>, row: &[f64]| pop.extend_from_slice(row);
     push_row(&mut pop, x);
     for &j in &mutable {
         for &value in &pools[j] {

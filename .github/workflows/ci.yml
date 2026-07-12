@@ -90,7 +90,7 @@ jobs:
         run: cargo fmt --check --manifest-path rust/Cargo.toml
 
       - name: Clippy
-        run: cargo clippy --manifest-path rust/Cargo.toml -- -D warnings
+        run: cargo clippy --all-features --manifest-path rust/Cargo.toml -- -D warnings
 
       - name: Unit tests
         run: cargo test --manifest-path rust/Cargo.toml
