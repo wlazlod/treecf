@@ -24,6 +24,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Batch visualizations** (`treecf.viz_batch`, `[viz]` extra): `plot_batch_levers`
+  (which levers plans use, by direction, with essential-lever annotations),
+  `plot_batch_matrix` (plans × features heatmap, effort-shaded with an
+  explainer), `plot_batch_summary` (cost / sparsity / feasibility panel), and
+  `plot_batch_deltas` (per-lever delta distributions, σ-standardized with an
+  explainer). Demonstrated in the credit-risk tutorial.
+- **Docs**: long-form ["How treecf finds counterfactuals"](docs/how-it-works.md)
+  article walking one applicant from objective to verified counterfactual;
+  MathJax wired into the docs build for the objective and plausibility formulas.
 - **Batch production**: `Explainer.explain_batch(X, target, n_per_example=k,
   diversity="seeds"|"lever-blocking", ids=...)` mass-produces counterfactuals
   for a dataset (~ms/row via the Rust engine); `BatchResult` persists to

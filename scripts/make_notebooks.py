@@ -238,6 +238,24 @@ def tutorial() -> nbf.NotebookNode:
         nbf.v4.new_code_cell(
             "stored.to_frame().head(6)      # or analyze the whole day as a DataFrame"
         ),
+        nbf.v4.new_markdown_cell(
+            "### Visualizing the batch\n\n"
+            "Four batch-level views: which levers the plans use (and in which direction), "
+            "the effort each change costs per plan, cost/sparsity/feasibility at a glance, "
+            "and how far each lever actually moves across applicants."
+        ),
+        nbf.v4.new_code_cell(
+            "from treecf.viz_batch import plot_batch_levers, plot_batch_matrix\n\n"
+            "plot_batch_levers(batch);"
+        ),
+        nbf.v4.new_code_cell("plot_batch_matrix(batch, explainer=exp, max_row_labels=15);"),
+        nbf.v4.new_code_cell(
+            "from treecf.viz_batch import plot_batch_deltas, plot_batch_summary\n\n"
+            "plot_batch_summary(batch);"
+        ),
+        nbf.v4.new_code_cell(
+            "plot_batch_deltas(batch, explainer=exp);   # deltas in sigma units"
+        ),
     ]
     return nb
 
