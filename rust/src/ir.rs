@@ -6,6 +6,10 @@
 //! score accumulated as `base_score + tree_0 + tree_1 + ...` in order — which
 //! makes bitwise parity with numpy achievable (identical f64 addition order).
 
+use std::sync::OnceLock;
+
+use crate::cells::Cell;
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Link {
     Identity,
@@ -24,6 +28,7 @@ pub struct Ensemble {
     pub base_score: f64,
     pub link: Link,
     pub n_features: usize,
+    cells: OnceLock<Vec<Vec<Cell>>>, // lazy: pure function of the split structure
 }
 
 impl Ensemble {
@@ -82,7 +87,13 @@ impl Ensemble {
             base_score,
             link,
             n_features,
+            cells: OnceLock::new(),
         })
+    }
+
+    /// Routing-atomic cells per feature, computed once and cached.
+    pub fn feature_cells(&self) -> &[Vec<Cell>] {
+        self.cells.get_or_init(|| crate::cells::feature_cells(self))
     }
 
     /// Leaf value reached by `x` in the tree rooted at `root`.

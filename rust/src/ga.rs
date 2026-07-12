@@ -13,7 +13,6 @@ use rand::SeedableRng;
 use rand_distr::{Distribution, Normal};
 use rand_pcg::Pcg64Mcg;
 
-use crate::cells::feature_cells;
 use crate::constraints::Constraints;
 use crate::ir::Ensemble;
 
@@ -74,7 +73,7 @@ pub fn solve_genetic(
         .iter()
         .map(|&v| if v.is_nan() { 0.0 } else { v })
         .collect();
-    let all_cells = feature_cells(ens);
+    let all_cells = ens.feature_cells();
     let pools: Vec<Vec<f64>> = (0..p)
         .map(|j| {
             if fixed[j] {
