@@ -169,24 +169,10 @@ def plot_waterfall(explainer: Any, cf: Counterfactual, target: Any = None, ax: A
 
 def plot_effort(explainer: Any, cf: Counterfactual, ax: Any = None) -> Any:
     """Cost-space companion: how the distance J splits across the changes."""
-    import math as _math
-
     plt = _import_pyplot()
-    names = explainer.ir.feature_names
-    index = {name: j for j, name in enumerate(names)}
-    allow = explainer.compiled.allow_missing
-
-    contributions: list[tuple[str, float]] = []
-    for name, (source, dest) in cf.changes.items():
-        j = index[name]
-        if _math.isnan(dest):
-            delta = allow[j][0]
-        elif _math.isnan(source):
-            delta = allow[j][1]
-        else:
-            delta = abs(dest - source)
-        contributions.append((name, float(explainer.weights[j] * delta / explainer.sigma[j])))
-    contributions.sort(key=lambda pair: pair[1], reverse=True)
+    contributions = sorted(
+        _change_effort(explainer, cf.changes).items(), key=lambda pair: pair[1], reverse=True
+    )
 
     if ax is None:
         _, ax = plt.subplots(figsize=(7, 0.6 * max(2, len(contributions)) + 0.8))
@@ -203,6 +189,23 @@ def plot_effort(explainer: Any, cf: Counterfactual, ax: Any = None) -> Any:
     ax.set_xlabel("effort contribution (w·|Δ|/σ)")
     ax.set_title(f"where the effort goes — total J = {cf.distance:.3g}")
     return ax
+
+
+def _change_effort(explainer: Any, changes: Mapping[str, tuple[float, float]]) -> dict[str, float]:
+    """Per-change effort w_j*|delta|/sigma_j; NaN legs priced via compiled.allow_missing."""
+    index = {name: j for j, name in enumerate(explainer.ir.feature_names)}
+    allow = explainer.compiled.allow_missing
+    efforts: dict[str, float] = {}
+    for name, (source, dest) in changes.items():
+        j = index[name]
+        if math.isnan(dest):
+            delta = allow[j][0]
+        elif math.isnan(source):
+            delta = allow[j][1]
+        else:
+            delta = abs(dest - source)
+        efforts[name] = float(explainer.weights[j] * delta / explainer.sigma[j])
+    return efforts
 
 
 def _import_pyplot() -> Any:

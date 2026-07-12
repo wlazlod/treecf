@@ -39,3 +39,5 @@
 ## Visualization
 
 ::: treecf.viz
+
+::: treecf.viz_batch
