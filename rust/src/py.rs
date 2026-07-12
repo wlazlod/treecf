@@ -8,6 +8,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 use crate::constraints::{Constraints, LinearC};
+use crate::ga::GaParams;
 use crate::ir::{Ensemble, Link};
 
 #[pyclass(frozen)]
@@ -208,9 +209,75 @@ impl RustConstraints {
     }
 }
 
+/// Full GA solve (migration P4 test path; wired into the public API in P5).
+/// Returns (x_cf | None, generations).
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (ensemble, constraints, x, lo_t, hi_t, sigma, weights, lam,
+                    background=None, if_ensemble=None, min_total_path=None, seed=None,
+                    population=80, max_generations=200, stall_generations=30,
+                    time_budget_s=10.0))]
+fn solve_genetic_raw<'py>(
+    py: Python<'py>,
+    ensemble: &RustEnsemble,
+    constraints: &RustConstraints,
+    x: PyReadonlyArray1<f64>,
+    lo_t: f64,
+    hi_t: f64,
+    sigma: PyReadonlyArray1<f64>,
+    weights: PyReadonlyArray1<f64>,
+    lam: f64,
+    background: Option<PyReadonlyArray2<f64>>,
+    if_ensemble: Option<&RustEnsemble>,
+    min_total_path: Option<f64>,
+    seed: Option<u64>,
+    population: usize,
+    max_generations: usize,
+    stall_generations: usize,
+    time_budget_s: f64,
+) -> PyResult<(Option<Bound<'py, PyArray1<f64>>>, usize)> {
+    let x_own = x.as_slice()?.to_vec();
+    let sigma_own = sigma.as_slice()?.to_vec();
+    let weights_own = weights.as_slice()?.to_vec();
+    let bg_own: Option<(Vec<f64>, usize)> = match &background {
+        Some(bg) => Some((bg.as_slice()?.to_vec(), bg.shape()[0])),
+        None => None,
+    };
+    let params = GaParams {
+        population,
+        max_generations,
+        stall_generations,
+        time_budget_s,
+    };
+    let ens = &ensemble.inner;
+    let cons = &constraints.inner;
+    let plaus = match (if_ensemble, min_total_path) {
+        (Some(if_e), Some(bound)) => Some((&if_e.inner, bound)),
+        _ => None,
+    };
+    let result = py.detach(|| {
+        crate::ga::solve_genetic(
+            ens,
+            &x_own,
+            lo_t,
+            hi_t,
+            cons,
+            &sigma_own,
+            &weights_own,
+            lam,
+            bg_own.as_ref().map(|(data, n)| (data.as_slice(), *n)),
+            plaus,
+            seed,
+            &params,
+        )
+    });
+    Ok((result.x_cf.map(|v| v.into_pyarray(py)), result.generations))
+}
+
 #[pymodule]
 fn _treecf_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RustEnsemble>()?;
     m.add_class::<RustConstraints>()?;
+    m.add_function(wrap_pyfunction!(solve_genetic_raw, m)?)?;
     Ok(())
 }
