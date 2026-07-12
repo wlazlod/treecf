@@ -24,6 +24,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Single-instance comparison plots** (`treecf.viz`): `plot_alternatives`
+  (every alternative plan's changes on shared axes, one color per plan,
+  σ-standardized with an explainer) and `plot_tradeoff` (cost vs achieved
+  score per plan, with target lines). Both accept `Counterfactual` objects or
+  feasible `BatchRecord` entries.
+- **Docs**: pipeline and genetic-loop diagrams (Mermaid) in "How it works";
+  reorganized Home and Getting started (single install section, alternatives
+  walkthrough, "where next" links), pipeline-ordered Concepts nav, and the
+  stale `proof` values from the removed CP-SAT era corrected.
 - **Batch visualizations** (`treecf.viz_batch`, `[viz]` extra): `plot_batch_levers`
   (which levers plans use, by direction, with essential-lever annotations),
   `plot_batch_matrix` (plans × features heatmap, effort-shaded with an

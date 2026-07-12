@@ -203,6 +203,18 @@ def tutorial() -> nbf.NotebookNode:
             "from treecf.viz import plot_counterfactuals\n\nplot_counterfactuals(alternatives);"
         ),
         nbf.v4.new_markdown_cell(
+            "**Compare the plans directly**: every alternative's changes on shared feature "
+            "axes (one color per plan, gray dots mark the factual values), and the "
+            "cost-vs-outcome trade-off — what each plan asks for and what it buys."
+        ),
+        nbf.v4.new_code_cell(
+            "from treecf.viz import plot_alternatives, plot_tradeoff\n\n"
+            "plot_alternatives(alternatives, explainer=exp);   # deltas in sigma units"
+        ),
+        nbf.v4.new_code_cell(
+            "plot_tradeoff(alternatives, target=Target.probability(range=(0.0, cutoff)));"
+        ),
+        nbf.v4.new_markdown_cell(
             "## 5. Mass-producing counterfactuals for a day's declines\n\n"
             "Score a day's applications, take the declines, and produce (up to) two "
             "recourse plans per applicant in one call — then store the batch and look "
