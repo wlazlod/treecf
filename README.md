@@ -12,7 +12,7 @@ and scikit-learn tree ensembles.
 
 - **Tree-native and fast.** Models are parsed into a shared tree IR; the constrained
   genetic search runs on a bundled **Rust core** 44–58× faster than the equivalent numpy
-  implementation (see `docs/benchmarks-genetic-rust.md`; the pure-Python engine remains
+  implementation (see the "Backends and proofs" docs page; the pure-Python engine remains
   available as `backend="python"`), and every result is float-verified against the IR
   before it is returned.
 - **Decision thresholds are first-class.** Targets are intervals on the raw model output —

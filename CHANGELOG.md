@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Docs**: the standalone Benchmarks page is gone; the headline numbers, the
+  single-core explanation, and the batch-parallelism caveat now live in a
+  "Performance" section of *Backends and proofs*. Full protocol and
+  reproduction stay in `scripts/bench_genetic.py` / `scripts/bench_batch.py`.
 - **`explain_batch` runs its solves in parallel inside the Rust core**: the
   seeds path solves one wave of independently seeded attempts per Rust call
   (rayon across tasks, GIL released) and lever-blocking batches all primary

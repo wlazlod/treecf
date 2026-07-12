@@ -274,7 +274,7 @@ res.snapped      # which value policies actually applied
 Both engines — the Rust default and the numpy reference — share the IR, the compiled
 constraints, and the algorithm above; they are seed-deterministic and held to statistical
 parity, and the Rust core is bitwise-identical on tree evaluation and constraint check/repair
-(the speed difference is documented in the [benchmarks](benchmarks-genetic-rust.md)).
+(the speed difference is documented in [Backends — performance](concepts/backends.md#performance)).
 
 Batch production builds directly on the same machinery. `explain_batch` derives an independent
 seed per (row, attempt) and hands whole *waves* of searches to the Rust core in one call, which

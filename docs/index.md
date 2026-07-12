@@ -21,8 +21,8 @@ res.changes   # {"utilization": (0.71, 0.419), "max_dpd_12m": (9.0, 3.0)}
 ## Highlights
 
 - **Tree-native search on a bundled Rust core** — typically milliseconds even on 300-tree
-  ensembles ([benchmarks](benchmarks-genetic-rust.md)), and every result is float-verified
-  against the model before it is returned ([how it works](how-it-works.md)).
+  ensembles ([performance](concepts/backends.md#performance)), and every result is
+  float-verified against the model before it is returned ([how it works](how-it-works.md)).
 - **Targets as intervals on the model output** — probability cutoffs, regression targets,
   and rating-grade ladders in one call ([targets](concepts/targets.md)).
 - **Declarative constraints** — `Freeze`, `Monotone`, `Range`, `OneHot`, and linear
