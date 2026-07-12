@@ -41,9 +41,14 @@ markdown_extensions:
   - admonition
   - pymdownx.details
   - pymdownx.superfences
-  - pymdownx.arithmatex
+  - pymdownx.arithmatex:
+      generic: true
   - toc:
       permalink: true
+
+extra_javascript:
+  - javascripts/mathjax.js
+  - https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js
 
 nav:
   - Home: index.md
@@ -55,6 +60,7 @@ nav:
       - Backends and proofs: concepts/backends.md
       - Missing values: concepts/missing-values.md
       - Plausibility: concepts/plausibility.md
+  - How it works: how-it-works.md
   - Tutorials:
       - Quickstart: notebooks/01-quickstart.ipynb
       - Credit-risk walkthrough: notebooks/02-credit-risk-tutorial.ipynb
