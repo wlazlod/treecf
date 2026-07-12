@@ -10,28 +10,35 @@ scikit-learn tree ensembles.
     v0.1 is under active development. The API shown here follows the accepted spec and may
     still shift before the first release.
 
-## Highlights
+```python
+from treecf import Explainer, Freeze, Target
 
-- **Tree-native counterfactual search** on a **bundled Rust core** — typically
-  milliseconds even on 300-tree ensembles (44–58× faster than the equivalent numpy
-  implementation; see [benchmarks](benchmarks-genetic-rust.md)), with every result
-  float-verified against the model IR before it is returned.
-- **Targets as intervals on the raw model output**: custom probability cutoffs, regression
-  targets, and rating-grade ladders (`Target.bands`) in one call.
-- **Declarative constraints** compiled once for every backend: `Freeze`, `Monotone`, `Range`,
-  `OneHot`, and arbitrary linear inter-feature rules like `max_dpd_30d <= max_dpd_12m`.
-- **NaN as a first-class counterfactual value** with per-feature opt-in and transition costs.
-- **Constraint mining** from background data — candidates are always human-reviewed, never
-  auto-applied.
-- **Optional plausibility** as a hard isolation-forest constraint.
-
-## Installation
-
-```bash
-pip install treecf              # bundled Rust engine; numpy is the only Python dependency
-pip install "treecf[viz]"       # matplotlib plots
+exp = Explainer(model, background=X_train, constraints=[Freeze("age")])
+res = exp.explain(x_row, target=Target.probability(range=(0.0, 0.30)), seed=0)
+res.changes   # {"utilization": (0.71, 0.419), "max_dpd_12m": (9.0, 3.0)}
 ```
 
-Platform wheels ship the compiled engine — no Rust toolchain needed to install.
-Model parsers accept JSON dumps directly, so the training framework does not need to be
-installed where explanations are generated.
+## Highlights
+
+- **Tree-native search on a bundled Rust core** — typically milliseconds even on 300-tree
+  ensembles ([benchmarks](benchmarks-genetic-rust.md)), and every result is float-verified
+  against the model before it is returned ([how it works](how-it-works.md)).
+- **Targets as intervals on the model output** — probability cutoffs, regression targets,
+  and rating-grade ladders in one call ([targets](concepts/targets.md)).
+- **Declarative constraints** — `Freeze`, `Monotone`, `Range`, `OneHot`, and linear
+  inter-feature rules like `max_dpd_30d <= max_dpd_12m`, compiled once for every engine
+  ([constraints](concepts/constraints.md)), with optional mining from background data.
+- **NaN as a first-class counterfactual value** with per-feature opt-in and transition
+  costs ([missing values](concepts/missing-values.md)).
+- **Optional plausibility** as a hard isolation-forest constraint
+  ([plausibility](concepts/plausibility.md)).
+- **Batch production** — thousands of rows solved in parallel inside the Rust core, with
+  portable storage and batch-level plots ([tutorial](notebooks/02-credit-risk-tutorial.ipynb)).
+
+## Where to start
+
+1. [Getting started](getting-started.md) — install and your first counterfactual in five
+   minutes.
+2. [How it works](how-it-works.md) — the full pipeline, from objective to verified answer.
+3. [Tutorials](notebooks/01-quickstart.ipynb) — runnable notebooks, from quickstart to a
+   credit-risk batch workflow.

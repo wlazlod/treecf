@@ -17,7 +17,7 @@ solver) is not installed.
 ```python
 import numpy as np
 import xgboost as xgb
-from treecf import Explainer, Target, Freeze, Monotone, constraint
+from treecf import Counterfactual, Explainer, Target, Freeze, Monotone, constraint
 
 # a binary classifier trained on your data
 clf = xgb.XGBClassifier(n_estimators=100, max_depth=4).fit(X_train, y_train)
@@ -38,20 +38,19 @@ res = exp.explain(
     seed=0,
 )
 
-if hasattr(res, "x_cf"):
+if isinstance(res, Counterfactual):
     print(res.changes)      # {"feature": (from, to), ...}
-    print(res.proof)        # "heuristic" — feasibility-first search, float-verified
 else:
-    print(res.reason)
+    print(res.reason)       # Infeasible: why no plan was found
 ```
 
 The search is heuristic (`proof="heuristic"`), feasibility-first, and
 seed-deterministic; on toy suites it brackets a brute-force optimum. It runs on
 the bundled Rust engine in milliseconds even on 300-tree models;
 `backend="python"` runs the reference numpy implementation of the same
-algorithm.
+algorithm. [How it works](how-it-works.md) walks the whole pipeline.
 
-## The result object
+## Read the result
 
 | Field | Meaning |
 |---|---|
@@ -59,7 +58,7 @@ algorithm.
 | `changes` | feature → (factual, counterfactual) for every changed feature |
 | `distance`, `n_changed` | weighted L1 distance and L0 count |
 | `score_raw`, `score_prob` | raw model output and its sigmoid when applicable |
-| `proof` | `optimal` / `feasible` (time limit) / `heuristic` |
+| `proof` | always `"heuristic"` — the search never claims optimality |
 | `snapped` | per-feature outcome of `value_policy` snapping |
 
 Every result is re-verified in float space against the IR before it is returned:
@@ -75,7 +74,25 @@ plot_waterfall(exp, res, target=t)      # SHAP-style: exact score deltas, cutoff
 plot_effort(exp, res)                   # where the applicant's effort goes (J split)
 ```
 
-## Mass-produce for a whole dataset
+## Alternatives for one instance
+
+One plan is rarely the whole story. Ask for several distinct plans for the same
+row and compare them side by side:
+
+```python
+from treecf.viz import plot_alternatives, plot_tradeoff
+
+batch = exp.explain_batch(x_row.reshape(1, -1), target=t, n_per_example=3, seed=0)
+plans = batch.for_id(0)                 # up to 3 distinct plans for this row
+
+plot_alternatives(plans, explainer=exp) # every plan's changes, standardized to Δ/σ
+plot_tradeoff(plans, target=t)          # cost vs achieved score: which plan buys what
+```
+
+`diversity="lever-blocking"` instead re-solves with each plan's biggest lever
+frozen — and reports levers that turn out to be *essential*.
+
+## Scale to a dataset
 
 ```python
 batch = exp.explain_batch(
@@ -92,5 +109,14 @@ stored.for_id("APP-00042")                   # ...look up any time
 stored.to_frame()                            # or analyze as a pandas DataFrame
 ```
 
-Roughly ~100 ms per applicant on a 100-tree model including two alternatives
-each (the Rust engine solves in milliseconds; see the tutorial notebook).
+Solves run in parallel inside the Rust core. `treecf.viz_batch` plots the whole
+batch — lever usage, per-plan effort, cost/sparsity/feasibility — as shown in the
+[credit-risk walkthrough](notebooks/02-credit-risk-tutorial.ipynb).
+
+## Where next
+
+- [How it works](how-it-works.md) — the pipeline from objective to verified answer.
+- [Concepts](concepts/models.md) — one page per stage: models, targets, constraints,
+  missing values, plausibility, backends.
+- [Tutorials](notebooks/01-quickstart.ipynb) — runnable notebooks.
+- [API reference](api.md).

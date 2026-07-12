@@ -1,8 +1,8 @@
 # Constraints
 
 Constraints are declared once, validated against the model's feature space, and
-compiled by a single visitor into every backend — the exact CP-SAT encoding and
-the genetic backend's vectorized check/repair pair share one source of truth.
+compiled by a single visitor into every backend — the abstract constraint form
+and the genetic engines' vectorized check/repair pair share one source of truth.
 
 ```python
 from treecf import Freeze, Monotone, Range, Linear, Implies, Equals, OneHot, constraint

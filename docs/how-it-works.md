@@ -20,6 +20,28 @@ links to a concept page that covers it in depth; spec section references (`§`) 
     ask an applicant to be younger. The question for treecf: *what is the cheapest realistic
     set of changes that brings this applicant under the cutoff?*
 
+The pipeline, end to end — every stage below gets its own section:
+
+```mermaid
+flowchart TD
+    subgraph setup ["Set up (once per Explainer)"]
+        M["model / JSON dump"] -->|parse| IR["EnsembleIR<br/>trees + thresholds + link"]
+        BG["background sample"] -->|"fit sigma (MAD chain)"| NORM["normalizers"]
+        C["constraints"] -->|"one visitor"| CC["compiled check / repair"]
+        IR -->|"collect thresholds"| CELLS["routing-atomic cells<br/>per feature"]
+    end
+    subgraph solve ["Solve (per instance)"]
+        X["factual x + target interval"] --> GA["genetic search<br/>seeded, feasibility-first"]
+        CELLS --> GA
+        CC --> GA
+        NORM --> GA
+        GA --> V{"float re-verification<br/>through the IR"}
+    end
+    V -->|passes| SNAP["value-policy snapping<br/>(revert until valid)"] --> CF["Counterfactual<br/>proof = heuristic"]
+    V -->|fails| INF["Infeasible"]
+    GA -->|"no feasible individual"| INF
+```
+
 ## The question, stated precisely
 
 "Smallest realistic change" becomes an optimization problem (§4). Given the factual instance
@@ -153,6 +175,18 @@ With the objective, the cells, and the compiled constraints in hand, the search 
 seeded, constraint-aware genetic algorithm (§8.2). The default engine is a Rust core bundled in
 the wheel; `backend="python"` runs the numpy reference implementation of the same algorithm.
 [Backends and proofs](concepts/backends.md) summarizes the contract; here is the mechanism.
+
+```mermaid
+flowchart TD
+    INIT["generation 0<br/>factual + one candidate per (feature, cell)<br/>+ NaN flips + background mixes + random fill"]
+    INIT --> SCORE["score whole population through the trees<br/>+ constraint check (one vectorized pass)"]
+    SCORE --> RANK["Deb ranking<br/>tier 0: feasible, in target — by J<br/>tier 1: feasible, off target — by gap<br/>tier 2: infeasible — below everything"]
+    RANK --> STOP{"stall 30 gens /<br/>200 gens / time budget?"}
+    STOP -->|yes| BEST["best tier-0 individual<br/>(or Infeasible)"]
+    STOP -->|no| BREED["elite kept (pop/8), uniform crossover;<br/>per feature: 15% mutate (cell / Gaussian / NaN),<br/>15% revert to factual"]
+    BREED --> REPAIR["constraint repair + pin frozen features"]
+    REPAIR --> SCORE
+```
 
 ### A smart first generation
 

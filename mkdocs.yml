@@ -40,7 +40,11 @@ plugins:
 markdown_extensions:
   - admonition
   - pymdownx.details
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.arithmatex:
       generic: true
   - toc:
@@ -53,14 +57,14 @@ extra_javascript:
 nav:
   - Home: index.md
   - Getting started: getting-started.md
+  - How it works: how-it-works.md
   - Concepts:
       - Models and the IR: concepts/models.md
       - Targets: concepts/targets.md
       - Constraints: concepts/constraints.md
-      - Backends and proofs: concepts/backends.md
       - Missing values: concepts/missing-values.md
       - Plausibility: concepts/plausibility.md
-  - How it works: how-it-works.md
+      - Backends and proofs: concepts/backends.md
   - Tutorials:
       - Quickstart: notebooks/01-quickstart.ipynb
       - Credit-risk walkthrough: notebooks/02-credit-risk-tutorial.ipynb
