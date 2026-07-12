@@ -101,6 +101,32 @@ def quickstart() -> nbf.NotebookNode:
             "plot_waterfall(exp, res, target=Target.probability(range=(0.0, cutoff)));"
         ),
         nbf.v4.new_code_cell("plot_effort(exp, res);"),
+        nbf.v4.new_markdown_cell(
+            "## Compare alternative plans\n\n"
+            "One plan is rarely the whole story. `diversity=\"lever-blocking\"` re-solves "
+            "with each plan's biggest lever frozen, producing structurally distinct "
+            "alternatives. Compare them: every plan's changes on shared axes "
+            "(standardized to Δ/σ, one color per plan), and what each plan costs "
+            "against what it buys."
+        ),
+        nbf.v4.new_code_cell(
+            "batch = exp.explain_batch(\n"
+            "    applicant.reshape(1, -1),\n"
+            "    target=Target.probability(range=(0.0, cutoff)),\n"
+            "    n_per_example=3,\n"
+            "    diversity=\"lever-blocking\",\n"
+            "    seed=0,\n"
+            ")\n"
+            "plans = batch.for_id(0)\n"
+            "[(round(p.distance, 2), p.blocked_lever, sorted(p.changes)) for p in plans]"
+        ),
+        nbf.v4.new_code_cell(
+            "from treecf.viz import plot_alternatives, plot_tradeoff\n\n"
+            "plot_alternatives(plans, explainer=exp);   # deltas in sigma units"
+        ),
+        nbf.v4.new_code_cell(
+            "plot_tradeoff(plans, target=Target.probability(range=(0.0, cutoff)));"
+        ),
     ]
     return nb
 
