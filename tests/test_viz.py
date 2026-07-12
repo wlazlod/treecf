@@ -20,7 +20,7 @@ def _cf(changes: dict[str, tuple[float, float]], distance: float) -> Counterfact
         n_changed=len(changes),
         score_raw=0.5,
         score_prob=None,
-        proof="optimal",
+        proof="heuristic",
     )
 
 

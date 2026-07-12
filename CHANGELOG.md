@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **The exact CP-SAT backend, entirely** (per the migration spec's §3.3,
+  deferred by D-H1 and now resolved): `backend="cpsat"`, the `[cpsat]`/ortools
+  extra, the AIM integer encoding, the HiGHS stub, optimality proofs
+  (`proof="optimal"`), `n_counterfactuals`/diversity cuts, infeasibility
+  `relaxation_hint`, and the bands single-compilation amortization. The
+  genetic engines are the sole backends (`"genetic"` = Rust default,
+  `"python"` = numpy reference); `Target.bands` still works (one search per
+  band). Users needing provable optimality should pair the IR with a
+  dedicated exact-optimization package. The brute-force oracle remains the
+  test-suite's optimality bracket.
+
+### Fixed
+
+- Counterfactual values adjacent to open cell bounds now step one **float32**
+  ulp inside (previously float64): a float64-ulp neighbour of a threshold
+  collapses onto it in native float32 comparisons, so the deployed model
+  could route such values opposite to the IR. Both engines changed
+  identically; parity fixtures regenerated.
+
 ## [0.0.1] - 2026-07-12
 
 Version deliberately resets BELOW 0.1.0 (which was never published): per the

@@ -15,9 +15,8 @@ _OPS = (">=", "<=")
 class Target:
     """Closed interval target, expressed in raw-score or probability space.
 
-    ``Target.bands`` builds a named ladder of intervals (rating grades, D9);
-    ``Explainer.explain`` then returns one result per band from a single
-    AIM compilation (§6).
+    ``Target.bands`` builds a named ladder of intervals (rating grades);
+    ``Explainer.explain`` then returns one result per band.
     """
 
     space: str  # "raw" | "probability"

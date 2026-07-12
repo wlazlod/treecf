@@ -10,7 +10,6 @@ from treecf import Counterfactual, Explainer, Freeze, Monotone, Target, TreecfEr
 from .conftest import make_synthetic
 
 xgb = pytest.importorskip("xgboost")
-pytest.importorskip("ortools")
 
 
 @pytest.fixture(scope="module")
@@ -29,10 +28,10 @@ def test_probability_target_end_to_end(credit_model: tuple[object, np.ndarray]) 
     cutoff = float(np.median(proba))
 
     exp = Explainer(clf, background=X, constraints=[Freeze("f0"), Monotone("f1", "increase")])
-    res = exp.explain(X[idx], target=Target.probability(range=(0.0, cutoff)))
+    res = exp.explain(X[idx], target=Target.probability(range=(0.0, cutoff)), seed=0)
 
     assert isinstance(res, Counterfactual)
-    assert res.proof == "optimal"
+    assert res.proof == "heuristic"
     assert res.score_prob is not None and res.score_prob <= cutoff
     assert res.x_cf[0] == X[idx, 0]  # frozen
     if not np.isnan(X[idx, 1]):
@@ -55,4 +54,4 @@ def test_unknown_backend_raises(credit_model: tuple[object, np.ndarray]) -> None
     clf, X = credit_model
     exp = Explainer(clf, background=X)
     with pytest.raises(TreecfError, match="unknown backend"):
-        exp.explain(X[0], target=Target.probability(op="<=", value=0.5), backend="magic")
+        exp.explain(X[0], target=Target.probability(op="<=", value=0.5), backend="magic", seed=0)

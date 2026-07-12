@@ -8,8 +8,6 @@ import pytest
 from treecf import Counterfactual, Explainer, Grid, Range, Target
 from treecf.ir.model import EnsembleIR, Link, Node, SplitOp, Tree
 
-pytest.importorskip("ortools")
-
 
 def _leaf(i: int, v: float) -> Node:
     return Node(i, None, None, None, None, None, None, v)
@@ -39,7 +37,7 @@ def _ir(thresholds: list[float]) -> EnsembleIR:
 
 def test_integer_policy_snaps_up_within_cell() -> None:
     exp = Explainer(_ir([2.5]), normalizers=np.ones(1), value_policy={"amount": "integer"})
-    res = exp.explain(np.array([0.0]), target=Target.raw(op=">=", value=0.5))
+    res = exp.explain(np.array([0.0]), target=Target.raw(op=">=", value=0.5), seed=0)
     assert isinstance(res, Counterfactual)
     assert res.x_cf[0] == 3.0  # optimal 2.5 snapped to the nearest integer in [2.5, inf)
     assert res.snapped == {"amount": True}
@@ -60,7 +58,7 @@ def test_grid_policy_snaps_to_step() -> None:
         normalizers=np.ones(1),
         value_policy={"amount": Grid(step=50.0)},
     )
-    res = exp.explain(np.array([0.0]), target=Target.raw(op=">=", value=0.5))
+    res = exp.explain(np.array([0.0]), target=Target.raw(op=">=", value=0.5), seed=0)
     assert isinstance(res, Counterfactual)
     assert res.x_cf[0] == 1050.0  # 1000 is below the threshold; next grid point inside
     assert res.snapped == {"amount": True}
@@ -68,7 +66,7 @@ def test_grid_policy_snaps_to_step() -> None:
 
 def test_unchanged_features_are_not_snapped() -> None:
     exp = Explainer(_ir([2.5]), normalizers=np.ones(1), value_policy={"amount": "integer"})
-    res = exp.explain(np.array([3.7]), target=Target.raw(op=">=", value=0.5))
+    res = exp.explain(np.array([3.7]), target=Target.raw(op=">=", value=0.5), seed=0)
     assert isinstance(res, Counterfactual)
     assert res.x_cf[0] == 3.7  # already in target: no change, no snapping
     assert res.n_changed == 0
@@ -82,7 +80,7 @@ def test_snapping_never_violates_constraints() -> None:
         constraints=[Range("amount", 0.0, 2.7)],
         value_policy={"amount": "integer"},
     )
-    res = exp.explain(np.array([0.0]), target=Target.raw(op=">=", value=0.5))
+    res = exp.explain(np.array([0.0]), target=Target.raw(op=">=", value=0.5), seed=0)
     assert isinstance(res, Counterfactual)
     assert res.x_cf[0] == pytest.approx(2.5)
     assert res.snapped == {"amount": False}
@@ -94,6 +92,6 @@ def test_callable_policy() -> None:
         normalizers=np.ones(1),
         value_policy={"amount": lambda v: float(np.ceil(v))},
     )
-    res = exp.explain(np.array([0.0]), target=Target.raw(op=">=", value=0.5))
+    res = exp.explain(np.array([0.0]), target=Target.raw(op=">=", value=0.5), seed=0)
     assert isinstance(res, Counterfactual)
     assert res.x_cf[0] == 3.0

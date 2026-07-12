@@ -45,8 +45,4 @@ Near-invariants (support ≥ 99.9% but below 1.0) are returned separately as
 of an otherwise universal rule usually signals an ETL defect, not a domain
 exception.
 
-## Infeasibility hints
 
-When no counterfactual exists, the result carries a `relaxation_hint` computed
-by a greedy relaxation ladder: is the target unreachable even unconstrained, or
-do the per-feature bounds, or the relational constraints, block it?

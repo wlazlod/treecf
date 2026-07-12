@@ -7,7 +7,6 @@ from __future__ import annotations
 import math
 
 import numpy as np
-import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
@@ -25,8 +24,6 @@ from treecf.constraints.objects import Constraint, Linear
 from treecf.ir.evaluate import raw_score
 
 from ..conftest import make_random_ir
-
-pytest.importorskip("ortools")
 
 P = 4
 
@@ -68,7 +65,7 @@ def test_returned_counterfactuals_satisfy_everything(seed: int) -> None:
         exp = Explainer(ir, normalizers=np.ones(P), constraints=constraints)
     except Exception:
         return  # contradictory random constraint sets may be rejected at compile: fine
-    res = exp.explain(x, target=Target.raw(op=">=", value=lo_t), sparsity_weight=0.05)
+    res = exp.explain(x, target=Target.raw(op=">=", value=lo_t), sparsity_weight=0.05, seed=0)
     if not isinstance(res, Counterfactual):
         return
 

@@ -1,22 +1,16 @@
 # FAQ
 
-**Why do I get `MissingExtraError` when calling `explain`?**
-Backend selection is explicit and treecf never falls back silently (a
-heuristic answer silently substituted for a proven-optimal one would be a
-correctness bug in a credit process). Install the extra the error names —
-`pip install treecf[cpsat]` — or explicitly choose `backend="genetic"`.
-
 **Why does `Target.probability` fail on my RandomForest?**
 Forest classifiers average probabilities; there is no sigmoid link to invert.
 Their raw score *is* the averaged probability — use
 `Target.raw(range=(0.0, 0.3))`.
 
 **Why is my counterfactual `Infeasible`?**
-Read `reason` and `relaxation_hint`: the hint reports whether the target is
-unreachable even unconstrained, or whether per-feature bounds or relational
-constraints block it.
+The search exhausted its budget without a candidate satisfying the target and
+every constraint. Check for contradictory constraints (e.g. everything frozen),
+an unreachable target interval, or raise `time_budget_s`.
 
-**Can I run treecf where xgboost/ortools cannot be installed?**
+**Can I run treecf where xgboost cannot be installed?**
 Yes. Parsers accept JSON dumps (`Booster.save_model("model.json")`,
 `dump_model()`, CatBoost `format="json"`), and the genetic backend has no
 dependencies beyond the wheel itself: `pip install treecf` on the scoring host,

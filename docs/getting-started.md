@@ -3,8 +3,7 @@
 ## Install
 
 ```bash
-pip install treecf                       # genetic backend (bundled Rust core)
-pip install "treecf[cpsat]"              # exact CP-SAT backend (ortools)
+pip install treecf                       # bundled Rust search engine
 pip install "treecf[xgboost,viz]"        # parser extras, matplotlib plots
 ```
 
@@ -36,21 +35,21 @@ exp = Explainer(
 res = exp.explain(
     x_row,
     target=Target.probability(range=(0.0, 0.04)),   # get under the 4% PD cutoff
-    backend="cpsat",
+    seed=0,
 )
 
 if hasattr(res, "x_cf"):
     print(res.changes)      # {"feature": (from, to), ...}
-    print(res.proof)        # "optimal" — CP-SAT proves it, no closer point exists
+    print(res.proof)        # "heuristic" — feasibility-first search, float-verified
 else:
-    print(res.reason, res.relaxation_hint)
+    print(res.reason)
 ```
 
-`proof="optimal"` means exactly that: no counterfactual with a smaller weighted
-distance satisfies the target and every constraint. The genetic backend
-(`backend="genetic"`, zero solver dependencies, Rust core) returns
-`proof="heuristic"` instead — typically in milliseconds even on 300-tree models;
-`backend="python"` runs the original numpy implementation of the same algorithm.
+The search is heuristic (`proof="heuristic"`), feasibility-first, and
+seed-deterministic; on toy suites it brackets a brute-force optimum. It runs on
+the bundled Rust engine in milliseconds even on 300-tree models;
+`backend="python"` runs the reference numpy implementation of the same
+algorithm.
 
 ## The result object
 

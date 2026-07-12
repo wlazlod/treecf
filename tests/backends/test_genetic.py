@@ -95,13 +95,14 @@ class TestBasics:
         assert math.isnan(res.x_cf[0]) or res.x_cf[0] < 1.0
 
 
-class TestCrossBackendSoundness:
-    """Spec §12.3: GA solutions verify in float and approach CP-SAT optima."""
+class TestOracleSoundness:
+    """GA solutions verify in float and bracket the brute-force oracle optimum."""
 
     @pytest.mark.parametrize("seed", range(20))
-    def test_ga_close_to_cpsat_on_toy_suite(self, seed: int) -> None:
-        pytest.importorskip("ortools")
+    def test_ga_brackets_the_oracle_on_toy_suite(self, seed: int) -> None:
         from tests.conftest import make_random_ir
+        from tests.exactness.brute_force import solve_brute_force
+        from treecf.constraints import compile_constraints
 
         rng = np.random.default_rng(3000 + seed)
         ir = make_random_ir(rng, n_features=3, n_trees=4, depth=3)
@@ -110,15 +111,15 @@ class TestCrossBackendSoundness:
         lo_t = float(np.percentile(scores, 60))
         target = Target.raw(op=">=", value=lo_t)
 
+        compiled = compile_constraints([], ir.feature_names)
+        oracle = solve_brute_force(
+            ir, x, (lo_t, math.inf), compiled, np.ones(3), np.ones(3), lam=0.0
+        )
         exp = Explainer(ir, normalizers=np.ones(3))
-        exact = exp.explain(x, target=target, backend="cpsat")
         heur = exp.explain(x, target=target, backend="python", seed=seed)
 
-        if isinstance(exact, Counterfactual):
-            assert isinstance(heur, Counterfactual), "GA missed a CP-SAT-feasible case"
+        if oracle.feasible:
+            assert isinstance(heur, Counterfactual), "GA missed an oracle-feasible case"
             assert heur.score_raw >= lo_t  # float-verified by the API already
-            # CP-SAT's conservative fixed-point rounding may cost up to ~1/K per
-            # feature, so "never beats the optimum" carries the same 1e-5 slack as
-            # the exactness suite.
-            assert heur.distance >= exact.distance - 1e-5
-            assert heur.distance <= exact.distance + 1.0  # and lands reasonably close
+            assert heur.distance >= oracle.objective - 1e-9  # never beats the optimum
+            assert heur.distance <= oracle.objective + 1.0  # and lands reasonably close

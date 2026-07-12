@@ -132,15 +132,15 @@ def test_statistical_parity_and_soundness(path: object) -> None:
 
 
 @pytest.mark.parametrize("seed", range(10))
-def test_cpsat_oracle_bracket(seed: int) -> None:
-    """Rust GA never beats the proven optimum (fixed-point slack) and lands close."""
-    pytest.importorskip("ortools")
+def test_oracle_bracket(seed: int) -> None:
+    """Rust GA never beats the brute-force optimum and lands close."""
     from treecf.backends.genetic_rust import _core as _load_core
     _treecf_core = _load_core()
 
-    from treecf import Counterfactual, Explainer, Target
+    from treecf.constraints import compile_constraints
 
     from ..conftest import make_random_ir
+    from ..exactness.brute_force import solve_brute_force
 
     rng = np.random.default_rng(5000 + seed)
     ir = make_random_ir(rng, n_features=3, n_trees=4, depth=3)
@@ -148,12 +148,10 @@ def test_cpsat_oracle_bracket(seed: int) -> None:
     scores = [raw_score(ir, rng.normal(scale=3.0, size=3)) for _ in range(40)]
     lo_t = float(np.percentile(scores, 60))
 
-    exp = Explainer(ir, normalizers=np.ones(3))
-    exact = exp.explain(x, target=Target.raw(op=">=", value=lo_t))
-
-    from treecf.constraints import compile_constraints
     compiled = compile_constraints([], ir.feature_names)
-    from treecf.constraints.flatten import flatten_constraints  # noqa: F401 (contract)
+    oracle = solve_brute_force(
+        ir, x, (lo_t, math.inf), compiled, np.ones(3), np.ones(3), lam=0.0
+    )
     x_cf, _gens = _treecf_core.solve_genetic_raw(
         rust_ensemble(ir),
         rust_constraints(compiled),
@@ -167,13 +165,13 @@ def test_cpsat_oracle_bracket(seed: int) -> None:
         time_budget_s=1e9,
     )
 
-    if isinstance(exact, Counterfactual):
-        assert x_cf is not None, "Rust GA missed a CP-SAT-feasible case"
+    if oracle.feasible:
+        assert x_cf is not None, "Rust GA missed an oracle-feasible case"
         x_cf = np.asarray(x_cf)
         assert raw_score(ir, x_cf) >= lo_t
         distance = float(np.sum(np.abs(x_cf - x)))
-        assert distance >= exact.distance - 1e-5  # never beats the proven optimum
-        assert distance <= exact.distance + 1.0
+        assert distance >= oracle.objective - 1e-9  # never beats the optimum
+        assert distance <= oracle.objective + 1.0
 
 
 def test_thread_count_invariance() -> None:

@@ -12,9 +12,10 @@ scikit-learn tree ensembles.
 
 ## Highlights
 
-- **Exact, tree-native counterfactuals** via CP-SAT, with optimality proofs — plus a
-  solver-free genetic backend running on a **bundled Rust core** (44–58× faster than the
-  equivalent numpy implementation; see [benchmarks](benchmarks-genetic-rust.md)).
+- **Tree-native counterfactual search** on a **bundled Rust core** — typically
+  milliseconds even on 300-tree ensembles (44–58× faster than the equivalent numpy
+  implementation; see [benchmarks](benchmarks-genetic-rust.md)), with every result
+  float-verified against the model IR before it is returned.
 - **Targets as intervals on the raw model output**: custom probability cutoffs, regression
   targets, and rating-grade ladders (`Target.bands`) in one call.
 - **Declarative constraints** compiled once for every backend: `Freeze`, `Monotone`, `Range`,
@@ -27,8 +28,7 @@ scikit-learn tree ensembles.
 ## Installation
 
 ```bash
-pip install treecf              # genetic backend (bundled Rust engine); numpy is the only Python dependency
-pip install "treecf[cpsat]"     # exact CP-SAT backend (ortools)
+pip install treecf              # bundled Rust engine; numpy is the only Python dependency
 pip install "treecf[viz]"       # matplotlib plots
 ```
 

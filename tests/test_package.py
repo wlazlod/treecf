@@ -6,7 +6,7 @@ from importlib.metadata import version
 
 import treecf
 
-OPTIONAL_MODULES = ("ortools", "xgboost", "lightgbm", "catboost", "sklearn", "matplotlib")
+OPTIONAL_MODULES = ("xgboost", "lightgbm", "catboost", "sklearn", "matplotlib")
 
 
 def test_version_matches_metadata() -> None:

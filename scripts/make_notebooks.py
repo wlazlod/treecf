@@ -60,9 +60,8 @@ def quickstart() -> nbf.NotebookNode:
             "# Quickstart\n\n"
             "Train an XGBoost credit model on synthetic data, then ask treecf the core "
             "question: *what is the minimal, feasible change that gets this applicant "
-            "under the approval cutoff?* The CP-SAT backend answers with an optimality "
-            "proof; for solver-free environments there is a bundled Rust genetic engine "
-            "(see the third notebook)."
+            "under the approval cutoff?* The search runs on treecf's bundled Rust engine "
+            "and every answer is float-verified against the model before it is returned."
         ),
         nbf.v4.new_code_cell(DATA_CELL.strip()),
         nbf.v4.new_code_cell(TRAIN_CELL.strip()),
@@ -83,7 +82,8 @@ def quickstart() -> nbf.NotebookNode:
             "    ],\n"
             "    weights={\"income_monthly\": 2.0},   # income is hard to change\n"
             ")\n"
-            "res = exp.explain(applicant, target=Target.probability(range=(0.0, cutoff)))\n"
+            "res = exp.explain(applicant, target=Target.probability(range=(0.0, cutoff)),\n"
+            "                  seed=0)\n"
             "res.proof, res.n_changed, round(res.score_prob, 4)"
         ),
         nbf.v4.new_code_cell("res.changes"),
@@ -139,15 +139,16 @@ def tutorial() -> nbf.NotebookNode:
             "    value_policy={\"max_dpd_30d\": \"integer\", \"max_dpd_12m\": \"integer\",\n"
             "                  \"n_active_loans\": \"integer\", \"n_loans_total\": \"integer\"},\n"
             ")\n"
-            "res = exp.explain(applicant, target=Target.probability(range=(0.0, cutoff)))\n"
+            "res = exp.explain(applicant, target=Target.probability(range=(0.0, cutoff)),\n"
+            "                  seed=0)\n"
             "res.changes"
         ),
         nbf.v4.new_markdown_cell(
-            "## 3. The rating ladder\n\nOne compilation, one solve per band: the "
-            "increasing cost of each better grade."
+            "## 3. The rating ladder\n\nOne search per band: the increasing cost of "
+            "each better grade."
         ),
         nbf.v4.new_code_cell(
-            "ladder = exp.explain(applicant, target=Target.bands({\n"
+            "ladder = exp.explain(applicant, seed=0, target=Target.bands({\n"
             "    \"approve\": (0.00, 0.30),\n"
             "    \"prime\":   (0.00, 0.15),\n"
             "    \"super\":   (0.00, 0.05),\n"
@@ -159,17 +160,37 @@ def tutorial() -> nbf.NotebookNode:
             "from treecf.viz import plot_ladder\n\nplot_ladder(ladder);"
         ),
         nbf.v4.new_markdown_cell(
-            "## 4. Diverse alternatives\n\nNo-good cuts produce structurally different "
-            "recommendations, in non-decreasing cost order."
+            "## 4. Alternative plans, and which levers are essential\n\n"
+            "Block each of the primary plan's biggest levers in turn and re-solve. "
+            "Levers with a workaround yield an alternative plan (at a higher cost); "
+            "levers with none are *essential* — approval is unreachable without them. "
+            "Both answers are useful to an applicant."
         ),
         nbf.v4.new_code_cell(
-            "diverse = exp.explain(applicant,\n"
-            "                      target=Target.probability(range=(0.0, cutoff)),\n"
-            "                      n_counterfactuals=3)\n"
-            "[sorted(r.changes) for r in diverse]"
+            "from treecf import Infeasible\n\n"
+            "base = accepted + [Freeze(\"age\"),\n"
+            "                   AllowMissing(\"months_since_last_delinq\", delta_miss=2.0)]\n"
+            "policy = {\"max_dpd_30d\": \"integer\", \"max_dpd_12m\": \"integer\",\n"
+            "          \"n_active_loans\": \"integer\", \"n_loans_total\": \"integer\"}\n"
+            "idx = {f: i for i, f in enumerate(names)}\n"
+            "levers = sorted(res.changes,\n"
+            "                key=lambda f: abs(res.changes[f][1] - res.changes[f][0])\n"
+            "                / exp.sigma[idx[f]], reverse=True)[:3]\n"
+            "alternatives, essential = [res], []\n"
+            "for lever in levers:\n"
+            "    alt = Explainer(model, background=X, value_policy=policy,\n"
+            "                    constraints=base + [Freeze(lever)])\n"
+            "    cand = alt.explain(applicant, seed=0, time_budget_s=30,\n"
+            "                       target=Target.probability(range=(0.0, cutoff)))\n"
+            "    if isinstance(cand, Infeasible):\n"
+            "        essential.append(lever)      # no plan exists without this lever\n"
+            "    else:\n"
+            "        alternatives.append(cand)\n"
+            "print(\"essential levers:\", essential)\n"
+            "[(round(a.distance, 2), sorted(a.changes)) for a in alternatives]"
         ),
         nbf.v4.new_code_cell(
-            "from treecf.viz import plot_counterfactuals\n\nplot_counterfactuals(diverse);"
+            "from treecf.viz import plot_counterfactuals\n\nplot_counterfactuals(alternatives);"
         ),
     ]
     return nb

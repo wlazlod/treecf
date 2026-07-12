@@ -1,37 +1,39 @@
-# Backends and proofs
+# Backends
 
-Backend selection is **explicit** — there is no silent fallback.
+Counterfactual search runs on a constrained genetic algorithm with two
+interchangeable engines:
 
-| backend | dependency | proof | when |
-|---|---|---|---|
-| `"cpsat"` | `treecf[cpsat]` (ortools) | `optimal` (or `feasible` on timeout, with a gap) | default; exact optimality proofs |
-| `"genetic"` | none (bundled Rust core) | `heuristic` | solver-free environments; 44–58× faster than the numpy engine ([benchmarks](../benchmarks-genetic-rust.md)) |
-| `"python"` | none (numpy) | `heuristic` | the original pure-Python GA, kept as a reference engine |
-| `"highs"` | planned | — | raises `NotImplementedError` |
+| backend | engine | when |
+|---|---|---|
+| `"genetic"` (default) | bundled Rust core | 44–58× faster than the numpy engine ([benchmarks](../benchmarks-genetic-rust.md)); typically milliseconds even on 300-tree models |
+| `"python"` | pure numpy | reference implementation, kept for cross-checking and as the behavioral baseline the Rust core is tested against |
 
-The Rust and Python genetic engines share one constraint compiler and are held
-to statistical parity (identical outcome distributions across seeds); every
-result from either engine is float-verified in Python before being returned.
+Both engines share one constraint compiler, are held to statistical parity
+(identical outcome distributions across seeds), and are seed-deterministic.
+Results carry `proof="heuristic"`: the search is feasibility-first and
+excellent in practice (it brackets a brute-force oracle on toy suites), but it
+does not prove optimality. Every result — target, every constraint, the
+plausibility bound — is re-verified in float space against the IR before being
+returned; an invalid candidate is never returned.
 
-Requesting `backend="cpsat"` without ortools raises
-`MissingExtraError("pip install treecf[cpsat]")`.
-
-## How the exact backend works
+## How the search works
 
 The model's trees induce, per feature, a set of **cells** — maximal intervals
-within which every tree routes identically. The optimization picks one cell per
-feature plus an exact value inside it, at integer scale K = 10⁶, minimizing the
-weighted L1 distance (normalized per feature by a MAD → IQR → range chain) plus
-an optional sparsity term. Every candidate is re-verified in float space; if
-fixed-point resolution ever bites, the scale is raised ×10 and re-solved.
+within which every tree routes identically. The GA seeds its first generation
+with the factual instance, one candidate per (feature × cell) move, NaN flips
+where `AllowMissing` permits, and background-sample crossovers; evolution uses
+feasibility-first (Deb) ranking, uniform crossover, cell-jump/Gaussian/NaN
+mutations and a revert-to-factual mutation that drives sparsity.
 
-## Diverse counterfactuals
+Candidate values placed next to a decision threshold are kept one *float32*
+ulp away from it, so the deployed model (which compares in float32) routes
+them the same way the IR does.
 
-```python
-results = exp.explain(x, target=t, n_counterfactuals=3)   # CP-SAT only
-```
+## History
 
-Each solve adds a no-good cut. The default `distinct_changes` mode forbids
-repeating an exact change-set (a NaN flip counts as a change);
-`distinct_solution` forbids the exact cell assignment. Results come back in
-non-decreasing cost order.
+Earlier development versions included an exact CP-SAT backend (via OR-Tools)
+with optimality proofs. It was removed before the first release: it duplicated
+capability available in dedicated exact-optimization packages, its solve times
+missed targets on large ensembles, and maintaining two backend families
+doubled the surface of every change. Users needing provably optimal
+counterfactuals can pair treecf's IR with an exact solver directly.

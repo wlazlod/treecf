@@ -31,12 +31,29 @@ class Cell:
         return above and below
 
     def nearest_to(self, x: float) -> float:
-        """Point of the cell closest to ``x`` (float64; open bounds step one ulp inside)."""
+        """Point of the cell closest to ``x``.
+
+        Open bounds step one FLOAT32 ulp inside (falling back to a float64 ulp
+        for cells narrower than that): GBDT libraries compare in float32, so a
+        float64-ulp neighbour of a threshold would collapse onto it natively
+        and route the other way — the counterfactual must stay distinguishable
+        from the threshold in the deployed model, not just in the IR.
+        """
         if self.contains(x):
             return x
         if x <= self.lo:
-            return float(np.nextafter(self.lo, math.inf)) if self.lo_open else self.lo
-        return float(np.nextafter(self.hi, -math.inf)) if self.hi_open else self.hi
+            if not self.lo_open:
+                return self.lo
+            stepped = float(np.nextafter(np.float32(self.lo), np.float32(math.inf)))
+            if self.contains(stepped):
+                return stepped
+            return float(np.nextafter(self.lo, math.inf))
+        if not self.hi_open:
+            return self.hi
+        stepped = float(np.nextafter(np.float32(self.hi), np.float32(-math.inf)))
+        if self.contains(stepped):
+            return stepped
+        return float(np.nextafter(self.hi, -math.inf))
 
 
 def build_cells(pairs: Iterable[tuple[float, SplitOp]]) -> tuple[Cell, ...]:

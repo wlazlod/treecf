@@ -10,12 +10,11 @@ and scikit-learn tree ensembles.
 
 ## Why another counterfactual package?
 
-- **Tree-native and exact.** Models are parsed into a shared tree IR and encoded for CP-SAT:
-  counterfactuals come with an optimality proof, not a heuristic guess. A solver-free genetic
-  backend covers environments where `ortools` cannot be installed — running on a **Rust core**
-  that is 44–58× faster than the equivalent numpy implementation
-  (see `docs/benchmarks-genetic-rust.md`; the pure-Python engine remains available as
-  `backend="python"`).
+- **Tree-native and fast.** Models are parsed into a shared tree IR; the constrained
+  genetic search runs on a bundled **Rust core** 44–58× faster than the equivalent numpy
+  implementation (see `docs/benchmarks-genetic-rust.md`; the pure-Python engine remains
+  available as `backend="python"`), and every result is float-verified against the IR
+  before it is returned.
 - **Decision thresholds are first-class.** Targets are intervals on the raw model output —
   custom probability cutoffs, regression targets, and whole rating-grade ladders in one call.
 - **Real-world constraints.** Declarative layer for immutability, directionality, ranges,
@@ -29,8 +28,7 @@ and scikit-learn tree ensembles.
 ## Installation
 
 ```bash
-pip install treecf              # genetic backend (bundled Rust engine); numpy is the only Python dep
-pip install "treecf[cpsat]"     # exact CP-SAT backend (ortools)
+pip install treecf              # bundled Rust engine; numpy is the only Python dep
 pip install "treecf[xgboost]"   # model parsers as extras; JSON dumps work without them
 pip install "treecf[viz]"       # matplotlib plots
 ```
@@ -48,7 +46,7 @@ exp = Explainer(
         Freeze("age_of_bureau_file"),
     ],
 )
-res = exp.explain(x, target=Target.probability(range=(0.0, 0.04)), backend="cpsat")
+res = exp.explain(x, target=Target.probability(range=(0.0, 0.04)), seed=0)
 ```
 
 ## License

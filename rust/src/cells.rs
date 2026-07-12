@@ -26,22 +26,35 @@ impl Cell {
         above && below
     }
 
-    /// Point of the cell closest to `x` (open bounds step one ulp inside).
+    /// Point of the cell closest to `x`.
+    ///
+    /// Open bounds step one FLOAT32 ulp inside (float64-ulp fallback for
+    /// narrower cells): native GBDTs compare in float32, so a float64-ulp
+    /// neighbour of a threshold would collapse onto it in the deployed model.
+    /// Must mirror `treecf.aim.cells.Cell.nearest_to` exactly.
     pub fn nearest_to(&self, x: f64) -> f64 {
         if self.contains(x) {
             return x;
         }
         if x <= self.lo {
-            return if self.lo_open {
-                self.lo.next_up()
+            if !self.lo_open {
+                return self.lo;
+            }
+            let stepped = (self.lo as f32).next_up() as f64;
+            return if self.contains(stepped) {
+                stepped
             } else {
-                self.lo
+                self.lo.next_up()
             };
         }
-        if self.hi_open {
-            self.hi.next_down()
+        if !self.hi_open {
+            return self.hi;
+        }
+        let stepped = (self.hi as f32).next_down() as f64;
+        if self.contains(stepped) {
+            stepped
         } else {
-            self.hi
+            self.hi.next_down()
         }
     }
 }
@@ -155,8 +168,8 @@ mod tests {
             lo_open: true,
             hi_open: true,
         };
-        assert_eq!(c.nearest_to(-3.0), 0.0f64.next_up());
-        assert_eq!(c.nearest_to(9.0), 1.0f64.next_down());
+        assert_eq!(c.nearest_to(-3.0), (0.0f32).next_up() as f64);
+        assert_eq!(c.nearest_to(9.0), (1.0f32).next_down() as f64);
         assert_eq!(c.nearest_to(0.5), 0.5);
     }
 

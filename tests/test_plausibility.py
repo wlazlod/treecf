@@ -12,7 +12,6 @@ from treecf.plausibility import Plausibility
 from .conftest import make_synthetic
 
 sklearn = pytest.importorskip("sklearn")
-pytest.importorskip("ortools")
 
 from sklearn.ensemble import IsolationForest  # noqa: E402
 
@@ -48,7 +47,7 @@ def test_counterfactual_respects_anomaly_bound(setup: tuple) -> None:
     exp = Explainer(
         clf, background=X, plausibility=Plausibility.isolation_forest(iso, theta)
     )
-    res = exp.explain(X[idx], target=Target.probability(range=(0.0, cutoff)))
+    res = exp.explain(X[idx], target=Target.probability(range=(0.0, cutoff)), seed=0)
     assert isinstance(res, Counterfactual)
     plaus = Plausibility.isolation_forest(iso, theta)
     assert plaus.anomaly_score(res.x_cf) <= theta + 1e-9
@@ -77,7 +76,7 @@ def test_impossible_theta_is_infeasible(setup: tuple) -> None:
     exp = Explainer(
         clf, background=X, plausibility=Plausibility.isolation_forest(iso, 0.01)
     )
-    res = exp.explain(X[0], target=Target.probability(range=(0.0, 0.9)))
+    res = exp.explain(X[0], target=Target.probability(range=(0.0, 0.9)), seed=0)
     assert not isinstance(res, Counterfactual)
 
 

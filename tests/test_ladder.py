@@ -1,15 +1,11 @@
-"""Rating-ladder bands: one compilation, N solves (spec §6, §12.7)."""
+"""Rating-ladder bands: one result per named interval via the genetic engine."""
 
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
-import treecf.api as api_module
 from treecf import Counterfactual, Explainer, Target
 from treecf.ir.model import EnsembleIR, Link, Node, SplitOp, Tree
-
-pytest.importorskip("ortools")
 
 
 def _leaf(i: int, v: float) -> Node:
@@ -38,27 +34,17 @@ def _ladder_ir() -> EnsembleIR:
     )
 
 
-def test_bands_return_per_band_results_with_one_compilation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls = {"n": 0}
-    original = api_module.build_problem
-
-    def counting(*args: object, **kwargs: object) -> object:
-        calls["n"] += 1
-        return original(*args, **kwargs)
-
-    monkeypatch.setattr(api_module, "build_problem", counting)
-
+def test_bands_return_per_band_results() -> None:
     exp = Explainer(_ladder_ir(), normalizers=np.ones(1))
     ladder = exp.explain(
         np.array([0.0]),
         target=Target.bands({"C": (0.5, 1.5), "B": (1.5, 2.5)}, space="raw"),
+        seed=0,
     )
+    assert isinstance(ladder, dict)
     assert set(ladder) == {"C", "B"}
     assert all(isinstance(v, Counterfactual) for v in ladder.values())
     assert ladder["C"].distance < ladder["B"].distance  # better grade costs more
-    assert calls["n"] == 1  # §12.7: one AIM compilation for the whole ladder
 
 
 def test_unreachable_band_reports_infeasible() -> None:
@@ -66,6 +52,8 @@ def test_unreachable_band_reports_infeasible() -> None:
     ladder = exp.explain(
         np.array([0.0]),
         target=Target.bands({"B": (1.5, 2.5), "impossible": (5.0, 9.0)}, space="raw"),
+        seed=0,
     )
+    assert isinstance(ladder, dict)
     assert isinstance(ladder["B"], Counterfactual)
     assert not isinstance(ladder["impossible"], Counterfactual)
