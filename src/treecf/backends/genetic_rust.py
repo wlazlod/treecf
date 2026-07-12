@@ -8,6 +8,7 @@ the Python GA is established by the Stage A/D gates; results carry
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 import numpy as np
@@ -142,3 +143,72 @@ def solve_genetic_rust(
     return GeneticResult(
         x_cf=None if x_cf is None else np.asarray(x_cf, dtype=np.float64), stats=stats
     )
+
+
+def solve_genetic_batch_rust(
+    ir: EnsembleIR,
+    X: FloatArray,
+    tasks: Sequence[tuple[int, int]],
+    interval: tuple[float, float],
+    compiled: CompiledConstraints,
+    sigma: FloatArray,
+    weights: FloatArray,
+    lam: float,
+    background: FloatArray | None = None,
+    plausibility: tuple[EnsembleIR, float] | None = None,
+    population: int = 80,
+    max_generations: int = 200,
+    stall_generations: int = 30,
+    time_budget_s: float = 10.0,
+    cache: dict[str, Any] | None = None,
+) -> list[GeneticResult]:
+    """Batch counterpart of ``solve_genetic_rust``: one independent, seeded
+    search per ``(row_index, seed)`` task, run in parallel inside the extension
+    (GIL released). Results follow task order and are bitwise-identical to
+    per-task ``solve_genetic_rust`` calls."""
+    core = _core()
+    cache = cache if cache is not None else {}
+    if "ensemble" not in cache:
+        cache["ensemble"] = build_rust_ensemble(ir)
+    if "constraints" not in cache:
+        cache["constraints"] = build_rust_constraints(compiled)
+    if_ens = None
+    min_total_path = None
+    if plausibility is not None:
+        if "if_ensemble" not in cache:
+            cache["if_ensemble"] = build_rust_ensemble(plausibility[0])
+        if_ens = cache["if_ensemble"]
+        min_total_path = float(plausibility[1])
+
+    task_row = np.asarray([row for row, _ in tasks], dtype=np.uint64)
+    task_seed = np.asarray([seed for _, seed in tasks], dtype=np.uint64)
+    x_cf, feasible, generations = core.solve_genetic_batch_raw(
+        cache["ensemble"],
+        cache["constraints"],
+        np.ascontiguousarray(X, dtype=np.float64),
+        task_row,
+        task_seed,
+        float(interval[0]),
+        float(interval[1]),
+        np.ascontiguousarray(sigma, dtype=np.float64),
+        np.ascontiguousarray(weights, dtype=np.float64),
+        float(lam),
+        background=(
+            np.ascontiguousarray(background, dtype=np.float64)
+            if background is not None
+            else None
+        ),
+        if_ensemble=if_ens,
+        min_total_path=min_total_path,
+        population=population,
+        max_generations=max_generations,
+        stall_generations=stall_generations,
+        time_budget_s=time_budget_s,
+    )
+    return [
+        GeneticResult(
+            x_cf=np.asarray(x_cf[t], dtype=np.float64) if feasible[t] else None,
+            stats={"generations": int(generations[t]), "backend": "rust"},
+        )
+        for t in range(len(tasks))
+    ]

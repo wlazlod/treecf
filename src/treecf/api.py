@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import numpy.typing as npt
@@ -20,6 +20,9 @@ from treecf.ir.parsers import parse_model
 from treecf.objective import fit_normalizers
 from treecf.plausibility import Plausibility
 from treecf.targets import Target
+
+if TYPE_CHECKING:
+    from treecf.backends.genetic import GeneticResult
 
 FloatArray = npt.NDArray[np.float64]
 
@@ -60,6 +63,8 @@ class Explainer:
     ``EnsembleIR``. ``background`` fits the distance normalizers;
     alternatively pass ``normalizers`` explicitly (array or name->sigma dict).
     """
+
+    _rust_cache: dict[str, object]  # marshaled Rust objects, created on first solve
 
     def __init__(
         self,
@@ -195,7 +200,7 @@ class Explainer:
             from treecf.backends.genetic_rust import solve_genetic_rust
 
             if not hasattr(self, "_rust_cache"):
-                self._rust_cache: dict[str, object] = {}
+                self._rust_cache = {}
             result = solve_genetic_rust(
                 self.ir,
                 x,
@@ -228,12 +233,49 @@ class Explainer:
             )
         if result.x_cf is None:
             return Infeasible(reason="heuristic search exhausted (genetic backend)")
-        x_cf = result.x_cf
+        return self._finalize_candidate(x, result.x_cf, interval, result.stats)
+
+    def _finalize_candidate(
+        self,
+        x: FloatArray,
+        x_cf: FloatArray,
+        interval: tuple[float, float],
+        stats: dict[str, object],
+    ) -> Counterfactual | Infeasible:
+        """Verify, snap, and package one solver candidate (§8.1 step 5)."""
         verification = self._verify(x, x_cf, interval)
         if verification is not None:  # defensive: the GA only returns checked individuals
             return Infeasible(reason=f"heuristic solution failed verification: {verification}")
         x_cf, snapped = self._apply_value_policies(x, x_cf, interval)
-        return self._result(x, x_cf, "heuristic", result.stats, snapped)
+        return self._result(x, x_cf, "heuristic", stats, snapped)
+
+    def _solve_batch(
+        self,
+        X: FloatArray,
+        tasks: Sequence[tuple[int, int]],
+        interval: tuple[float, float],
+        time_budget_s: float,
+        sparsity_weight: float,
+    ) -> list[GeneticResult]:
+        """Run independent seeded searches in one parallel Rust call."""
+        from treecf.backends.genetic_rust import solve_genetic_batch_rust
+
+        if not hasattr(self, "_rust_cache"):
+            self._rust_cache = {}
+        return solve_genetic_batch_rust(
+            self.ir,
+            X,
+            tasks,
+            interval,
+            self.compiled,
+            self.sigma,
+            self.weights,
+            lam=sparsity_weight,
+            background=self.background,
+            plausibility=self._plausibility_bound(),
+            time_budget_s=time_budget_s,
+            cache=self._rust_cache,
+        )
 
     def _verify(
         self, x: FloatArray, x_cf: FloatArray, interval: tuple[float, float]

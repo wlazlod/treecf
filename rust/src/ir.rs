@@ -123,19 +123,27 @@ impl Ensemble {
         total
     }
 
-    /// Raw scores for a row-major matrix (n_rows x n_features).
-    pub fn raw_score_batch(&self, xs: &[f64], n_rows: usize) -> Vec<f64> {
+    /// Raw scores for a row-major matrix (n_rows x n_features). `parallel`
+    /// only picks the execution strategy; the stage is RNG-free and per-row
+    /// independent, so results are identical either way.
+    pub fn raw_score_batch(&self, xs: &[f64], n_rows: usize, parallel: bool) -> Vec<f64> {
         let mut out = vec![0.0; n_rows];
-        self.raw_score_batch_into(xs, n_rows, &mut out);
+        self.raw_score_batch_into(xs, n_rows, &mut out, parallel);
         out
     }
 
-    pub fn raw_score_batch_into(&self, xs: &[f64], n_rows: usize, out: &mut [f64]) {
+    pub fn raw_score_batch_into(&self, xs: &[f64], n_rows: usize, out: &mut [f64], parallel: bool) {
         use rayon::prelude::*;
         let p = self.n_features;
-        out.par_iter_mut().enumerate().for_each(|(r, slot)| {
-            *slot = self.raw_score(&xs[r * p..(r + 1) * p]);
-        });
+        if parallel {
+            out.par_iter_mut().enumerate().for_each(|(r, slot)| {
+                *slot = self.raw_score(&xs[r * p..(r + 1) * p]);
+            });
+        } else {
+            for (r, slot) in out.iter_mut().enumerate() {
+                *slot = self.raw_score(&xs[r * p..(r + 1) * p]);
+            }
+        }
         debug_assert_eq!(out.len(), n_rows);
     }
 }
@@ -196,7 +204,7 @@ mod tests {
     fn batch_matches_single_row() {
         let e = stump(true, false);
         let xs = [0.0, 0.0, 2.0, 0.0, f64::NAN, 0.0];
-        let batch = e.raw_score_batch(&xs, 3);
+        let batch = e.raw_score_batch(&xs, 3, true);
         for r in 0..3 {
             assert_eq!(batch[r], e.raw_score(&xs[r * 2..r * 2 + 2]));
         }

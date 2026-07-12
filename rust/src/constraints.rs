@@ -97,7 +97,8 @@ impl Constraints {
     }
 
     /// Vectorized feasibility per row (row-major X), matching `check_matrix`.
-    pub fn check(&self, xs: &[f64], n_rows: usize, x: &[f64]) -> Vec<bool> {
+    /// `parallel` only picks the execution strategy (RNG-free stage).
+    pub fn check(&self, xs: &[f64], n_rows: usize, x: &[f64], parallel: bool) -> Vec<bool> {
         use rayon::prelude::*;
         let p = self.n_features;
         let (lo, hi, _) = self.instance_bounds(x);
@@ -112,9 +113,15 @@ impl Constraints {
             .collect();
 
         let mut out = vec![false; n_rows];
-        out.par_iter_mut().enumerate().for_each(|(r, slot)| {
-            *slot = self.check_row(&xs[r * p..(r + 1) * p], x, &lo, &hi);
-        });
+        if parallel {
+            out.par_iter_mut().enumerate().for_each(|(r, slot)| {
+                *slot = self.check_row(&xs[r * p..(r + 1) * p], x, &lo, &hi);
+            });
+        } else {
+            for (r, slot) in out.iter_mut().enumerate() {
+                *slot = self.check_row(&xs[r * p..(r + 1) * p], x, &lo, &hi);
+            }
+        }
         out
     }
 
@@ -175,7 +182,8 @@ impl Constraints {
     }
 
     /// In-place best-effort repair per row, matching `repair_matrix` exactly.
-    pub fn repair(&self, xs: &mut [f64], n_rows: usize, x: &[f64]) {
+    /// `parallel` only picks the execution strategy (RNG-free stage).
+    pub fn repair(&self, xs: &mut [f64], n_rows: usize, x: &[f64], parallel: bool) {
         use rayon::prelude::*;
         let p = self.n_features;
         let (lo, hi, _) = self.instance_bounds(x);
@@ -187,9 +195,15 @@ impl Constraints {
             .iter()
             .map(|&v| if v.is_nan() { f64::INFINITY } else { v })
             .collect();
-        xs.par_chunks_mut(p).for_each(|row| {
-            self.repair_row(row, x, &lo, &hi);
-        });
+        if parallel {
+            xs.par_chunks_mut(p).for_each(|row| {
+                self.repair_row(row, x, &lo, &hi);
+            });
+        } else {
+            for row in xs.chunks_mut(p) {
+                self.repair_row(row, x, &lo, &hi);
+            }
+        }
         debug_assert_eq!(xs.len(), n_rows * p);
     }
 
@@ -290,7 +304,7 @@ mod tests {
         c.ranges = vec![(0, 0.0, 1.0)];
         let x = [f64::NAN, 0.0];
         let mut rows = vec![5.0, 5.0];
-        c.repair(&mut rows, 1, &x);
+        c.repair(&mut rows, 1, &x, true);
         assert!(rows[0].is_nan()); // forced NaN, clip skipped
         assert_eq!(rows[1], 5.0);
     }
@@ -307,9 +321,9 @@ mod tests {
         }];
         let x = [0.0, 0.0];
         // NaN participant: vacuously satisfied even though the non-NaN part exceeds rhs
-        assert!(c.check(&[5.0, f64::NAN], 1, &x)[0] || !c.allows_missing(1));
+        assert!(c.check(&[5.0, f64::NAN], 1, &x, true)[0] || !c.allows_missing(1));
         // both present and violating
-        assert!(!c.check(&[5.0, 5.0], 1, &x)[0]);
+        assert!(!c.check(&[5.0, 5.0], 1, &x, true)[0]);
     }
 
     #[test]
@@ -318,7 +332,7 @@ mod tests {
         c.onehot = vec![vec![0, 1, 2]];
         let x = [0.0, 0.0, 1.0];
         let mut rows = vec![f64::NAN, 0.7, 0.7];
-        c.repair(&mut rows, 1, &x);
+        c.repair(&mut rows, 1, &x, true);
         assert_eq!(rows, vec![0.0, 1.0, 0.0]); // tie at 0.7 -> lowest index (1)
     }
 
@@ -328,7 +342,7 @@ mod tests {
         c.implications = vec![(0, 1.0, 1, 1.0)];
         let x = [0.0, 0.0];
         let mut rows = vec![1.0, 0.0];
-        c.repair(&mut rows, 1, &x);
+        c.repair(&mut rows, 1, &x, true);
         assert_eq!(rows, vec![1.0, 1.0]);
     }
 
@@ -344,7 +358,7 @@ mod tests {
         }];
         let x = [0.0, 0.0];
         let mut rows = vec![5.0, 2.0];
-        c.repair(&mut rows, 1, &x);
+        c.repair(&mut rows, 1, &x, true);
         assert_eq!(rows, vec![2.0, 2.0]);
     }
 }

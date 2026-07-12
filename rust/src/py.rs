@@ -69,7 +69,7 @@ impl RustEnsemble {
             )));
         }
         let xs = x.as_slice()?;
-        let scores = self.inner.raw_score_batch(xs, shape[0]);
+        let scores = self.inner.raw_score_batch(xs, shape[0], true);
         Ok(scores.into_pyarray(py))
     }
 }
@@ -191,7 +191,7 @@ impl RustConstraints {
         let shape = x_matrix.shape();
         let ok = self
             .inner
-            .check(x_matrix.as_slice()?, shape[0], x.as_slice()?);
+            .check(x_matrix.as_slice()?, shape[0], x.as_slice()?, true);
         Ok(ok.into_pyarray(py))
     }
 
@@ -203,7 +203,7 @@ impl RustConstraints {
     ) -> PyResult<Bound<'py, PyArray2<f64>>> {
         let shape = x_matrix.shape();
         let mut data = x_matrix.as_slice()?.to_vec();
-        self.inner.repair(&mut data, shape[0], x.as_slice()?);
+        self.inner.repair(&mut data, shape[0], x.as_slice()?, true);
         let arr = PyArray1::from_vec(py, data);
         arr.reshape([shape[0], shape[1]])
     }
@@ -248,6 +248,7 @@ fn solve_genetic_raw<'py>(
         max_generations,
         stall_generations,
         time_budget_s,
+        inner_parallel: true,
     };
     let ens = &ensemble.inner;
     let cons = &constraints.inner;
@@ -274,10 +275,131 @@ fn solve_genetic_raw<'py>(
     Ok((result.x_cf.map(|v| v.into_pyarray(py)), result.generations))
 }
 
+/// Batch GA solve: one independent search per `(task_row, task_seed)` pair,
+/// fanned out with rayon under a released GIL. Returns
+/// `(x_cf (n_tasks, p) — factual copy where infeasible, feasible mask, generations)`.
+#[pyfunction]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+#[pyo3(signature = (ensemble, constraints, x_rows, task_row, task_seed, lo_t, hi_t,
+                    sigma, weights, lam, background=None, if_ensemble=None,
+                    min_total_path=None, population=80, max_generations=200,
+                    stall_generations=30, time_budget_s=10.0))]
+fn solve_genetic_batch_raw<'py>(
+    py: Python<'py>,
+    ensemble: &RustEnsemble,
+    constraints: &RustConstraints,
+    x_rows: PyReadonlyArray2<f64>,
+    task_row: PyReadonlyArray1<u64>,
+    task_seed: PyReadonlyArray1<u64>,
+    lo_t: f64,
+    hi_t: f64,
+    sigma: PyReadonlyArray1<f64>,
+    weights: PyReadonlyArray1<f64>,
+    lam: f64,
+    background: Option<PyReadonlyArray2<f64>>,
+    if_ensemble: Option<&RustEnsemble>,
+    min_total_path: Option<f64>,
+    population: usize,
+    max_generations: usize,
+    stall_generations: usize,
+    time_budget_s: f64,
+) -> PyResult<(
+    Bound<'py, PyArray2<f64>>,
+    Bound<'py, PyArray1<bool>>,
+    Bound<'py, PyArray1<u64>>,
+)> {
+    let shape = x_rows.shape();
+    let (n_rows, p) = (shape[0], shape[1]);
+    if p != ensemble.inner.n_features {
+        return Err(PyValueError::new_err(format!(
+            "expected {} features, got {}",
+            ensemble.inner.n_features, p
+        )));
+    }
+    let xs_own = x_rows.as_slice()?.to_vec();
+    let rows = task_row.as_slice()?;
+    let seeds = task_seed.as_slice()?;
+    if rows.len() != seeds.len() {
+        return Err(PyValueError::new_err(
+            "task_row and task_seed must have the same length",
+        ));
+    }
+    if rows.iter().any(|&r| r as usize >= n_rows) {
+        return Err(PyValueError::new_err("task_row index out of range"));
+    }
+    let tasks: Vec<(usize, u64)> = rows
+        .iter()
+        .zip(seeds)
+        .map(|(&r, &s)| (r as usize, s))
+        .collect();
+    let sigma_own = sigma.as_slice()?.to_vec();
+    let weights_own = weights.as_slice()?.to_vec();
+    let bg_own: Option<(Vec<f64>, usize)> = match &background {
+        Some(bg) => Some((bg.as_slice()?.to_vec(), bg.shape()[0])),
+        None => None,
+    };
+    let params = GaParams {
+        population,
+        max_generations,
+        stall_generations,
+        time_budget_s,
+        // With fewer tasks than threads the per-population rayon stages are
+        // the only way to use the spare cores; beyond that, task-level
+        // parallelism saturates them and serial inner stages avoid
+        // nested-splitting overhead. Results are identical either way.
+        inner_parallel: tasks.len() < rayon::current_num_threads(),
+    };
+    let ens = &ensemble.inner;
+    let cons = &constraints.inner;
+    let plaus = match (if_ensemble, min_total_path) {
+        (Some(if_e), Some(bound)) => Some((&if_e.inner, bound)),
+        _ => None,
+    };
+    let results = py.detach(|| {
+        crate::ga::solve_genetic_batch(
+            ens,
+            &xs_own,
+            &tasks,
+            lo_t,
+            hi_t,
+            cons,
+            &sigma_own,
+            &weights_own,
+            lam,
+            bg_own.as_ref().map(|(data, n)| (data.as_slice(), *n)),
+            plaus,
+            &params,
+        )
+    });
+    let n_tasks = tasks.len();
+    let mut x_cf = vec![0.0f64; n_tasks * p];
+    let mut feasible = vec![false; n_tasks];
+    let mut generations = vec![0u64; n_tasks];
+    for (t, result) in results.iter().enumerate() {
+        generations[t] = result.generations as u64;
+        match &result.x_cf {
+            Some(row) => {
+                x_cf[t * p..(t + 1) * p].copy_from_slice(row);
+                feasible[t] = true;
+            }
+            None => {
+                let r = tasks[t].0;
+                x_cf[t * p..(t + 1) * p].copy_from_slice(&xs_own[r * p..(r + 1) * p]);
+            }
+        }
+    }
+    Ok((
+        PyArray1::from_vec(py, x_cf).reshape([n_tasks, p])?,
+        feasible.into_pyarray(py),
+        generations.into_pyarray(py),
+    ))
+}
+
 #[pymodule]
 fn _treecf_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RustEnsemble>()?;
     m.add_class::<RustConstraints>()?;
     m.add_function(wrap_pyfunction!(solve_genetic_raw, m)?)?;
+    m.add_function(wrap_pyfunction!(solve_genetic_batch_raw, m)?)?;
     Ok(())
 }

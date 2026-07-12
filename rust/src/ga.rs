@@ -21,6 +21,10 @@ pub struct GaParams {
     pub max_generations: usize,
     pub stall_generations: usize,
     pub time_budget_s: f64,
+    /// Rayon inside the RNG-free stages (fitness/check/repair). Turned off
+    /// when `solve_genetic_batch` already saturates cores across tasks;
+    /// results are identical either way.
+    pub inner_parallel: bool,
 }
 
 pub struct GaResult {
@@ -146,7 +150,7 @@ pub fn solve_genetic(
         push_row(&mut pop, &row);
     }
     let mut n_rows = pop.len() / p;
-    cons.repair(&mut pop, n_rows, x);
+    cons.repair(&mut pop, n_rows, x, params.inner_parallel);
     pin_fixed(&mut pop, n_rows, p, &fixed, x);
 
     // --- main loop ---
@@ -171,6 +175,7 @@ pub fn solve_genetic(
             lam,
             &deltas,
             plausibility,
+            params.inner_parallel,
         );
         let mut order: Vec<usize> = (0..n_rows).collect();
         order.sort_by(|&a, &b| tier[a].cmp(&tier[b]).then(key[a].total_cmp(&key[b])));
@@ -223,7 +228,7 @@ pub fn solve_genetic(
         }
         pop = next;
         n_rows = pop.len() / p;
-        cons.repair(&mut pop, n_rows, x);
+        cons.repair(&mut pop, n_rows, x, params.inner_parallel);
         pin_fixed(&mut pop, n_rows, p, &fixed, x);
     }
 
@@ -231,6 +236,49 @@ pub fn solve_genetic(
         x_cf: best,
         generations,
     }
+}
+
+/// Independent GA searches for a batch of `(row_index, seed)` tasks, fanned
+/// out with rayon. Every task is independently seeded, so the output is
+/// thread-count-independent by construction; order follows `tasks`.
+#[allow(clippy::too_many_arguments)]
+pub fn solve_genetic_batch(
+    ens: &Ensemble,
+    xs: &[f64], // row-major (n_rows, n_features) factuals
+    tasks: &[(usize, u64)],
+    lo_t: f64,
+    hi_t: f64,
+    cons: &Constraints,
+    sigma: &[f64],
+    weights: &[f64],
+    lam: f64,
+    background: Option<(&[f64], usize)>,
+    plausibility: Option<(&Ensemble, f64)>,
+    params: &GaParams,
+) -> Vec<GaResult> {
+    use rayon::prelude::*;
+    let p = ens.n_features;
+    // Warm the cell caches up front so parallel tasks don't build them twice.
+    let _ = ens.feature_cells();
+    tasks
+        .par_iter()
+        .map(|&(row, seed)| {
+            solve_genetic(
+                ens,
+                &xs[row * p..(row + 1) * p],
+                lo_t,
+                hi_t,
+                cons,
+                sigma,
+                weights,
+                lam,
+                background,
+                plausibility,
+                Some(seed),
+                params,
+            )
+        })
+        .collect()
 }
 
 fn pin_fixed(pop: &mut [f64], n_rows: usize, p: usize, fixed: &[bool], x: &[f64]) {
@@ -270,12 +318,13 @@ fn rank_keys(
     lam: f64,
     deltas: &[(f64, f64)],
     plausibility: Option<(&Ensemble, f64)>,
+    parallel: bool,
 ) -> (Vec<u8>, Vec<f64>) {
     let p = ens.n_features;
-    let scores = ens.raw_score_batch(pop, n_rows);
-    let mut ok = cons.check(pop, n_rows, x);
+    let scores = ens.raw_score_batch(pop, n_rows, parallel);
+    let mut ok = cons.check(pop, n_rows, x, parallel);
     if let Some((if_ens, min_total)) = plausibility {
-        let paths = if_ens.raw_score_batch(pop, n_rows);
+        let paths = if_ens.raw_score_batch(pop, n_rows, parallel);
         for r in 0..n_rows {
             ok[r] = ok[r] && paths[r] >= min_total;
         }
@@ -380,6 +429,7 @@ mod tests {
             max_generations: 100,
             stall_generations: 20,
             time_budget_s: 1e9,
+            inner_parallel: true,
         }
     }
 
@@ -429,6 +479,75 @@ mod tests {
         let (a, b) = (run(), run());
         assert_eq!(a.generations, b.generations);
         assert_eq!(a.x_cf, b.x_cf);
+    }
+
+    #[test]
+    fn inner_parallel_off_is_bitwise_identical() {
+        let ens = stump();
+        let cons = empty_constraints(2);
+        let run = |inner_parallel: bool| {
+            let p = GaParams {
+                inner_parallel,
+                ..params()
+            };
+            solve_genetic(
+                &ens,
+                &[0.0, 0.0],
+                0.5,
+                f64::INFINITY,
+                &cons,
+                &[1.0, 1.0],
+                &[1.0, 1.0],
+                0.05,
+                None,
+                None,
+                Some(7),
+                &p,
+            )
+        };
+        let (a, b) = (run(true), run(false));
+        assert_eq!(a.generations, b.generations);
+        assert_eq!(a.x_cf, b.x_cf);
+    }
+
+    #[test]
+    fn batch_matches_per_task_solves() {
+        let ens = stump();
+        let cons = empty_constraints(2);
+        let xs = [0.0, 0.0, -1.0, 2.0];
+        let tasks = [(0usize, 1u64), (0, 2), (1, 3), (1, 1)];
+        let batch = solve_genetic_batch(
+            &ens,
+            &xs,
+            &tasks,
+            0.5,
+            f64::INFINITY,
+            &cons,
+            &[1.0, 1.0],
+            &[1.0, 1.0],
+            0.05,
+            None,
+            None,
+            &params(),
+        );
+        for (result, &(row, seed)) in batch.iter().zip(&tasks) {
+            let single = solve_genetic(
+                &ens,
+                &xs[row * 2..(row + 1) * 2],
+                0.5,
+                f64::INFINITY,
+                &cons,
+                &[1.0, 1.0],
+                &[1.0, 1.0],
+                0.05,
+                None,
+                None,
+                Some(seed),
+                &params(),
+            );
+            assert_eq!(result.generations, single.generations);
+            assert_eq!(result.x_cf, single.x_cf);
+        }
     }
 
     #[test]

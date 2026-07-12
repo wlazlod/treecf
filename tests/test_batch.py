@@ -74,6 +74,25 @@ class TestSeedsDiversity:
         assert batch.for_id("APP-2")
         assert not batch.for_id("APP-3")
 
+    def test_wave_path_matches_sequential_reference(self, exp: Explainer) -> None:
+        from treecf.batch import _row_by_seeds
+
+        batch = exp.explain_batch(X, TARGET, n_per_example=2, seed=7)
+        reference = Explainer(_ir(), normalizers=np.ones(3))
+        expected = []
+        for i in range(len(X)):
+            expected.extend(
+                _row_by_seeds(
+                    reference, X[i], TARGET, i, 2, "genetic", 10.0, 0.0,
+                    master_seed=7 * 1_000_003 + i * 1_009,
+                )
+            )
+        for got, want in zip(batch.records, expected, strict=True):
+            assert (got.id, got.k, got.seed) == (want.id, want.k, want.seed)
+            assert got.changes == want.changes
+            assert got.distance == want.distance
+            assert got.feasible == want.feasible
+
     def test_infeasible_rows_get_one_infeasible_record(self) -> None:
         from treecf import Freeze
 
@@ -100,6 +119,12 @@ class TestLeverBlocking:
         assert len(keys) == len(set(keys))
         assert records[0].blocked_lever is None  # the primary plan blocks nothing
         assert all(r.blocked_lever for r in records[1:])
+
+    def test_clone_reuses_parent_rust_ensemble(self, exp: Explainer) -> None:
+        exp.explain(X[0], TARGET, seed=0)
+        clone = exp._with_extra_freezes(["a"])
+        assert clone._rust_cache["ensemble"] is exp._rust_cache["ensemble"]
+        assert "constraints" not in clone._rust_cache
 
     def test_essential_levers_recorded(self) -> None:
         # single lever: blocking it makes the target unreachable -> essential

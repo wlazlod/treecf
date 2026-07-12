@@ -182,20 +182,29 @@ def explain_batch(
 
     records: list[BatchRecord] = []
     essential: dict[object, list[str]] = {}
-    for i, row_id in enumerate(row_ids):
-        if diversity == "seeds":
-            row_records = _row_by_seeds(
-                explainer, X[i], target, row_id, n_per_example,
-                backend, time_budget_s, sparsity_weight,
-                master_seed=seed * 1_000_003 + i * 1_009,
-            )
-        else:
-            row_records, row_essential = _row_by_lever_blocking(
-                explainer, X[i], target, row_id, n_per_example,
-                backend, time_budget_s, sparsity_weight, seed=seed,
-            )
-            essential[row_id] = row_essential
-        records.extend(row_records)
+    if diversity == "seeds" and backend in ("genetic", "genetic-rust"):
+        # Same attempts, dedup, and stopping rule as `_row_by_seeds`, but each
+        # wave solves every unfinished row's next attempts in one parallel
+        # Rust call — the output is identical to the sequential loop.
+        records = _rows_by_seed_waves(
+            explainer, X, target, row_ids, n_per_example,
+            time_budget_s, sparsity_weight, seed=seed,
+        )
+    else:
+        for i, row_id in enumerate(row_ids):
+            if diversity == "seeds":
+                row_records = _row_by_seeds(
+                    explainer, X[i], target, row_id, n_per_example,
+                    backend, time_budget_s, sparsity_weight,
+                    master_seed=seed * 1_000_003 + i * 1_009,
+                )
+            else:
+                row_records, row_essential = _row_by_lever_blocking(
+                    explainer, X[i], target, row_id, n_per_example,
+                    backend, time_budget_s, sparsity_weight, seed=seed,
+                )
+                essential[row_id] = row_essential
+            records.extend(row_records)
 
     return BatchResult(
         feature_names=explainer.ir.feature_names,
@@ -232,6 +241,64 @@ def _infeasible_record(row_id: object) -> BatchRecord:
         id=row_id, k=0, feasible=False, x_cf=None, changes={},
         distance=None, n_changed=None, score_raw=None, score_prob=None,
     )
+
+
+def _rows_by_seed_waves(
+    explainer: Explainer,
+    X: FloatArray,
+    target: Target,
+    row_ids: Sequence[object],
+    n_per_example: int,
+    time_budget_s: float,
+    sparsity_weight: float,
+    seed: int,
+) -> list[BatchRecord]:
+    """Wave-parallel `_row_by_seeds` over all rows (Rust backend only).
+
+    Wave ``w`` solves attempts ``w*n .. w*n + n - 1`` of every row that still
+    needs plans; results are then consumed per row in attempt order with the
+    sequential dedup/stop logic, so extra attempts computed past a row's
+    stopping point are simply discarded.
+    """
+    from treecf.api import Counterfactual
+
+    if explainer.plausibility is not None and np.isnan(X).any():
+        raise TreecfError("plausibility with missing factual values is not supported")
+    interval = target.raw_interval(explainer.ir.link)
+    n = n_per_example
+    found: list[dict[frozenset[str], tuple[Counterfactual, int]]] = [
+        {} for _ in row_ids
+    ]
+    active = list(range(len(row_ids)))
+    for wave in range(_SEED_ATTEMPT_FACTOR):
+        if not active:
+            break
+        tasks = [
+            (i, seed * 1_000_003 + i * 1_009 + wave * n + a)
+            for i in active
+            for a in range(n)
+        ]
+        results = explainer._solve_batch(X, tasks, interval, time_budget_s, sparsity_weight)
+        for (i, attempt_seed), result in zip(tasks, results, strict=True):
+            if len(found[i]) == n or result.x_cf is None:
+                continue
+            outcome = explainer._finalize_candidate(X[i], result.x_cf, interval, result.stats)
+            if isinstance(outcome, Counterfactual):
+                key = frozenset(outcome.changes)
+                if key not in found[i]:
+                    found[i][key] = (outcome, attempt_seed)
+        active = [i for i in active if len(found[i]) < n]
+
+    records: list[BatchRecord] = []
+    for i, row_id in enumerate(row_ids):
+        if not found[i]:
+            records.append(_infeasible_record(row_id))
+            continue
+        ranked = sorted(found[i].values(), key=lambda pair: pair[0].distance)[:n]
+        records.extend(
+            _record_from(row_id, k, cf, seed=cf_seed) for k, (cf, cf_seed) in enumerate(ranked)
+        )
+    return records
 
 
 def _row_by_seeds(
