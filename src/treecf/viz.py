@@ -6,7 +6,7 @@ import math
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from treecf._errors import MissingExtraError
+from treecf._errors import MissingExtraError, TreecfError
 from treecf.api import Counterfactual, Infeasible
 
 
@@ -89,6 +89,121 @@ def plot_ladder(bands_result: Mapping[str, object], ax: Any = None) -> Any:
     ax.set_ylabel("distance J")
     ax.set_title("cost of reaching each band")
     return ax
+
+
+def plot_alternatives(results: Sequence[Any], explainer: Any = None, ax: Any = None) -> Any:
+    """Overlaid dumbbells: every alternative plan's changes for one instance.
+
+    Accepts ``Counterfactual`` objects or feasible ``BatchRecord`` entries
+    (anything with ``changes`` and ``distance``); infeasible records are
+    skipped. Each plan keeps one color across all its changes — meant for a
+    handful of alternatives for the same row (at most 10). With ``explainer``,
+    changes are plotted as standardized deltas from the factual (Δ/σ), so
+    features of different scales share one axis; without, raw values are shown
+    with gray factual dots.
+    """
+    plt = _import_pyplot()
+    plans = [r for r in results if getattr(r, "feasible", True)]
+    if not plans:
+        raise TreecfError("no feasible plans to plot")
+    if len(plans) > 10:
+        raise TreecfError("plot_alternatives compares at most 10 plans")
+    sigma: dict[str, float] = {}
+    if explainer is not None:
+        sigma = {
+            name: float(s)
+            for name, s in zip(explainer.ir.feature_names, explainer.sigma, strict=True)
+        }
+    frequency: dict[str, int] = {}
+    for plan in plans:
+        for name in plan.changes:
+            frequency[name] = frequency.get(name, 0) + 1
+    features = sorted(frequency, key=lambda name: (-frequency[name], name))
+    slots = {name: i for i, name in enumerate(features)}
+
+    if ax is None:
+        _, ax = plt.subplots(figsize=(7, 0.8 * max(2, len(features))))
+    step = min(0.18, 0.7 / len(plans))
+    for p, plan in enumerate(plans):
+        color = f"C{p}"
+        offset = (p - (len(plans) - 1) / 2) * step
+        label: str | None = f"plan {p + 1} (J={plan.distance:.3g})"
+        for name, (source, dest) in plan.changes.items():
+            y = slots[name] + offset
+            if math.isnan(dest) or math.isnan(source):
+                anchor = source if math.isnan(dest) else dest
+                if explainer is not None:
+                    anchor = 0.0
+                ax.plot([anchor], [y], "o", color=color, markersize=5, label=label)
+                ax.annotate(
+                    "-> NaN" if math.isnan(dest) else "NaN ->",
+                    xy=(anchor, y), xytext=(6, 0), textcoords="offset points",
+                    va="center", color="tab:red", fontsize=9,
+                )
+            else:
+                if explainer is not None:
+                    start, end = 0.0, (dest - source) / sigma[name]
+                else:
+                    start, end = source, dest
+                ax.plot([start, end], [y, y], "-", color=color, alpha=0.5, zorder=1)
+                ax.plot([start], [y], "o", color="tab:gray", markersize=4)
+                ax.plot([end], [y], "o", color=color, markersize=5, label=label)
+            label = None  # one legend entry per plan
+    if explainer is not None:
+        ax.axvline(0.0, color="0.6", linestyle="--", linewidth=1)
+        ax.set_xlabel("standardized change from factual (Δ/σ)")
+    else:
+        ax.set_xlabel("feature value (gray = factual)")
+    ax.set_yticks(range(len(features)), features)
+    ax.invert_yaxis()
+    ax.set_title(f"{len(plans)} alternative plan(s) for one instance")
+    ax.legend(loc="best")
+    return ax
+
+
+def plot_tradeoff(results: Sequence[Any], target: Any = None, ax: Any = None) -> Any:
+    """Cost vs achieved score for alternative plans of one instance.
+
+    One dot per plan: x = distance J, y = the achieved probability (sigmoid
+    models) or raw score. ``target`` draws the interval bounds the plans had
+    to reach. Accepts ``Counterfactual`` objects or feasible ``BatchRecord``
+    entries; infeasible records are skipped.
+    """
+    plt = _import_pyplot()
+    plans = [r for r in results if getattr(r, "feasible", True)]
+    if not plans:
+        raise TreecfError("no feasible plans to plot")
+    prob_space = all(plan.score_prob is not None for plan in plans)
+
+    if ax is None:
+        _, ax = plt.subplots(figsize=(6, 4))
+    for p, plan in enumerate(plans):
+        score = plan.score_prob if prob_space else plan.score_raw
+        ax.plot([plan.distance], [score], "o", color=f"C{p}", markersize=8)
+        ax.annotate(
+            f"{p + 1}", xy=(plan.distance, score), xytext=(6, 4),
+            textcoords="offset points", fontsize=9,
+        )
+    if target is not None:
+        for bound in _target_bounds(target, prob_space):
+            ax.axhline(bound, color="tab:red", linewidth=1)
+    ax.set_xlabel("distance J (effort)")
+    ax.set_ylabel("model probability" if prob_space else "raw score")
+    ax.set_title("what each plan costs, and what it buys")
+    return ax
+
+
+def _target_bounds(target: Any, prob_space: bool) -> list[float]:
+    """Finite target-interval bounds in the plotted space (probability or raw)."""
+    from treecf.ir.evaluate import apply_link
+    from treecf.ir.model import Link
+
+    lo, hi = float(target.lo), float(target.hi)
+    if prob_space and target.space == "raw":
+        lo, hi = apply_link(Link.SIGMOID, lo), apply_link(Link.SIGMOID, hi)
+    elif not prob_space and target.space == "probability":
+        return []  # probability targets only exist for sigmoid models
+    return [b for b in (lo, hi) if math.isfinite(b)]
 
 
 def plot_waterfall(explainer: Any, cf: Counterfactual, target: Any = None, ax: Any = None) -> Any:

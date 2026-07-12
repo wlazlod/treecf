@@ -11,6 +11,14 @@ matplotlib = pytest.importorskip("matplotlib")
 matplotlib.use("Agg")
 
 from treecf import Explainer, TreecfError  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _close_figures() -> object:
+    yield
+    import matplotlib.pyplot as plt
+
+    plt.close("all")  # >20 open figures raises under filterwarnings=error
 from treecf.batch import BatchRecord, BatchResult  # noqa: E402
 from treecf.ir.model import EnsembleIR, Link, Node, SplitOp, Tree  # noqa: E402
 from treecf.viz_batch import (  # noqa: E402
