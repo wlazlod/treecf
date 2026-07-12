@@ -118,6 +118,7 @@ module = [
     "catboost.*",
     "sklearn.*",
     "matplotlib.*",
+    "_treecf_core",
 ]
 ignore_missing_imports = true
 

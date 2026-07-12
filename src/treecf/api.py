@@ -123,10 +123,12 @@ class Explainer:
                 x, target, backend, time_budget_s, sparsity_weight, num_workers, seed
             )
         interval = target.raw_interval(self.ir.link)
-        if backend == "genetic":
+        if backend in ("genetic", "genetic-rust"):
             if n_counterfactuals > 1:
                 raise TreecfError("n_counterfactuals > 1 requires backend='cpsat' in v0.1 (§8.3)")
-            return self._explain_genetic(x, interval, time_budget_s, sparsity_weight, seed)
+            return self._explain_genetic(
+                x, interval, time_budget_s, sparsity_weight, seed, rust=backend == "genetic-rust"
+            )
         solver = _select_backend(backend)
         if n_counterfactuals > 1:
             return self._explain_diverse(
@@ -345,22 +347,43 @@ class Explainer:
         time_budget_s: float,
         sparsity_weight: float,
         seed: int | None,
+        rust: bool = False,
     ) -> Counterfactual | Infeasible:
-        from treecf.backends.genetic import solve_genetic
+        if rust:
+            from treecf.backends.genetic_rust import solve_genetic_rust
 
-        result = solve_genetic(
-            self.ir,
-            x,
-            interval,
-            self.compiled,
-            self.sigma,
-            self.weights,
-            lam=sparsity_weight,
-            background=self.background,
-            plausibility=self._plausibility_bound(),
-            seed=seed,
-            time_budget_s=time_budget_s,
-        )
+            if not hasattr(self, "_rust_cache"):
+                self._rust_cache: dict[str, object] = {}
+            result = solve_genetic_rust(
+                self.ir,
+                x,
+                interval,
+                self.compiled,
+                self.sigma,
+                self.weights,
+                lam=sparsity_weight,
+                background=self.background,
+                plausibility=self._plausibility_bound(),
+                seed=seed,
+                time_budget_s=time_budget_s,
+                cache=self._rust_cache,
+            )
+        else:
+            from treecf.backends.genetic import solve_genetic
+
+            result = solve_genetic(
+                self.ir,
+                x,
+                interval,
+                self.compiled,
+                self.sigma,
+                self.weights,
+                lam=sparsity_weight,
+                background=self.background,
+                plausibility=self._plausibility_bound(),
+                seed=seed,
+                time_budget_s=time_budget_s,
+            )
         if result.x_cf is None:
             return Infeasible(reason="heuristic search exhausted (genetic backend, §8.2)")
         x_cf = result.x_cf
