@@ -61,7 +61,8 @@ def quickstart() -> nbf.NotebookNode:
             "Train an XGBoost credit model on synthetic data, then ask treecf the core "
             "question: *what is the minimal, feasible change that gets this applicant "
             "under the approval cutoff?* The CP-SAT backend answers with an optimality "
-            "proof."
+            "proof; for solver-free environments there is a bundled Rust genetic engine "
+            "(see the third notebook)."
         ),
         nbf.v4.new_code_cell(DATA_CELL.strip()),
         nbf.v4.new_code_cell(TRAIN_CELL.strip()),
@@ -178,10 +179,11 @@ def no_solver() -> nbf.NotebookNode:
     nb = nbf.v4.new_notebook()
     nb.cells = [
         nbf.v4.new_markdown_cell(
-            "# Restricted environments: JSON dumps + the genetic backend\n\n"
+            "# Restricted environments: JSON dumps + the Rust genetic engine\n\n"
             "Model-validation and audit hosts often cannot install the training "
-            "framework or a solver. treecf parses **JSON dumps** directly and its "
-            "genetic backend needs only numpy."
+            "framework or a solver. treecf parses **JSON dumps** directly, and its "
+            "genetic backend runs on a **compiled Rust core bundled in the wheel** — "
+            "no ortools, no xgboost, no Python dependencies beyond numpy."
         ),
         nbf.v4.new_code_cell(DATA_CELL.strip()),
         nbf.v4.new_code_cell(TRAIN_CELL.strip()),
@@ -201,19 +203,43 @@ def no_solver() -> nbf.NotebookNode:
             ")"
         ),
         nbf.v4.new_markdown_cell(
-            "## Solve without ortools\n\nThe genetic backend is feasibility-first and "
+            "## Solve without ortools\n\nThe genetic engine is feasibility-first and "
             "seed-deterministic. It returns `proof=\"heuristic\"` — it never claims "
-            "optimality, and the result is still float-verified against the model."
+            "optimality, and the result is still float-verified against the model "
+            "before being returned."
         ),
         nbf.v4.new_code_cell(
             "res = exp.explain(applicant,\n"
             "                  target=Target.probability(range=(0.0, cutoff)),\n"
             "                  backend=\"genetic\", seed=0)\n"
-            "res.proof, res.changes"
+            "res.proof, res.solver_stats[\"backend\"], res.changes"
         ),
         nbf.v4.new_code_cell(
             "float(model.predict_proba(np.nan_to_num(res.x_cf, nan=np.nan)"
             ".reshape(1, -1))[0, 1])  # the native model agrees"
+        ),
+        nbf.v4.new_markdown_cell(
+            "## How fast is the Rust engine?\n\n"
+            "`backend=\"python\"` runs the original numpy implementation of the same "
+            "algorithm, kept as a reference engine — identical result quality (the two "
+            "are held to statistical parity), just slower. On production-sized models "
+            "(300 trees, 50 features) the gap is 44–58× — see the Benchmarks page. "
+            "On this notebook's small model:"
+        ),
+        nbf.v4.new_code_cell(
+            "import time\n\n"
+            "def timed(backend):\n"
+            "    start = time.perf_counter()\n"
+            "    for seed in range(5):\n"
+            "        exp.explain(applicant,\n"
+            "                    target=Target.probability(range=(0.0, cutoff)),\n"
+            "                    backend=backend, seed=seed)\n"
+            "    return (time.perf_counter() - start) / 5\n"
+            "\n"
+            "rust_s, python_s = timed(\"genetic\"), timed(\"python\")\n"
+            "print(f\"rust   {rust_s * 1000:7.1f} ms/solve\")\n"
+            "print(f\"python {python_s * 1000:7.1f} ms/solve\")\n"
+            "print(f\"speedup {python_s / rust_s:5.1f}x\")"
         ),
     ]
     return nb

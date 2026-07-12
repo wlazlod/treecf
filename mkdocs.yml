@@ -59,5 +59,6 @@ nav:
       - Quickstart: notebooks/01-quickstart.ipynb
       - Credit-risk walkthrough: notebooks/02-credit-risk-tutorial.ipynb
       - No-solver environments: notebooks/03-no-solver-environments.ipynb
+  - Benchmarks: benchmarks-genetic-rust.md
   - API reference: api.md
   - FAQ: faq.md

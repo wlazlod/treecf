@@ -3,12 +3,13 @@
 ## Install
 
 ```bash
-pip install treecf                       # numpy-only core + genetic backend
+pip install treecf                       # genetic backend (bundled Rust core)
 pip install "treecf[cpsat]"              # exact CP-SAT backend (ortools)
 pip install "treecf[xgboost,viz]"        # parser extras, matplotlib plots
 ```
 
-The core depends on numpy alone. Model parsers accept JSON dumps directly, so
+numpy is the only Python dependency; the genetic engine is a compiled Rust core
+shipped inside the wheel. Model parsers accept JSON dumps directly, so
 explanations can be generated on machines where the training framework (or any
 solver) is not installed.
 
@@ -47,7 +48,9 @@ else:
 
 `proof="optimal"` means exactly that: no counterfactual with a smaller weighted
 distance satisfies the target and every constraint. The genetic backend
-(`backend="genetic"`, zero solver dependencies) returns `proof="heuristic"` instead.
+(`backend="genetic"`, zero solver dependencies, Rust core) returns
+`proof="heuristic"` instead — typically in milliseconds even on 300-tree models;
+`backend="python"` runs the original numpy implementation of the same algorithm.
 
 ## The result object
 

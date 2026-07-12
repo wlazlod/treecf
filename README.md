@@ -29,7 +29,7 @@ and scikit-learn tree ensembles.
 ## Installation
 
 ```bash
-pip install treecf              # core: numpy only, genetic backend
+pip install treecf              # genetic backend (bundled Rust engine); numpy is the only Python dep
 pip install "treecf[cpsat]"     # exact CP-SAT backend (ortools)
 pip install "treecf[xgboost]"   # model parsers as extras; JSON dumps work without them
 pip install "treecf[viz]"       # matplotlib plots

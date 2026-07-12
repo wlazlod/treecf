@@ -18,8 +18,24 @@ constraints block it.
 
 **Can I run treecf where xgboost/ortools cannot be installed?**
 Yes. Parsers accept JSON dumps (`Booster.save_model("model.json")`,
-`dump_model()`, CatBoost `format="json"`), and the genetic backend needs only
-numpy: `pip install treecf` on the scoring host, ship the dump file.
+`dump_model()`, CatBoost `format="json"`), and the genetic backend has no
+dependencies beyond the wheel itself: `pip install treecf` on the scoring host,
+ship the dump file.
+
+**What is the Rust core, and do I need a Rust toolchain?**
+`backend="genetic"` runs a compiled Rust engine bundled inside the platform
+wheel (44–58× faster than the equivalent numpy implementation — see the
+[benchmarks](benchmarks-genetic-rust.md)). Installing from a wheel needs no
+toolchain; only building from the sdist compiles Rust. The engine is held to
+bitwise parity with Python on tree evaluation and constraint checking, and to
+statistical parity on end-to-end GA outcomes; every result is float-verified
+in Python before being returned.
+
+**When would I use `backend="python"`?**
+It is the original numpy implementation of the same genetic algorithm, kept as
+a reference engine (and as the behavioral baseline the Rust core is tested
+against). Use it to cross-check results or in environments where the compiled
+extension cannot load; expect identical result quality, just slower.
 
 **Are mined constraints safe to apply automatically?**
 No, by design. They are sample invariants, not domain truths; the API returns
