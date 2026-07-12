@@ -49,6 +49,7 @@ all = [
     "matplotlib>=3.8",
 ]
 dev = [
+    "maturin>=1.7",
     "pytest>=8.0",
     "pytest-cov>=5.0",
     "hypothesis>=6.100",
@@ -123,7 +124,10 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q --strict-markers -m 'not bench'"
-markers = ["bench: non-gating performance smoke benchmarks (run with -m bench)"]
+markers = [
+    "bench: non-gating performance smoke benchmarks (run with -m bench)",
+    "rust: cross-language tests requiring the dev Rust extension (maturin develop)",
+]
 filterwarnings = [
     "error",
     # sklearn warns when a wrapper fitted on a DataFrame-less array is queried with

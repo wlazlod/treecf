@@ -34,3 +34,4 @@ site/
 /CLAUDE.md
 /TREECF_HEURISTIC_SPEC.md
 /RUST_MIGRATION_AUDIT.md
+rust/target/
