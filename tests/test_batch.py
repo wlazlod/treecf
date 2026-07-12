@@ -120,6 +120,25 @@ class TestLeverBlocking:
         assert records[0].blocked_lever is None  # the primary plan blocks nothing
         assert all(r.blocked_lever for r in records[1:])
 
+    def test_batched_primaries_match_sequential_reference(self, exp: Explainer) -> None:
+        from treecf.batch import _row_by_lever_blocking
+
+        batch = exp.explain_batch(X, TARGET, n_per_example=3, diversity="lever-blocking", seed=5)
+        reference = Explainer(_ir(), normalizers=np.ones(3))
+        expected_records = []
+        expected_essential = {}
+        for i in range(len(X)):
+            rows, ess = _row_by_lever_blocking(
+                reference, X[i], TARGET, i, 3, "genetic", 10.0, 0.0, seed=5,
+            )
+            expected_records.extend(rows)
+            expected_essential[i] = ess
+        for got, want in zip(batch.records, expected_records, strict=True):
+            assert (got.id, got.k, got.blocked_lever) == (want.id, want.k, want.blocked_lever)
+            assert got.changes == want.changes
+            assert got.distance == want.distance
+        assert batch.essential_levers == expected_essential
+
     def test_clone_reuses_parent_rust_ensemble(self, exp: Explainer) -> None:
         exp.explain(X[0], TARGET, seed=0)
         clone = exp._with_extra_freezes(["a"])

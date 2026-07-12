@@ -23,7 +23,8 @@ from treecf._json import decode_floats, encode_floats
 from treecf.ir.evaluate import raw_score_batch_prepared
 
 if TYPE_CHECKING:
-    from treecf.api import Counterfactual, Explainer
+    from treecf.api import Counterfactual, Explainer, Infeasible
+    from treecf.backends.genetic import GeneticResult
     from treecf.targets import Target
 
 FloatArray = npt.NDArray[np.float64]
@@ -192,6 +193,13 @@ def explain_batch(
             time_budget_s, sparsity_weight, seed=seed,
         )
     else:
+        primaries: list[Counterfactual | Infeasible] | None = None
+        if diversity == "lever-blocking" and backend in ("genetic", "genetic-rust"):
+            # All rows' primary solves share the constraints, so they run as
+            # one parallel Rust call; the per-lever loop stays sequential.
+            primaries = _lever_primaries(
+                explainer, X, target, time_budget_s, sparsity_weight, seed=seed
+            )
         for i, row_id in enumerate(row_ids):
             if diversity == "seeds":
                 row_records = _row_by_seeds(
@@ -203,6 +211,7 @@ def explain_batch(
                 row_records, row_essential = _row_by_lever_blocking(
                     explainer, X[i], target, row_id, n_per_example,
                     backend, time_budget_s, sparsity_weight, seed=seed,
+                    primary=None if primaries is None else primaries[i],
                 )
                 essential[row_id] = row_essential
             records.extend(row_records)
@@ -280,20 +289,7 @@ def _rows_by_seed_waves(
             for a in range(n)
         ]
         results = explainer._solve_batch(X, tasks, interval, time_budget_s, sparsity_weight)
-        # One vectorized IR pass scores the wave's candidates (§8.1 stays in
-        # float space through the IR). NaN candidates keep the scalar path so
-        # models without missing routing fail exactly as in a single explain.
-        candidates = {
-            t: result.x_cf for t, result in enumerate(results) if result.x_cf is not None
-        }
-        scorable = [t for t, cf in candidates.items() if not np.isnan(cf).any()]
-        scores: dict[int, float] = {}
-        if scorable:
-            stacked = np.stack([candidates[t] for t in scorable])
-            wave_scores = raw_score_batch_prepared(
-                explainer._prepared_tree_arrays(), explainer.ir.base_score, stacked
-            )
-            scores = dict(zip(scorable, (float(s) for s in wave_scores), strict=True))
+        scores = _wave_scores(explainer, results)
         for t, ((i, attempt_seed), result) in enumerate(zip(tasks, results, strict=True)):
             if len(found[i]) == n or result.x_cf is None:
                 continue
@@ -316,6 +312,56 @@ def _rows_by_seed_waves(
             _record_from(row_id, k, cf, seed=cf_seed) for k, (cf, cf_seed) in enumerate(ranked)
         )
     return records
+
+
+def _wave_scores(explainer: Explainer, results: Sequence[GeneticResult]) -> dict[int, float]:
+    """One vectorized IR pass over a wave's candidates (§8.1 stays in float
+    space through the IR). NaN candidates keep the scalar path so models
+    without missing routing fail exactly as in a single explain."""
+    candidates = {
+        t: result.x_cf for t, result in enumerate(results) if result.x_cf is not None
+    }
+    scorable = [t for t, cf in candidates.items() if not np.isnan(cf).any()]
+    if not scorable:
+        return {}
+    stacked = np.stack([candidates[t] for t in scorable])
+    wave_scores = raw_score_batch_prepared(
+        explainer._prepared_tree_arrays(), explainer.ir.base_score, stacked
+    )
+    return dict(zip(scorable, (float(s) for s in wave_scores), strict=True))
+
+
+def _lever_primaries(
+    explainer: Explainer,
+    X: FloatArray,
+    target: Target,
+    time_budget_s: float,
+    sparsity_weight: float,
+    seed: int,
+) -> list[Counterfactual | Infeasible]:
+    """All rows' primary lever-blocking solves in one parallel Rust call.
+
+    Each outcome is bitwise-identical to ``explainer.explain(X[i], ..., seed=seed)``.
+    """
+    from treecf.api import Infeasible
+
+    if explainer.plausibility is not None and np.isnan(X).any():
+        raise TreecfError("plausibility with missing factual values is not supported")
+    interval = target.raw_interval(explainer.ir.link)
+    tasks = [(i, seed) for i in range(len(X))]
+    results = explainer._solve_batch(X, tasks, interval, time_budget_s, sparsity_weight)
+    scores = _wave_scores(explainer, results)
+    outcomes: list[Counterfactual | Infeasible] = []
+    for t, result in enumerate(results):
+        if result.x_cf is None:
+            outcomes.append(Infeasible(reason="heuristic search exhausted (genetic backend)"))
+        else:
+            outcomes.append(
+                explainer._finalize_candidate(
+                    X[t], result.x_cf, interval, result.stats, score=scores.get(t)
+                )
+            )
+    return outcomes
 
 
 def _row_by_seeds(
@@ -363,13 +409,17 @@ def _row_by_lever_blocking(
     time_budget_s: float,
     sparsity_weight: float,
     seed: int,
+    primary: Counterfactual | Infeasible | None = None,
 ) -> tuple[list[BatchRecord], list[str]]:
     from treecf.api import Counterfactual
 
-    primary = explainer.explain(
-        x, target, backend=backend, time_budget_s=time_budget_s,
-        sparsity_weight=sparsity_weight, seed=seed,
-    )
+    if primary is None:
+        explained = explainer.explain(
+            x, target, backend=backend, time_budget_s=time_budget_s,
+            sparsity_weight=sparsity_weight, seed=seed,
+        )
+        assert not isinstance(explained, dict)  # bands are rejected by explain_batch
+        primary = explained
     if not isinstance(primary, Counterfactual):
         return [_infeasible_record(row_id)], []
 
