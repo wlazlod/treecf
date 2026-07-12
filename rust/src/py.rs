@@ -1,9 +1,13 @@
 //! PyO3 glue — compiled only with the `python` feature (maturin builds).
 
-use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
+use numpy::{
+    IntoPyArray, PyArray1, PyArray2, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray2,
+    PyUntypedArrayMethods,
+};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
+use crate::constraints::{Constraints, LinearC};
 use crate::ir::{Ensemble, Link};
 
 #[pyclass(frozen)]
@@ -69,8 +73,144 @@ impl RustEnsemble {
     }
 }
 
+#[pyclass(frozen)]
+pub struct RustConstraints {
+    pub(crate) inner: Constraints,
+}
+
+#[pymethods]
+impl RustConstraints {
+    #[new]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        n_features: usize,
+        freeze: PyReadonlyArray1<u32>,
+        range_idx: PyReadonlyArray1<u32>,
+        range_lo: PyReadonlyArray1<f64>,
+        range_hi: PyReadonlyArray1<f64>,
+        equals_idx: PyReadonlyArray1<u32>,
+        equals_val: PyReadonlyArray1<f64>,
+        mono_idx: PyReadonlyArray1<u32>,
+        mono_dir: PyReadonlyArray1<i8>,
+        lin_offsets: PyReadonlyArray1<u32>,
+        lin_indices: PyReadonlyArray1<u32>,
+        lin_coefs: PyReadonlyArray1<f64>,
+        lin_op: PyReadonlyArray1<u8>,
+        lin_rhs: PyReadonlyArray1<f64>,
+        lin_policy: PyReadonlyArray1<u8>,
+        imp_cond_idx: PyReadonlyArray1<u32>,
+        imp_cond_val: PyReadonlyArray1<f64>,
+        imp_cons_idx: PyReadonlyArray1<u32>,
+        imp_cons_val: PyReadonlyArray1<f64>,
+        oh_offsets: PyReadonlyArray1<u32>,
+        oh_indices: PyReadonlyArray1<u32>,
+        am_idx: PyReadonlyArray1<u32>,
+        am_to: PyReadonlyArray1<f64>,
+        am_from: PyReadonlyArray1<f64>,
+    ) -> PyResult<Self> {
+        let lin_offsets = lin_offsets.as_slice()?;
+        let lin_indices = lin_indices.as_slice()?;
+        let lin_coefs = lin_coefs.as_slice()?;
+        let lin_op = lin_op.as_slice()?;
+        let lin_rhs = lin_rhs.as_slice()?;
+        let lin_policy = lin_policy.as_slice()?;
+        let mut linears = Vec::with_capacity(lin_op.len());
+        for l in 0..lin_op.len() {
+            let (start, end) = (lin_offsets[l] as usize, lin_offsets[l + 1] as usize);
+            linears.push(LinearC {
+                indices: lin_indices[start..end].to_vec(),
+                coefs: lin_coefs[start..end].to_vec(),
+                op: lin_op[l],
+                rhs: lin_rhs[l],
+                policy: lin_policy[l],
+            });
+        }
+        let oh_offsets = oh_offsets.as_slice()?;
+        let oh_indices = oh_indices.as_slice()?;
+        let onehot = (0..oh_offsets.len().saturating_sub(1))
+            .map(|g| oh_indices[oh_offsets[g] as usize..oh_offsets[g + 1] as usize].to_vec())
+            .collect();
+        let implications = imp_cond_idx
+            .as_slice()?
+            .iter()
+            .zip(imp_cond_val.as_slice()?)
+            .zip(
+                imp_cons_idx
+                    .as_slice()?
+                    .iter()
+                    .zip(imp_cons_val.as_slice()?),
+            )
+            .map(|((&ci, &cv), (&si, &sv))| (ci, cv, si, sv))
+            .collect();
+        let allow_missing = am_idx
+            .as_slice()?
+            .iter()
+            .zip(am_to.as_slice()?.iter().zip(am_from.as_slice()?))
+            .map(|(&j, (&to, &from))| (j, to, from))
+            .collect();
+        let ranges = range_idx
+            .as_slice()?
+            .iter()
+            .zip(range_lo.as_slice()?.iter().zip(range_hi.as_slice()?))
+            .map(|(&j, (&lo, &hi))| (j, lo, hi))
+            .collect();
+        let equals = equals_idx
+            .as_slice()?
+            .iter()
+            .zip(equals_val.as_slice()?)
+            .map(|(&j, &v)| (j, v))
+            .collect();
+        let monotone = mono_idx
+            .as_slice()?
+            .iter()
+            .zip(mono_dir.as_slice()?)
+            .map(|(&j, &d)| (j, d))
+            .collect();
+        Ok(Self {
+            inner: Constraints {
+                n_features,
+                freeze: freeze.as_slice()?.to_vec(),
+                ranges,
+                equals,
+                monotone,
+                linears,
+                implications,
+                onehot,
+                allow_missing,
+            },
+        })
+    }
+
+    fn check<'py>(
+        &self,
+        py: Python<'py>,
+        x_matrix: PyReadonlyArray2<f64>,
+        x: PyReadonlyArray1<f64>,
+    ) -> PyResult<Bound<'py, PyArray1<bool>>> {
+        let shape = x_matrix.shape();
+        let ok = self
+            .inner
+            .check(x_matrix.as_slice()?, shape[0], x.as_slice()?);
+        Ok(ok.into_pyarray(py))
+    }
+
+    fn repair<'py>(
+        &self,
+        py: Python<'py>,
+        x_matrix: PyReadonlyArray2<f64>,
+        x: PyReadonlyArray1<f64>,
+    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        let shape = x_matrix.shape();
+        let mut data = x_matrix.as_slice()?.to_vec();
+        self.inner.repair(&mut data, shape[0], x.as_slice()?);
+        let arr = PyArray1::from_vec(py, data);
+        Ok(arr.reshape([shape[0], shape[1]])?)
+    }
+}
+
 #[pymodule]
 fn _treecf_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RustEnsemble>()?;
+    m.add_class::<RustConstraints>()?;
     Ok(())
 }
