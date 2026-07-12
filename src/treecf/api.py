@@ -172,6 +172,14 @@ class Explainer:
             value_policy=self.value_policy,
             plausibility=self.plausibility,
         )
+        # Same frozen IR -> the marshaled Rust ensembles are reusable; only the
+        # constraints differ, so that cache entry is deliberately left out.
+        parent_cache: dict[str, object] = getattr(self, "_rust_cache", {})
+        clone._rust_cache = {
+            key: parent_cache[key]
+            for key in ("ensemble", "if_ensemble")
+            if key in parent_cache
+        }
         return clone
 
     def _explain_genetic(
