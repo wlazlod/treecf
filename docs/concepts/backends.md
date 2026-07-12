@@ -5,8 +5,13 @@ Backend selection is **explicit** — there is no silent fallback.
 | backend | dependency | proof | when |
 |---|---|---|---|
 | `"cpsat"` | `treecf[cpsat]` (ortools) | `optimal` (or `feasible` on timeout, with a gap) | default; exact optimality proofs |
-| `"genetic"` | none (numpy) | `heuristic` | solver-free environments; never claims optimality |
-| `"highs"` | planned v0.2 | — | raises `NotImplementedError` |
+| `"genetic"` | none (bundled Rust core) | `heuristic` | solver-free environments; 44–58× faster than the numpy engine ([benchmarks](../benchmarks-genetic-rust.md)) |
+| `"python"` | none (numpy) | `heuristic` | the original pure-Python GA, kept as a reference engine |
+| `"highs"` | planned | — | raises `NotImplementedError` |
+
+The Rust and Python genetic engines share one constraint compiler and are held
+to statistical parity (identical outcome distributions across seeds); every
+result from either engine is float-verified in Python before being returned.
 
 Requesting `backend="cpsat"` without ortools raises
 `MissingExtraError("pip install treecf[cpsat]")`.

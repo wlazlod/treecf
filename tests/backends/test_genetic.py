@@ -34,7 +34,7 @@ class TestBasics:
         res = exp.explain(
             np.array([0.0, 0.0]),
             target=Target.raw(op=">=", value=0.5),
-            backend="genetic",
+            backend="python",
             seed=1,
         )
         assert isinstance(res, Counterfactual)
@@ -51,7 +51,7 @@ class TestBasics:
         res = exp.explain(
             np.array([0.0, 3.0]),
             target=Target.raw(op=">=", value=0.5),
-            backend="genetic",
+            backend="python",
             seed=1,
         )
         assert isinstance(res, Counterfactual)
@@ -63,7 +63,7 @@ class TestBasics:
         res = exp.explain(
             np.array([0.0, 0.0]),
             target=Target.raw(op=">=", value=0.5),
-            backend="genetic",
+            backend="python",
             seed=1,
         )
         assert isinstance(res, Infeasible)
@@ -73,8 +73,8 @@ class TestBasics:
         exp = Explainer(_stump(), normalizers=np.ones(2))
         x = np.array([0.0, 0.0])
         target = Target.raw(op=">=", value=0.5)
-        r1 = exp.explain(x, target=target, backend="genetic", seed=7)
-        r2 = exp.explain(x, target=target, backend="genetic", seed=7)
+        r1 = exp.explain(x, target=target, backend="python", seed=7)
+        r2 = exp.explain(x, target=target, backend="python", seed=7)
         assert isinstance(r1, Counterfactual) and isinstance(r2, Counterfactual)
         np.testing.assert_array_equal(r1.x_cf, r2.x_cf)
 
@@ -88,7 +88,7 @@ class TestBasics:
         res = exp.explain(
             np.array([5.0, 0.0]),
             target=Target.raw(op="<=", value=-0.5),
-            backend="genetic",
+            backend="python",
             seed=3,
         )
         assert isinstance(res, Counterfactual)
@@ -112,7 +112,7 @@ class TestCrossBackendSoundness:
 
         exp = Explainer(ir, normalizers=np.ones(3))
         exact = exp.explain(x, target=target, backend="cpsat")
-        heur = exp.explain(x, target=target, backend="genetic", seed=seed)
+        heur = exp.explain(x, target=target, backend="python", seed=seed)
 
         if isinstance(exact, Counterfactual):
             assert isinstance(heur, Counterfactual), "GA missed a CP-SAT-feasible case"

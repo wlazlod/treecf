@@ -12,7 +12,10 @@ and scikit-learn tree ensembles.
 
 - **Tree-native and exact.** Models are parsed into a shared tree IR and encoded for CP-SAT:
   counterfactuals come with an optimality proof, not a heuristic guess. A solver-free genetic
-  backend (numpy only) covers environments where `ortools` cannot be installed.
+  backend covers environments where `ortools` cannot be installed — running on a **Rust core**
+  that is 44–58× faster than the equivalent numpy implementation
+  (see `docs/benchmarks-genetic-rust.md`; the pure-Python engine remains available as
+  `backend="python"`).
 - **Decision thresholds are first-class.** Targets are intervals on the raw model output —
   custom probability cutoffs, regression targets, and whole rating-grade ladders in one call.
 - **Real-world constraints.** Declarative layer for immutability, directionality, ranges,

@@ -27,7 +27,8 @@ NAMES = ("a", "b", "c", "f1", "f2", "f3")
 
 
 def rust_constraints(compiled: CompiledConstraints) -> object:
-    import _treecf_core
+    from treecf.backends.genetic_rust import _core as _load_core
+    _treecf_core = _load_core()
 
     flat = flatten_constraints(compiled)
     return _treecf_core.RustConstraints(

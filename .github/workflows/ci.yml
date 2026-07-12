@@ -20,6 +20,9 @@ jobs:
         with:
           enable-cache: true
 
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Set up Python
         run: uv python install ${{ matrix.python-version }}
 
@@ -58,6 +61,9 @@ jobs:
         with:
           enable-cache: true
 
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Set up Python
         run: uv python install 3.12
 
@@ -69,3 +75,22 @@ jobs:
 
       - name: Run IR conformance suite
         run: uv run pytest tests/ir/
+
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Format check
+        run: cargo fmt --check --manifest-path rust/Cargo.toml
+
+      - name: Clippy
+        run: cargo clippy --manifest-path rust/Cargo.toml -- -D warnings
+
+      - name: Unit tests
+        run: cargo test --manifest-path rust/Cargo.toml

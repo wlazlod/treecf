@@ -7,7 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.0] - 2026-07-11
+## [0.0.1] - 2026-07-12
+
+Version deliberately resets BELOW 0.1.0 (which was never published): per the
+Rust-migration spec, the Rust-backed rebuild supersedes the prior pure-Python
+implementation outright and restarts the version line.
+
+### Changed
+
+- **The genetic backend now runs on a Rust core by default** (44-58x faster
+  than the numpy implementation on realistic workloads; 24.6x single-threaded
+  — see docs/benchmarks-genetic-rust.md). `backend="genetic"` uses Rust;
+  the pure-Python GA remains available as `backend="python"`.
+- Packaging switched from hatchling (pure Python) to maturin (single mixed
+  Rust/Python package). Installing from source now requires a Rust toolchain;
+  platform wheels are built in CI. The numpy-only-core dependency policy ends;
+  runtime Python dependencies are unchanged (numpy only).
+
+### Added
+
+- `treecf._treecf_core` extension: tree-IR evaluation (bitwise-identical to
+  the Python evaluator), constraint check/repair (bitwise-identical), and the
+  genetic algorithm (statistically indistinguishable across 200 seeds x 10
+  scenarios; every result float-verified in Python).
+- Stage A parity harness: flat-array cross-language contract
+  (`treecf.ir.flatten`, `treecf.constraints.flatten`), golden per-seed
+  fixtures and 200-seed distributional baselines under tests/fixtures/parity/.
+
+### Unchanged
+
+- CP-SAT backend, constraint layer, targets, mining, viz, docs — the entire
+  0.1.0 feature set carries over. CP-SAT's future is a separate decision.
+
+## [0.1.0] - 2026-07-11 (never published)
 
 ### Added
 

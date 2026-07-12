@@ -1,6 +1,6 @@
 [project]
 name = "treecf"
-version = "0.1.0"
+version = "0.0.1"
 description = "Constrained, threshold-aware counterfactual explanations for tree ensembles (XGBoost, LightGBM, CatBoost, sklearn) via CP-SAT and a solver-free genetic backend."
 readme = "README.md"
 license = { text = "MIT" }
@@ -78,19 +78,15 @@ Issues = "https://github.com/wlazlod/treecf/issues"
 Changelog = "https://github.com/wlazlod/treecf/blob/main/CHANGELOG.md"
 
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["maturin>=1.7"]
+build-backend = "maturin"
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/treecf"]
-
-[tool.hatch.build.targets.sdist]
-include = [
-    "src/treecf",
-    "README.md",
-    "LICENSE",
-    "CHANGELOG.md",
-]
+[tool.maturin]
+python-source = "src"
+manifest-path = "rust/Cargo.toml"
+module-name = "treecf._treecf_core"
+features = ["extension-module"]
+include = [{ path = "README.md", format = "sdist" }, { path = "LICENSE", format = "sdist" }]
 
 [tool.ruff]
 line-length = 100
@@ -118,7 +114,7 @@ module = [
     "catboost.*",
     "sklearn.*",
     "matplotlib.*",
-    "_treecf_core",
+    "treecf._treecf_core",
 ]
 ignore_missing_imports = true
 

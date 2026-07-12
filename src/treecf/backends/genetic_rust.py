@@ -23,14 +23,14 @@ from treecf.ir.model import EnsembleIR
 FloatArray = npt.NDArray[np.float64]
 
 _BUILD_HINT = (
-    "backend='genetic-rust' requires the development Rust extension; build it with: "
-    "VIRTUAL_ENV=$PWD/.venv uv run maturin develop --release -m rust/Cargo.toml"
+    "the treecf._treecf_core extension is missing; reinstall treecf from a wheel, "
+    "or in a dev checkout run: uv sync (maturin builds the extension)"
 )
 
 
 def _core() -> Any:
     try:
-        import _treecf_core
+        import treecf._treecf_core as _treecf_core
     except ImportError as exc:
         raise MissingExtraError(_BUILD_HINT) from exc
     return _treecf_core

@@ -16,7 +16,8 @@ pytestmark = pytest.mark.rust
 
 
 def rust_ensemble(ir: EnsembleIR) -> object:
-    import _treecf_core
+    from treecf.backends.genetic_rust import _core as _load_core
+    _treecf_core = _load_core()
 
     flat = flatten_ir(ir)
     return _treecf_core.RustEnsemble(

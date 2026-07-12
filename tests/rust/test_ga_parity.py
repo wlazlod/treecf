@@ -36,7 +36,8 @@ PATHS = scenario_paths()
 
 
 def run_rust(scenario: Scenario, seed: int) -> dict[str, object]:
-    import _treecf_core
+    from treecf.backends.genetic_rust import _core as _load_core
+    _treecf_core = _load_core()
 
     ens = rust_ensemble(scenario.ir)
     cons = rust_constraints(scenario.compiled)
@@ -134,7 +135,8 @@ def test_statistical_parity_and_soundness(path: object) -> None:
 def test_cpsat_oracle_bracket(seed: int) -> None:
     """Rust GA never beats the proven optimum (fixed-point slack) and lands close."""
     pytest.importorskip("ortools")
-    import _treecf_core
+    from treecf.backends.genetic_rust import _core as _load_core
+    _treecf_core = _load_core()
 
     from treecf import Counterfactual, Explainer, Target
 

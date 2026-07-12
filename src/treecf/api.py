@@ -123,11 +123,13 @@ class Explainer:
                 x, target, backend, time_budget_s, sparsity_weight, num_workers, seed
             )
         interval = target.raw_interval(self.ir.link)
-        if backend in ("genetic", "genetic-rust"):
+        if backend in ("genetic", "genetic-rust", "python"):
             if n_counterfactuals > 1:
-                raise TreecfError("n_counterfactuals > 1 requires backend='cpsat' in v0.1 (§8.3)")
+                raise TreecfError("n_counterfactuals > 1 requires backend='cpsat' (§8.3)")
+            # "genetic" is the Rust engine (benchmark gate: 44-58x, see
+            # docs/benchmarks-genetic-rust.md); "python" keeps the numpy GA.
             return self._explain_genetic(
-                x, interval, time_budget_s, sparsity_weight, seed, rust=backend == "genetic-rust"
+                x, interval, time_budget_s, sparsity_weight, seed, rust=backend != "python"
             )
         solver = _select_backend(backend)
         if n_counterfactuals > 1:
@@ -598,4 +600,4 @@ def _select_backend(name: str) -> Backend:
         from treecf.backends.highs import HighsBackend
 
         return HighsBackend()
-    raise TreecfError(f"unknown backend {name!r}; use 'cpsat' or 'genetic'")
+    raise TreecfError(f"unknown backend {name!r}; use 'cpsat', 'genetic', or 'python'")
