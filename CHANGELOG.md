@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`explain_batch` runs its solves in parallel inside the Rust core**: the
+  seeds path solves one wave of independently seeded attempts per Rust call
+  (rayon across tasks, GIL released) and lever-blocking batches all primary
+  solves; per-wave verification scores come from one vectorized IR pass.
+  Records are identical to the former sequential per-row loop (same seeds,
+  dedup, and stopping rule), with one caveat: a solve that hits its
+  per-task `time_budget_s` under core contention may stop at a different
+  generation than it would sequentially. Also: routing-atomic cells are now
+  cached on the Rust ensemble instead of rebuilt per solve, and
+  lever-blocking clones reuse the parent's marshaled Rust ensembles.
+  ~1.7x batch throughput on a 4-core machine (`scripts/bench_batch.py`);
+  the gain grows with core count.
+
 ### Added
 
 - **Batch production**: `Explainer.explain_batch(X, target, n_per_example=k,

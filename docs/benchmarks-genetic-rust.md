@@ -33,3 +33,29 @@ evaluation and constraint check/repair, statistically indistinguishable on
 end-to-end GA outcomes across 200 seeds x 10 scenarios (feasibility, J via KS,
 generations), and every returned counterfactual is float-verified in Python.
 Reproduce with `scripts/bench_genetic.py`.
+
+## Batch production (`explain_batch`)
+
+Added 2026-07-12: `explain_batch` fans its independently seeded `(row, seed)`
+solves out with rayon inside one Rust call per attempt wave (seeds diversity)
+and batches all primary solves (lever-blocking); per-counterfactual
+verification scores come from one vectorized IR pass per wave. Records are
+identical to the sequential per-row loop (asserted inside the benchmark).
+
+Protocol: medium model (100 trees, depth 6, 20 features), 100 rows,
+`n_per_example=3`, warm caches, `time_budget_s=10`. Measured on a 4-core
+machine — the sequential baseline already uses rayon inside each solve, so the
+batch gain grows with core count.
+
+| Diversity | Sequential loop | Batched | Speedup |
+|---|---|---|---|
+| seeds (4 rayon threads) | 14.7 s (6.8 rows/s) | **8.6 s (11.7 rows/s)** | **1.7x** |
+| seeds (`RAYON_NUM_THREADS=1`) | 23.2 s (4.3 rows/s) | 19.4 s (5.2 rows/s) | 1.2x |
+| lever-blocking (4 threads) | 7.6 s (13.2 rows/s) | 6.7 s (15.0 rows/s) | 1.1x |
+
+Determinism caveat: each task keeps its own per-solve `time_budget_s`, but
+concurrent tasks share cores, so a task that hits its wall-clock budget under
+contention may stop at a different generation than it would sequentially.
+Results are bit-identical whenever no task hits its budget (stall and
+max-generation stops are deterministic). Reproduce with
+`scripts/bench_batch.py`.

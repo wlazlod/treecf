@@ -156,6 +156,11 @@ class Explainer:
         change-sets from different seeds, best-effort) or ``"lever-blocking"``
         (freeze each plan's biggest lever; also records essential levers).
         The returned ``BatchResult`` supports save/load/for_id/to_frame.
+
+        Solves run in parallel inside the Rust engine; ``time_budget_s`` is
+        per solve, so a solve that hits its wall-clock budget while sharing
+        cores may stop earlier than it would sequentially (results are
+        otherwise identical to solving row by row).
         """
         from treecf.batch import explain_batch
 

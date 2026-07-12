@@ -173,6 +173,15 @@ def explain_batch(
     sparsity_weight: float = 0.0,
     seed: int = 0,
 ) -> BatchResult:
+    """See ``Explainer.explain_batch``.
+
+    With the Rust backend, solves run in parallel inside the extension.
+    ``time_budget_s`` stays per solve, but concurrent solves share cores: a
+    solve that hits its wall-clock budget under contention may stop at a
+    different generation than it would sequentially. Results are otherwise
+    identical to solving row by row (stall/max-generation stops are
+    deterministic).
+    """
     if target.bands_spec is not None:
         raise TreecfError("Target.bands is not supported in explain_batch; loop bands explicitly")
     if diversity not in ("seeds", "lever-blocking"):
