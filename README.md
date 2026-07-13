@@ -6,7 +6,7 @@
 that the model's raw output lands in a target interval?"* — for XGBoost, LightGBM, CatBoost
 and scikit-learn tree ensembles.
 
-> Status: pre-release (v0.1). See the [documentation](https://wlazlod.github.io/treecf/) for concepts and tutorials.
+> Status: early pre-release — v0.0.1 on [PyPI](https://pypi.org/project/treecf/). See the [documentation](https://wlazlod.github.io/treecf/) for concepts and tutorials.
 
 ## Why another counterfactual package?
 

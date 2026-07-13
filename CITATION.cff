@@ -1,0 +1,19 @@
+cff-version: 1.2.0
+message: "If you use treecf in your research, please cite it as below."
+title: "treecf: constrained, threshold-aware counterfactual explanations for tree ensembles"
+type: software
+authors:
+  - family-names: "Wlazło"
+    given-names: "Daniel"
+    email: "wlazlo.daniel@gmail.com"
+version: 0.0.1
+date-released: 2026-07-13
+license: MIT
+repository-code: "https://github.com/wlazlod/treecf"
+url: "https://wlazlod.github.io/treecf/"
+keywords:
+  - counterfactual explanations
+  - explainable AI
+  - algorithmic recourse
+  - gradient boosting
+  - credit risk
