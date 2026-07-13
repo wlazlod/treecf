@@ -92,6 +92,18 @@ plot_tradeoff(plans, target=t)          # cost vs achieved score: which plan buy
 `diversity="lever-blocking"` instead re-solves with each plan's biggest lever
 frozen — and reports levers that turn out to be *essential*.
 
+For advice grouped by what a person controls together, ask for one plan per
+named feature group — see [Coalitions](concepts/coalitions.md):
+
+```python
+result = exp.explain_coalitions(
+    x_row, target=t,
+    coalitions={"debt": ["max_dpd_30d", "max_dpd_12m"], "income": ["income_monthly"]},
+    include_full=True,          # adds the unrestricted "(all levers)" baseline
+)
+plot_alternatives(result, explainer=exp)   # coalition names label the plans
+```
+
 ## Scale to a dataset
 
 ```python

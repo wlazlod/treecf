@@ -286,6 +286,41 @@ max-generation stops, the common case, are deterministic. The
 [credit-risk walkthrough](notebooks/02-credit-risk-tutorial.ipynb) mass-produces a day of
 recourse plans this way and visualizes the batch.
 
+## Grouped recourse: coalitions
+
+Everything above optimizes one global plan — the cheapest feasible change-set, wherever the
+levers happen to live. Sometimes that is the wrong shape for advice: a plan that asks the
+declined applicant to raise `income_monthly`, cut `utilization`, *and* wait out a delinquency
+mixes three different life projects into one instruction.
+
+The opt-in **coalitions mode** runs the very same pipeline once per named feature group, with
+every feature outside the group frozen — freezing is already a constraint the compiler and
+verifier understand, so no new search semantics are involved. For the running example:
+
+```python
+result = exp.explain_coalitions(
+    applicant, target=Target.probability(range=(0.0, 0.30)),
+    coalitions={
+        "debt history": ["max_dpd_30d", "max_dpd_12m", "months_since_last_delinq"],
+        "credit usage": ["utilization", "n_active_loans", "n_loans_total"],
+        "income":       ["income_monthly"],
+    },
+    include_full=True, seed=0,
+)
+```
+
+Each group answers its own question. A `Counterfactual` for `"debt history"` is a plan the
+applicant can execute on that front alone; an `Infeasible` for `"income"` is the finding that
+no realistic income change reaches the cutoff by itself — a hint a single mixed plan would
+have buried. The `"(all levers)"` baseline anchors the comparison: how much does restricting
+to one group cost relative to the unrestricted optimum? Verification is unchanged — every
+coalition plan is float-verified against that coalition's constraint set before it is
+returned. In batch mode (`explain_batch(..., diversity="coalitions")`) each coalition's rows
+solve as one parallel Rust wave.
+
+[Coalitions](concepts/coalitions.md) covers the semantics (overlaps, uncovered features, the
+reserved baseline name) and the comparison plots.
+
 ## Where to go next
 
 - [Models and the IR](concepts/models.md) — supported libraries, score semantics, parser
@@ -294,6 +329,7 @@ recourse plans this way and visualizes the batch.
 - [Constraints](concepts/constraints.md) — the constraint objects, string sugar, and mining.
 - [Missing values](concepts/missing-values.md) — NaN as a first-class value.
 - [Plausibility](concepts/plausibility.md) — the isolation-forest bound.
+- [Coalitions](concepts/coalitions.md) — grouped recourse, one plan per feature group.
 - [Backends and proofs](concepts/backends.md) — engine contract and history.
 - Tutorials: [Quickstart](notebooks/01-quickstart.ipynb), the
   [credit-risk walkthrough](notebooks/02-credit-risk-tutorial.ipynb), and
