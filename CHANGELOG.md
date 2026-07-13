@@ -112,7 +112,7 @@ version line.
   could route such values opposite to the IR. Both engines changed
   identically; parity fixtures regenerated.
 
-## [0.1.0] - unreleased
+## unreleased
 
 ### Added
 
