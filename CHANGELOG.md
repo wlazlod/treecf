@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Post-solve pruning**: every returned plan now drops changes that
+  verification proves unnecessary (cheapest first, each revert re-verified in
+  float space). The search's revert-to-factual mutation is stochastic, so a
+  stalled run could ship a residual micro-change that crossed no decision
+  threshold — pure distance cost with zero score effect.
+- `CITATION.cff`.
+
+### Changed
+
+- Compiled extensions are no longer tracked in git (history rewritten to drop
+  the committed `.so`; wheels come from CI, local builds via maturin).
+- Publish steps skip files already on the index, making tag-triggered
+  re-releases idempotent; retroactive `v0.0.1` tag and GitHub release created.
+- PyPI keywords no longer mention the removed CP-SAT backend; README/docs
+  state the published version (0.0.1) consistently.
+
 ## [0.0.1] - 2026-07-13
 
 First published release (PyPI). Version deliberately resets BELOW 0.1.0 (which

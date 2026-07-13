@@ -369,10 +369,49 @@ class Explainer:
         verification = self._verify(x, x_cf, interval, score=score)
         if verification is not None:  # defensive: the GA only returns checked individuals
             return Infeasible(reason=f"heuristic solution failed verification: {verification}")
+        x_cf = self._prune_changes(x, x_cf, interval)
         final_cf, snapped = self._apply_value_policies(x, x_cf, interval)
-        if final_cf is not x_cf:
-            score = raw_score(self.ir, final_cf)
+        score = raw_score(self.ir, final_cf)
         return self._result(x, final_cf, "heuristic", stats, snapped, score=score)
+
+    def _prune_changes(
+        self, x: FloatArray, x_cf: FloatArray, interval: tuple[float, float]
+    ) -> FloatArray:
+        """Greedily revert changes that verification proves unnecessary.
+
+        The search's revert-to-factual mutation is stochastic, so a stalled
+        run can leave residual micro-changes that cross no decision threshold
+        — they cost distance without moving the score. Reverting candidates
+        one at a time (cheapest change first) can only lower the objective,
+        and every kept revert is re-verified in float space, so the returned
+        plan keeps all its guarantees.
+        """
+        allow = self.compiled.allow_missing
+
+        def effort(j: int) -> float:
+            source, dest = x[j], x_cf[j]
+            if math.isnan(dest):
+                delta = allow[j][0]
+            elif math.isnan(source):
+                delta = allow[j][1]
+            else:
+                delta = abs(dest - source)
+            return float(self.weights[j] * delta / self.sigma[j])
+
+        changed = [
+            j
+            for j in range(len(x))
+            if (x[j] != x_cf[j]) and not (math.isnan(x[j]) and math.isnan(x_cf[j]))
+        ]
+        if len(changed) < 2:  # a single change is necessary by feasibility
+            return x_cf
+        candidate = x_cf.copy()
+        for j in sorted(changed, key=effort):
+            trial = candidate.copy()
+            trial[j] = x[j]
+            if self._verify(x, trial, interval) is None:
+                candidate = trial
+        return candidate
 
     def _prepared_tree_arrays(self) -> tuple[TreeArrays, ...]:
         if not hasattr(self, "_prepared_trees"):
