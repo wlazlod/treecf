@@ -1,4 +1,4 @@
-"""Public-API smoke for backend='genetic-rust' (migration P5)."""
+"""Public-API smoke for backend='genetic-rust'."""
 
 from __future__ import annotations
 

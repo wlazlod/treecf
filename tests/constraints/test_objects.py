@@ -1,4 +1,4 @@
-"""Constraint objects and their compilation to instance bounds (spec §7.1, M1 subset)."""
+"""Constraint objects and their compilation to instance bounds."""
 
 import numpy as np
 import pytest

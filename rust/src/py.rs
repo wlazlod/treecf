@@ -209,7 +209,7 @@ impl RustConstraints {
     }
 }
 
-/// Full GA solve (migration P4 test path; wired into the public API in P5).
+/// Full GA solve.
 /// Returns (x_cf | None, generations).
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]

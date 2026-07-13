@@ -1,4 +1,4 @@
-"""Rust constraint check/repair must be BITWISE-equal to Python (migration P3)."""
+"""Rust constraint check/repair must be BITWISE-equal to Python."""
 
 from __future__ import annotations
 

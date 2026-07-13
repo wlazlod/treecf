@@ -1,4 +1,4 @@
-"""Compilation and validation of the full M2 constraint set (spec §7.1, §7.3)."""
+"""Compilation and validation of the full M2 constraint set."""
 
 import numpy as np
 import pytest

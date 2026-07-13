@@ -1,4 +1,4 @@
-"""Rust GA statistical parity vs the Stage A distributional baselines (P4, D-H6).
+"""Rust GA statistical parity vs the recorded distributional baselines.
 
 Bitwise comparison is meaningless across RNGs; the gates are:
 - feasibility rate within 3 percentage points,

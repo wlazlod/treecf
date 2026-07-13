@@ -1,4 +1,4 @@
-"""IR dataclass construction and immutability (spec §3.1)."""
+"""IR dataclass construction and immutability."""
 
 import dataclasses
 

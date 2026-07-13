@@ -1,4 +1,4 @@
-"""Flat-array constraint serialization for the cross-language boundary (migration P1)."""
+"""Flat-array constraint serialization for the cross-language boundary."""
 
 from __future__ import annotations
 

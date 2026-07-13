@@ -1,4 +1,4 @@
-"""Counterfactual visualizations (D15). matplotlib lives behind the [viz] extra."""
+"""Counterfactual visualizations. matplotlib lives behind the [viz] extra."""
 
 from __future__ import annotations
 

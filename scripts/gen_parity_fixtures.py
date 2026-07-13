@@ -1,4 +1,4 @@
-"""Generate Stage A parity fixtures (migration P1).
+"""Generate cross-language parity fixtures.
 
 Run with: uv run python scripts/gen_parity_fixtures.py
 Regenerating overwrites tests/fixtures/parity/*.json — do this ONLY when the

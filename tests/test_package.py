@@ -1,4 +1,4 @@
-"""Package-level invariants: version mirroring and lazy-import discipline (D10)."""
+"""Package-level invariants: version mirroring and lazy-import discipline."""
 
 import subprocess
 import sys

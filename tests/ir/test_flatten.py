@@ -1,4 +1,4 @@
-"""Flat-array IR serialization: the cross-language boundary contract (migration P1)."""
+"""Flat-array IR serialization: the cross-language boundary contract."""
 
 from __future__ import annotations
 

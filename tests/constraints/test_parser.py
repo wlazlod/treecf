@@ -1,4 +1,4 @@
-"""String constraint sugar -> Linear objects (spec §7.2)."""
+"""String constraint sugar -> Linear objects."""
 
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ class TestGrammar:
         assert c == Linear(coefficients={"util": -0.5}, op=">=", rhs=-1.5)
 
     def test_parse_without_names_defers_validation(self) -> None:
-        # spec §10 usage: constraint("a <= b") with validation at Explainer compile time
+        # canonical usage: constraint("a <= b") with validation at Explainer compile time
         c = constraint("anything <= whatever")
         assert c == Linear(coefficients={"anything": 1.0, "whatever": -1.0}, op="<=", rhs=0.0)
 

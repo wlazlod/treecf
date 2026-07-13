@@ -1,4 +1,4 @@
-"""NaN as a first-class counterfactual value (spec §4.2, §12.6)."""
+"""NaN as a first-class counterfactual value."""
 
 from __future__ import annotations
 

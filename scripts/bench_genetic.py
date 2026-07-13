@@ -1,4 +1,4 @@
-"""P6 benchmark gate: Python (numpy) GA vs Rust GA (spec §7 + D-H4 fairness protocol).
+"""Benchmark gate: Python (numpy) GA vs Rust GA.
 
 - same seeds per config, infinite time budget (stall/max-gen stopping only)
 - only the solve call is timed; marshaling/Explainer setup excluded; 1 warmup each

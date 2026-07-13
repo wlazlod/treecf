@@ -1,6 +1,6 @@
 """XGBoost parser: LT convention, explicit missing branch via default_left.
 
-base_score semantics (OQ1): the JSON model stores ``learner_model_param.base_score``
+base_score semantics: the JSON model stores ``learner_model_param.base_score``
 in *output* space — probability for ``binary:logistic``, target units for
 ``reg:squarederror``. The raw-space intercept is therefore ``logit(base_score)``
 for the sigmoid link and ``base_score`` unchanged for the identity link.

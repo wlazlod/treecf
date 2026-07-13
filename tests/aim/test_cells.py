@@ -1,4 +1,4 @@
-"""Cell construction (spec §5.1): half-open cells with exact side assignment, no nextafter."""
+"""Cell construction: half-open cells with exact side assignment, no nextafter."""
 
 from __future__ import annotations
 
@@ -80,7 +80,7 @@ class TestCellPointOps:
 
 
 class TestRoutingAtomicity:
-    """Gating property (§5.1/§5.3): every point of a cell routes to the same leaves."""
+    """Gating property: every point of a cell routes to the same leaves."""
 
     @pytest.mark.parametrize("seed", range(10))
     def test_points_within_cells_share_leaf_assignment(self, seed: int) -> None:

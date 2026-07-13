@@ -1,4 +1,4 @@
-"""Dump-file entry point: parse library JSON dumps without the training framework (D10)."""
+"""Dump-file entry point: parse library JSON dumps without the training framework."""
 
 from __future__ import annotations
 

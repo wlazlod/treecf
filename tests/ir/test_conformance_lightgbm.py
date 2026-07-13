@@ -1,4 +1,4 @@
-"""LightGBM parser conformance (spec §3.3–§3.4): LE convention, missing_type semantics."""
+"""LightGBM parser conformance: LE convention, missing_type semantics."""
 
 from __future__ import annotations
 

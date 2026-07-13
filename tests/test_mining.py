@@ -1,4 +1,4 @@
-"""Constraint mining (spec §7.5, §12.9): planted invariants, reduction, ranking."""
+"""Constraint mining: planted invariants, reduction, ranking."""
 
 from __future__ import annotations
 

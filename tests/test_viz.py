@@ -1,4 +1,4 @@
-"""Viz smoke tests (D15): figures render on Agg with the expected structure."""
+"""Viz smoke tests: figures render on Agg with the expected structure."""
 
 from __future__ import annotations
 

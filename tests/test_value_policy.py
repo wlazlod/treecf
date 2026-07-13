@@ -1,4 +1,4 @@
-"""Per-feature value policies: integer/grid snapping inside the chosen cell (spec §5.6)."""
+"""Per-feature value policies: integer/grid snapping inside the chosen cell."""
 
 from __future__ import annotations
 

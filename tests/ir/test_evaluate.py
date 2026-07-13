@@ -1,4 +1,4 @@
-"""Float-space IR evaluation: op semantics at thresholds, NaN routing, link (spec §3.1–§3.2)."""
+"""Float-space IR evaluation: op semantics at thresholds, NaN routing, link."""
 
 import math
 

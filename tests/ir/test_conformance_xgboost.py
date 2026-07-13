@@ -1,4 +1,4 @@
-"""XGBoost parser conformance (spec §3.3–§3.4) including the OQ1 base_score gate."""
+"""XGBoost parser conformance including the base_score gate."""
 
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ def _train_booster(objective: str, base_score: float | None = None, seed: int = 
     ("objective", "base_score"),
     [
         ("binary:logistic", None),
-        ("binary:logistic", 0.2),  # OQ1: explicit prob-space base_score
+        ("binary:logistic", 0.2),  # explicit prob-space base_score
         ("reg:squarederror", None),
         ("reg:squarederror", 1.5),
     ],
@@ -51,7 +51,7 @@ def test_booster_conformance(objective: str, base_score: float | None) -> None:
 
 
 def test_json_dump_roundtrip_conformance(tmp_path: object) -> None:
-    """A saved JSON dump must parse identically to the live booster (D10)."""
+    """A saved JSON dump must parse identically to the live booster."""
     booster = _train_booster("binary:logistic")
     X, _, _ = make_synthetic(seed=7)
     path = f"{tmp_path}/model.json"

@@ -1,4 +1,4 @@
-"""Property suite (spec §12.4): every returned counterfactual satisfies every
+"""Property suite: every returned counterfactual satisfies every
 constraint and the target in float space, independently re-checked here
 (not via the library's own verifier)."""
 

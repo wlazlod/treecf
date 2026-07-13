@@ -1,4 +1,4 @@
-"""Normalizer chain MAD -> IQR -> range -> 1 (spec §4.1)."""
+"""Normalizer chain MAD -> IQR -> range -> 1."""
 
 import numpy as np
 import pytest

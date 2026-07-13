@@ -1,4 +1,4 @@
-"""Rust IR must be BITWISE-equal to the Python batch evaluator (migration P2)."""
+"""Rust IR must be BITWISE-equal to the Python batch evaluator."""
 
 from __future__ import annotations
 

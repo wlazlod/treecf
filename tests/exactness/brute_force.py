@@ -1,4 +1,4 @@
-"""Brute-force counterfactual oracle (spec §12.2) — ground truth for every backend.
+"""Brute-force counterfactual oracle — ground truth for every backend.
 
 Enumerates all cell combinations (guarded to <= MAX_COMBOS), places each feature at
 the point of cell ∩ constraint-bounds nearest to the factual value, and minimizes

@@ -1,4 +1,4 @@
-"""Target abstraction: intervals on the raw score, probability via logit (spec §6)."""
+"""Target abstraction: intervals on the raw score, probability via logit."""
 
 import math
 

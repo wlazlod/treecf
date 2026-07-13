@@ -1,4 +1,4 @@
-"""Generate and execute the three docs notebooks (committed executed, D15)."""
+"""Generate and execute the three docs notebooks (committed executed)."""
 
 import sys
 

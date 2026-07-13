@@ -1,4 +1,4 @@
-"""Stage A parity harness (migration P1).
+"""Cross-language parity harness.
 
 Scenario fixtures are JSON files under tests/fixtures/parity/ carrying the
 flat-array ensemble/constraint contract (shared with the Rust core), the

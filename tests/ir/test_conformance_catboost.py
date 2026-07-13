@@ -1,4 +1,4 @@
-"""CatBoost parser conformance: oblivious trees expanded to binary IR trees (§3.3)."""
+"""CatBoost parser conformance: oblivious trees expanded to binary IR trees."""
 
 from __future__ import annotations
 

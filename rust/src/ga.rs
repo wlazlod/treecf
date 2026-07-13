@@ -1,7 +1,7 @@
 //! Genetic counterfactual search — a faithful structural port of
-//! `treecf.backends.genetic.solve_genetic` (see RUST_MIGRATION_AUDIT.md §2-3).
+//! `treecf.backends.genetic.solve_genetic`.
 //!
-//! RNG: one sequential Pcg64Mcg stream (statistical parity with numpy, D-H6).
+//! RNG: one sequential Pcg64Mcg stream (statistical parity with numpy).
 //! Rayon parallelizes only RNG-free stages (fitness/check/repair), so results
 //! are identical across thread counts by construction — the audit showed child
 //! creation is 1-4 % of wall time, so sequential variation costs little.

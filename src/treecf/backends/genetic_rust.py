@@ -1,8 +1,8 @@
-"""Rust genetic backend wrapper (migration P5 — dev opt-in until the benchmark gate).
+"""Rust genetic backend wrapper — the default engine.
 
 Same contract as ``solve_genetic``; the heavy loop runs in the `_treecf_core`
 extension (built locally with maturin, GIL released). Statistical parity with
-the Python GA is established by the Stage A/D gates; results carry
+the Python GA is established by the parity test suite; results carry
 ``proof="heuristic"`` exactly like the Python backend.
 """
 

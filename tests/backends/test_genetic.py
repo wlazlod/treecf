@@ -1,4 +1,4 @@
-"""Genetic backend behavior (spec §8.2): feasibility-first, deterministic, numpy-only."""
+"""Genetic backend behavior: feasibility-first, deterministic, numpy-only."""
 
 from __future__ import annotations
 

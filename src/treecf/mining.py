@@ -5,8 +5,7 @@ explicit human review; nothing is ever auto-applied. Mined constraints are
 sample invariants, not domain truths: ``min_support = 1.0`` on a finite sample
 can be coincidence, and near-invariants (support in [report_threshold, 1)) are
 returned as ``DataQualityFinding`` records — a handful of violations of an
-otherwise universal rule usually signals an ETL defect, not a domain exception
-(OQ6).
+otherwise universal rule usually signals an ETL defect, not a domain exception.
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""Isolation-forest plausibility as a hard constraint (spec §9)."""
+"""Isolation-forest plausibility as a hard constraint."""
 
 from __future__ import annotations
 

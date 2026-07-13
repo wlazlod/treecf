@@ -1,4 +1,4 @@
-"""Generic IR conformance runner (spec §3.4), reused by every parser's conformance test."""
+"""Generic IR conformance runner, reused by every parser's conformance test."""
 
 from __future__ import annotations
 
