@@ -294,6 +294,51 @@ def tutorial() -> nbf.NotebookNode:
         nbf.v4.new_code_cell(
             "plot_batch_deltas(batch, explainer=exp);   # deltas in sigma units"
         ),
+        nbf.v4.new_markdown_cell(
+            "## 6. Coalitions: grouped recourse\n\n"
+            "A single plan can mix unrelated levers — income, credit usage, and debt "
+            "history in one instruction. **Coalitions** split recourse by what the "
+            "applicant controls together: one counterfactual per named feature group, "
+            "each allowed to change only its own group. An *infeasible* group is a "
+            "finding in itself: that front alone cannot reach the target. The "
+            "`\"(all levers)\"` baseline shows what the grouping costs versus the "
+            "unrestricted optimum. Opt-in — plain `explain` is unchanged."
+        ),
+        nbf.v4.new_code_cell(
+            "groups = {\n"
+            "    \"debt history\": [\"max_dpd_30d\", \"max_dpd_12m\","
+            " \"months_since_last_delinq\"],\n"
+            "    \"credit usage\": [\"utilization\", \"n_active_loans\","
+            " \"n_loans_total\"],\n"
+            "    \"income\":       [\"income_monthly\"],\n"
+            "}\n"
+            "grouped = exp.explain_coalitions(\n"
+            "    applicant, target=Target.probability(range=(0.0, cutoff)),\n"
+            "    coalitions=groups, include_full=True, seed=0,\n"
+            ")\n"
+            "{name: (round(out.distance, 2) if hasattr(out, 'distance') else 'infeasible')\n"
+            " for name, out in grouped.items()}"
+        ),
+        nbf.v4.new_code_cell(
+            "plot_alternatives(grouped, explainer=exp);   # coalition names label the plans"
+        ),
+        nbf.v4.new_code_cell(
+            "plot_tradeoff(grouped, target=Target.probability(range=(0.0, cutoff)));"
+        ),
+        nbf.v4.new_markdown_cell(
+            "The same mode scales to the whole batch: one record per coalition per "
+            "applicant, with the group name in the `coalition` column."
+        ),
+        nbf.v4.new_code_cell(
+            "grouped_batch = exp.explain_batch(\n"
+            "    X[declined][:20], target=Target.probability(range=(0.0, cutoff)),\n"
+            "    diversity=\"coalitions\", coalitions=groups, include_full=True,\n"
+            "    ids=app_ids[:20], seed=0,\n"
+            ")\n"
+            "grouped_batch.to_frame()[\n"
+            "    [\"id\", \"k\", \"coalition\", \"feasible\", \"distance\", \"n_changed\"]\n"
+            "].head(8)"
+        ),
     ]
     return nb
 

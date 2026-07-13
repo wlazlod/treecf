@@ -28,6 +28,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Coalitions mode (opt-in)**: `Explainer.explain_coalitions(x, target,
+  coalitions={...}, include_full=False)` produces one counterfactual per named
+  feature group, each solve allowed to change only that group (everything else
+  frozen); `Infeasible` per group means that group alone cannot reach the
+  target. `explain_batch(..., diversity="coalitions")` scales it to datasets
+  (one record per group per row; new `coalition` field on `BatchRecord`,
+  persisted and exposed in `to_frame()`). `plot_alternatives`/`plot_tradeoff`
+  accept the outcome mapping directly, labeling plans by coalition name.
+  Never the default mode. Documented in a new Concepts page, a "Grouped
+  recourse" section of How it works, and a tutorial section.
 - **Single-instance comparison plots** (`treecf.viz`): `plot_alternatives`
   (every alternative plan's changes on shared axes, one color per plan,
   σ-standardized with an explainer) and `plot_tradeoff` (cost vs achieved
