@@ -23,12 +23,14 @@ jobs:
       fail-fast: false
       matrix:
         platform:
-          - { name: linux-x86_64, runner: ubuntu-latest, target: x86_64, args: "--manylinux auto" }
-          - { name: linux-aarch64, runner: ubuntu-latest, target: aarch64, args: "--manylinux auto" }
-          - { name: musllinux-x86_64, runner: ubuntu-latest, target: x86_64, args: "--manylinux musllinux_1_2" }
-          - { name: macos-arm64, runner: macos-14, target: aarch64, args: "" }
-          - { name: macos-x86_64, runner: macos-13, target: x86_64, args: "" }
-          - { name: windows-x86_64, runner: windows-latest, target: x64, args: "" }
+          # manylinux is the maturin-action input (picks the build container);
+          # empty on macOS/Windows where it does not apply
+          - { name: linux-x86_64, runner: ubuntu-latest, target: x86_64, manylinux: auto }
+          - { name: linux-aarch64, runner: ubuntu-latest, target: aarch64, manylinux: auto }
+          - { name: musllinux-x86_64, runner: ubuntu-latest, target: x86_64, manylinux: musllinux_1_2 }
+          - { name: macos-arm64, runner: macos-14, target: aarch64 }
+          - { name: macos-x86_64, runner: macos-13, target: x86_64 }
+          - { name: windows-x86_64, runner: windows-latest, target: x64 }
     steps:
       - uses: actions/checkout@v4
 
@@ -36,7 +38,8 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.platform.target }}
-          args: --release --out dist ${{ matrix.platform.args }}
+          manylinux: ${{ matrix.platform.manylinux }}
+          args: --release --out dist
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
