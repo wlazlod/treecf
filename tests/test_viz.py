@@ -99,6 +99,26 @@ def test_plot_alternatives_empty_raises() -> None:
         plot_alternatives([])
 
 
+def test_plot_alternatives_mapping_uses_names_and_skips_infeasible() -> None:
+    outcomes = {
+        "debt": _cf({"a": (0.0, 1.0)}, 1.0),
+        "income": Infeasible(reason="unreachable"),
+        "behavior": _cf({"b": (0.0, 2.0)}, 2.0),
+    }
+    ax = plot_alternatives(outcomes)
+    legend_labels = [t.get_text() for t in ax.get_legend().get_texts()]
+    assert legend_labels == ["debt (J=1)", "behavior (J=2)"]
+
+
+def test_plot_tradeoff_mapping_labels_dots() -> None:
+    outcomes = {
+        "debt": _cf({"a": (0.0, 1.0)}, 1.0, score_prob=0.2),
+        "income": Infeasible(reason="unreachable"),
+    }
+    ax = plot_tradeoff(outcomes)
+    assert [t.get_text() for t in ax.texts] == ["debt"]
+
+
 def test_plot_alternatives_explainer_standardizes_by_sigma() -> None:
     from treecf import Explainer
     from treecf.ir.model import EnsembleIR, Link, Node, SplitOp, Tree

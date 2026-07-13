@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import math
 import os
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -47,6 +47,7 @@ class BatchRecord:
     score_prob: float | None
     seed: int | None = None  # diversity="seeds": the seed that produced this plan
     blocked_lever: str | None = None  # diversity="lever-blocking": the frozen lever
+    coalition: str | None = None  # diversity="coalitions": the group this plan may touch
 
 
 @dataclass(frozen=True)
@@ -89,6 +90,7 @@ class BatchResult:
                     "score_prob": record.score_prob,
                     "seed": record.seed,
                     "blocked_lever": record.blocked_lever,
+                    "coalition": record.coalition,
                 }
                 for record in self.records
             ],
@@ -122,6 +124,7 @@ class BatchResult:
                     score_prob=raw["score_prob"],
                     seed=raw["seed"],
                     blocked_lever=raw["blocked_lever"],
+                    coalition=raw.get("coalition"),  # absent in pre-coalition files
                 )
             )
         essential_ids = [decode_floats(k) for k in data.get("essential_lever_ids", [])]
@@ -151,6 +154,7 @@ class BatchResult:
                 "score_prob": record.score_prob,
                 "seed": record.seed,
                 "blocked_lever": record.blocked_lever,
+                "coalition": record.coalition,
                 "changed_features": sorted(record.changes),
             }
             for j, name in enumerate(self.feature_names):
@@ -172,6 +176,8 @@ def explain_batch(
     time_budget_s: float = 10.0,
     sparsity_weight: float = 0.0,
     seed: int = 0,
+    coalitions: Mapping[str, Sequence[str]] | None = None,
+    include_full: bool = False,
 ) -> BatchResult:
     """See ``Explainer.explain_batch``.
 
@@ -181,11 +187,19 @@ def explain_batch(
     different generation than it would sequentially. Results are otherwise
     identical to solving row by row (stall/max-generation stops are
     deterministic).
+
+    ``diversity="coalitions"`` produces one record per named coalition per
+    row (``n_per_example`` is not used); ``coalitions``/``include_full`` are
+    only valid in that mode.
     """
     if target.bands_spec is not None:
         raise TreecfError("Target.bands is not supported in explain_batch; loop bands explicitly")
-    if diversity not in ("seeds", "lever-blocking"):
-        raise TreecfError("diversity must be 'seeds' or 'lever-blocking'")
+    if diversity not in ("seeds", "lever-blocking", "coalitions"):
+        raise TreecfError("diversity must be 'seeds', 'lever-blocking', or 'coalitions'")
+    if diversity == "coalitions" and coalitions is None:
+        raise TreecfError("diversity='coalitions' requires a coalitions mapping")
+    if diversity != "coalitions" and (coalitions is not None or include_full):
+        raise TreecfError("coalitions/include_full are only valid with diversity='coalitions'")
     X = np.asarray(X, dtype=np.float64)
     row_ids: Sequence[object] = range(len(X)) if ids is None else list(ids)
     if len(row_ids) != len(X):
@@ -193,7 +207,13 @@ def explain_batch(
 
     records: list[BatchRecord] = []
     essential: dict[object, list[str]] = {}
-    if diversity == "seeds" and backend in ("genetic", "genetic-rust"):
+    if diversity == "coalitions":
+        assert coalitions is not None  # narrowed by the validation above
+        records = _rows_by_coalitions(
+            explainer, X, target, row_ids, coalitions, include_full,
+            backend, time_budget_s, sparsity_weight, seed=seed,
+        )
+    elif diversity == "seeds" and backend in ("genetic", "genetic-rust"):
         # Same attempts, dedup, and stopping rule as `_row_by_seeds`, but each
         # wave solves every unfinished row's next attempts in one parallel
         # Rust call — the output is identical to the sequential loop.
@@ -239,6 +259,7 @@ def _record_from(
     cf: Counterfactual,
     seed: int | None = None,
     blocked_lever: str | None = None,
+    coalition: str | None = None,
 ) -> BatchRecord:
     return BatchRecord(
         id=row_id,
@@ -252,13 +273,15 @@ def _record_from(
         score_prob=cf.score_prob,
         seed=seed,
         blocked_lever=blocked_lever,
+        coalition=coalition,
     )
 
 
-def _infeasible_record(row_id: object) -> BatchRecord:
+def _infeasible_record(row_id: object, k: int = 0, coalition: str | None = None) -> BatchRecord:
     return BatchRecord(
-        id=row_id, k=0, feasible=False, x_cf=None, changes={},
+        id=row_id, k=k, feasible=False, x_cf=None, changes={},
         distance=None, n_changed=None, score_raw=None, score_prob=None,
+        coalition=coalition,
     )
 
 
@@ -371,6 +394,79 @@ def _lever_primaries(
                 )
             )
     return outcomes
+
+
+def _rows_by_coalitions(
+    explainer: Explainer,
+    X: FloatArray,
+    target: Target,
+    row_ids: Sequence[object],
+    coalitions: Mapping[str, Sequence[str]],
+    include_full: bool,
+    backend: str,
+    time_budget_s: float,
+    sparsity_weight: float,
+    seed: int,
+) -> list[BatchRecord]:
+    """One record per named coalition per row (plus the optional baseline).
+
+    With the Rust backend each coalition's rows solve in one parallel wave on
+    a freeze-complement clone; ``backend="python"`` loops the same clones row
+    by row. Per row, feasible plans are ranked by distance (k = 0, 1, ...),
+    then infeasible coalitions follow in coalition order — an infeasible
+    record with ``coalition`` set means that group alone cannot reach the
+    target.
+    """
+    from treecf.api import _ALL_LEVERS, Counterfactual, Infeasible, _validate_coalitions
+
+    normalized = _validate_coalitions(coalitions, explainer.ir.feature_names, include_full)
+    solvers: dict[str, Explainer] = {}
+    if include_full:
+        solvers[_ALL_LEVERS] = explainer
+    solvers.update(explainer._coalition_explainers(normalized))
+
+    if explainer.plausibility is not None and np.isnan(X).any():
+        raise TreecfError("plausibility with missing factual values is not supported")
+    interval = target.raw_interval(explainer.ir.link)
+
+    outcomes: dict[str, list[Counterfactual | Infeasible]] = {}
+    rust = backend in ("genetic", "genetic-rust")
+    for name, solver in solvers.items():
+        if rust:
+            tasks = [(i, seed) for i in range(len(X))]
+            results = solver._solve_batch(X, tasks, interval, time_budget_s, sparsity_weight)
+            scores = _wave_scores(solver, results)
+            outcomes[name] = [
+                Infeasible(reason="heuristic search exhausted (genetic backend)")
+                if result.x_cf is None
+                else solver._finalize_candidate(
+                    X[i], result.x_cf, interval, result.stats, score=scores.get(i)
+                )
+                for i, result in enumerate(results)
+            ]
+        else:
+            outcomes[name] = [
+                solver._explain_one(X[i], target, backend, time_budget_s, sparsity_weight, seed)
+                for i in range(len(X))
+            ]
+
+    records: list[BatchRecord] = []
+    for i, row_id in enumerate(row_ids):
+        feasible = [
+            (name, outcome)
+            for name, outcome in ((n, outcomes[n][i]) for n in solvers)
+            if isinstance(outcome, Counterfactual)
+        ]
+        feasible.sort(key=lambda pair: pair[1].distance)
+        k = 0
+        for name, cf in feasible:
+            records.append(_record_from(row_id, k, cf, coalition=name))
+            k += 1
+        for name in solvers:
+            if not isinstance(outcomes[name][i], Counterfactual):
+                records.append(_infeasible_record(row_id, k=k, coalition=name))
+                k += 1
+    return records
 
 
 def _row_by_seeds(

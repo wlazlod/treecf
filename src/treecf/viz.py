@@ -91,19 +91,20 @@ def plot_ladder(bands_result: Mapping[str, object], ax: Any = None) -> Any:
     return ax
 
 
-def plot_alternatives(results: Sequence[Any], explainer: Any = None, ax: Any = None) -> Any:
+def plot_alternatives(results: Any, explainer: Any = None, ax: Any = None) -> Any:
     """Overlaid dumbbells: every alternative plan's changes for one instance.
 
-    Accepts ``Counterfactual`` objects or feasible ``BatchRecord`` entries
-    (anything with ``changes`` and ``distance``); infeasible records are
-    skipped. Each plan keeps one color across all its changes — meant for a
-    handful of alternatives for the same row (at most 10). With ``explainer``,
-    changes are plotted as standardized deltas from the factual (Δ/σ), so
-    features of different scales share one axis; without, raw values are shown
-    with gray factual dots.
+    Accepts a sequence of ``Counterfactual`` objects or feasible
+    ``BatchRecord`` entries, or a mapping of outcomes as returned by
+    ``explain_coalitions`` (keys become legend labels; ``Infeasible`` values
+    are skipped). Each plan keeps one color across all its changes — meant
+    for a handful of alternatives for the same row (at most 10). With
+    ``explainer``, changes are plotted as standardized deltas from the
+    factual (Δ/σ), so features of different scales share one axis; without,
+    raw values are shown with gray factual dots.
     """
     plt = _import_pyplot()
-    plans = [r for r in results if getattr(r, "feasible", True)]
+    plans = _plans_with_labels(results)
     if not plans:
         raise TreecfError("no feasible plans to plot")
     if len(plans) > 10:
@@ -115,7 +116,7 @@ def plot_alternatives(results: Sequence[Any], explainer: Any = None, ax: Any = N
             for name, s in zip(explainer.ir.feature_names, explainer.sigma, strict=True)
         }
     frequency: dict[str, int] = {}
-    for plan in plans:
+    for _, plan in plans:
         for name in plan.changes:
             frequency[name] = frequency.get(name, 0) + 1
     features = sorted(frequency, key=lambda name: (-frequency[name], name))
@@ -124,10 +125,11 @@ def plot_alternatives(results: Sequence[Any], explainer: Any = None, ax: Any = N
     if ax is None:
         _, ax = plt.subplots(figsize=(7, 0.8 * max(2, len(features))))
     step = min(0.18, 0.7 / len(plans))
-    for p, plan in enumerate(plans):
+    for p, (plan_name, plan) in enumerate(plans):
         color = f"C{p}"
         offset = (p - (len(plans) - 1) / 2) * step
-        label: str | None = f"plan {p + 1} (J={plan.distance:.3g})"
+        base = plan_name if plan_name is not None else f"plan {p + 1}"
+        label: str | None = f"{base} (J={plan.distance:.3g})"
         for name, (source, dest) in plan.changes.items():
             y = slots[name] + offset
             if math.isnan(dest) or math.isnan(source):
@@ -161,27 +163,29 @@ def plot_alternatives(results: Sequence[Any], explainer: Any = None, ax: Any = N
     return ax
 
 
-def plot_tradeoff(results: Sequence[Any], target: Any = None, ax: Any = None) -> Any:
+def plot_tradeoff(results: Any, target: Any = None, ax: Any = None) -> Any:
     """Cost vs achieved score for alternative plans of one instance.
 
     One dot per plan: x = distance J, y = the achieved probability (sigmoid
     models) or raw score. ``target`` draws the interval bounds the plans had
-    to reach. Accepts ``Counterfactual`` objects or feasible ``BatchRecord``
-    entries; infeasible records are skipped.
+    to reach. Accepts a sequence of ``Counterfactual`` objects or feasible
+    ``BatchRecord`` entries, or a mapping as returned by
+    ``explain_coalitions`` (keys label the dots; ``Infeasible`` skipped).
     """
     plt = _import_pyplot()
-    plans = [r for r in results if getattr(r, "feasible", True)]
+    plans = _plans_with_labels(results)
     if not plans:
         raise TreecfError("no feasible plans to plot")
-    prob_space = all(plan.score_prob is not None for plan in plans)
+    prob_space = all(plan.score_prob is not None for _, plan in plans)
 
     if ax is None:
         _, ax = plt.subplots(figsize=(6, 4))
-    for p, plan in enumerate(plans):
+    for p, (plan_name, plan) in enumerate(plans):
         score = plan.score_prob if prob_space else plan.score_raw
         ax.plot([plan.distance], [score], "o", color=f"C{p}", markersize=8)
         ax.annotate(
-            f"{p + 1}", xy=(plan.distance, score), xytext=(6, 4),
+            plan_name if plan_name is not None else f"{p + 1}",
+            xy=(plan.distance, score), xytext=(6, 4),
             textcoords="offset points", fontsize=9,
         )
     if target is not None:
@@ -191,6 +195,15 @@ def plot_tradeoff(results: Sequence[Any], target: Any = None, ax: Any = None) ->
     ax.set_ylabel("model probability" if prob_space else "raw score")
     ax.set_title("what each plan costs, and what it buys")
     return ax
+
+
+def _plans_with_labels(results: Any) -> list[tuple[str | None, Any]]:
+    """Feasible plans paired with labels (mapping keys, `coalition` fields, or None)."""
+    if isinstance(results, Mapping):
+        return [(str(k), v) for k, v in results.items() if not isinstance(v, Infeasible)]
+    return [
+        (getattr(r, "coalition", None), r) for r in results if getattr(r, "feasible", True)
+    ]
 
 
 def _target_bounds(target: Any, prob_space: bool) -> list[float]:

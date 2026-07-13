@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -25,6 +25,33 @@ if TYPE_CHECKING:
     from treecf.backends.genetic import GeneticResult
 
 FloatArray = npt.NDArray[np.float64]
+
+_ALL_LEVERS = "(all levers)"  # reserved coalition name for the unrestricted baseline
+
+
+def _validate_coalitions(
+    coalitions: Mapping[str, Sequence[str]],
+    feature_names: Sequence[str],
+    include_full: bool,
+) -> dict[str, tuple[str, ...]]:
+    """Normalize a coalition mapping; overlaps are allowed, unknown names are not."""
+    if not coalitions:
+        raise TreecfError("coalitions must contain at least one named group")
+    known = set(feature_names)
+    normalized: dict[str, tuple[str, ...]] = {}
+    for name, members in coalitions.items():
+        if include_full and name == _ALL_LEVERS:
+            raise TreecfError(
+                f"coalition name {_ALL_LEVERS!r} is reserved for the include_full baseline"
+            )
+        members = tuple(members)
+        if not members:
+            raise TreecfError(f"coalition {name!r} is empty")
+        unknown = [f for f in members if f not in known]
+        if unknown:
+            raise TreecfError(f"coalition {name!r} references unknown features: {unknown}")
+        normalized[name] = members
+    return normalized
 
 
 @dataclass(frozen=True)
@@ -149,13 +176,18 @@ class Explainer:
         time_budget_s: float = 10.0,
         sparsity_weight: float = 0.0,
         seed: int = 0,
+        coalitions: Mapping[str, Sequence[str]] | None = None,
+        include_full: bool = False,
     ) -> Any:
         """Mass-produce counterfactuals for a dataset; see ``treecf.batch``.
 
         ``n_per_example`` alternatives per row via ``diversity="seeds"`` (distinct
         change-sets from different seeds, best-effort) or ``"lever-blocking"``
         (freeze each plan's biggest lever; also records essential levers).
-        The returned ``BatchResult`` supports save/load/for_id/to_frame.
+        ``diversity="coalitions"`` instead produces one plan per named feature
+        group in ``coalitions`` per row (``n_per_example`` unused; see
+        ``explain_coalitions``). The returned ``BatchResult`` supports
+        save/load/for_id/to_frame.
 
         Solves run in parallel inside the Rust engine; ``time_budget_s`` is
         per solve, so a solve that hits its wall-clock budget while sharing
@@ -168,7 +200,73 @@ class Explainer:
             self, X, target, n_per_example=n_per_example, diversity=diversity,
             ids=ids, backend=backend, time_budget_s=time_budget_s,
             sparsity_weight=sparsity_weight, seed=seed,
+            coalitions=coalitions, include_full=include_full,
         )
+
+    def explain_coalitions(
+        self,
+        x: FloatArray,
+        target: Target,
+        coalitions: Mapping[str, Sequence[str]],
+        include_full: bool = False,
+        backend: str = "genetic",
+        time_budget_s: float = 10.0,
+        sparsity_weight: float = 0.0,
+        seed: int | None = None,
+    ) -> dict[str, Counterfactual | Infeasible]:
+        """One counterfactual per named feature coalition (opt-in mode).
+
+        Each coalition is solved with every feature *outside* it frozen, so a
+        plan only ever asks for changes within one group — grouped recourse
+        instead of one plan that mixes unrelated levers. Coalitions may
+        overlap; features in no coalition are never modified; an
+        ``Infeasible`` for a coalition means that group alone cannot reach
+        the target. ``include_full=True`` prepends an unrestricted baseline
+        under the reserved key ``"(all levers)"``. One solve per coalition
+        (milliseconds each); this mode is optional and never the default.
+        """
+        if target.bands_spec is not None:
+            raise TreecfError(
+                "Target.bands is not supported in explain_coalitions; loop bands explicitly"
+            )
+        normalized = _validate_coalitions(coalitions, self.ir.feature_names, include_full)
+        results: dict[str, Counterfactual | Infeasible] = {}
+        if include_full:
+            results[_ALL_LEVERS] = self._explain_one(
+                x, target, backend, time_budget_s, sparsity_weight, seed
+            )
+        for name, clone in self._coalition_explainers(normalized).items():
+            results[name] = clone._explain_one(
+                x, target, backend, time_budget_s, sparsity_weight, seed
+            )
+        return results
+
+    def _explain_one(
+        self,
+        x: FloatArray,
+        target: Target,
+        backend: str,
+        time_budget_s: float,
+        sparsity_weight: float,
+        seed: int | None,
+    ) -> Counterfactual | Infeasible:
+        """`explain` for a single-interval target, with the bands arm ruled out."""
+        result = self.explain(
+            x, target, backend=backend, time_budget_s=time_budget_s,
+            sparsity_weight=sparsity_weight, seed=seed,
+        )
+        assert not isinstance(result, dict)  # bands are rejected by the callers
+        return result
+
+    def _coalition_explainers(
+        self, coalitions: dict[str, tuple[str, ...]]
+    ) -> dict[str, Explainer]:
+        """One freeze-complement clone per coalition (Rust ensemble shared)."""
+        names = self.ir.feature_names
+        return {
+            name: self._with_extra_freezes([f for f in names if f not in set(members)])
+            for name, members in coalitions.items()
+        }
 
     def _with_extra_freezes(self, features: Sequence[str]) -> Explainer:
         """Clone with additional Freeze constraints (used by lever-blocking)."""
