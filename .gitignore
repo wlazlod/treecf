@@ -36,3 +36,6 @@ site/
 /RUST_MIGRATION_AUDIT.md
 rust/target/
 .cache/
+
+# compiled extension: built by maturin (CI wheels / local maturin develop), never tracked
+*.so
