@@ -59,6 +59,53 @@ common case, are deterministic.
 Reproduce with `scripts/bench_genetic.py` and `scripts/bench_batch.py` in the
 repository.
 
+### Against other CF libraries
+
+Measured against the pip-installable counterfactual libraries for tree models
+— [DiCE](https://github.com/interpretml/DiCE) (all three model-agnostic modes)
+and [NICE](https://github.com/DBrughmans/NICE) — under one protocol: the same
+XGBoost credit model (120 trees, depth 4, 8 features), the same 100 declined
+applicants, one counterfactual each, and the class flip (probability < 0.5) as
+the goal, since that is the only target every library expresses natively.
+Per-instance wall time excludes each method's one-time setup; validity is
+re-checked against the model, never taken from the library; treecf (v0.0.1,
+from PyPI) runs without constraints so no method solves a harder problem.
+Distance is the σ-normalized L1 over changed features — lower is a cheaper,
+more actionable plan.
+
+| Method | Valid | Median / instance | p95 | Features changed | Distance (L1/σ) |
+|---|---|---|---|---|---|
+| treecf | 98/100 | 0.021 s | 0.051 s | 1.7 | **1.0** |
+| NICE (sparsity) | 100/100 | **0.008 s** | 0.022 s | 2.0 | 2.7 |
+| DiCE (genetic) | 100/100 | 0.172 s | 0.400 s | 5.1 | 7.7 |
+| DiCE (random) | 100/100 | 0.229 s | 0.368 s | 1.6 | 14.8 |
+| DiCE (kdtree) | 100/100 | 0.305 s | 1.208 s | 5.3 | 8.4 |
+
+Whole-dataset production over the same model, 500 declined rows:
+
+| Method | Wall time | Rows / s |
+|---|---|---|
+| treecf `explain_batch` (one call) | **3.2 s** | **157** |
+| treecf `explain` loop | 9.9 s | 51 |
+| NICE loop | 11.3 s | 44 |
+| DiCE (random) loop | 142.1 s | 3.5 |
+
+Honest reading: DiCE is 8–15× slower per instance with 6–15× costlier plans;
+NICE — a lean nearest-neighbor greedy — is the real speed rival per instance,
+but its plans cost 2.7× more (it copies values from real training rows rather
+than taking threshold-aware minimal steps), it has no constraint mechanism,
+and treecf's batch mode is 3.5× faster end to end. treecf missed 2 of 100
+instances at the default budget — the search is heuristic and says so.
+alibi's `CounterfactualProto`, measured separately (it needs TensorFlow and
+is therefore not in the script), took ~72 s per instance in black-box mode on
+this model and found counterfactuals for 3 of 5 attempts: gradient-based
+methods pay dearly on non-differentiable ensembles.
+
+Caveats: one synthetic dataset, one machine (4 cores), default competitor
+settings, and pure-Python libraries against a compiled core. Reproduce with
+`uv run scripts/bench_vs_competitors.py` — its inline metadata pulls dice-ml
+and NICEx automatically.
+
 ## History
 
 Earlier development versions included an exact CP-SAT backend (via OR-Tools)
