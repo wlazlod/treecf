@@ -1,7 +1,7 @@
 [project]
 name = "treecf"
 version = "0.0.1"
-description = "Constrained, threshold-aware counterfactual explanations for tree ensembles (XGBoost, LightGBM, CatBoost, sklearn) via CP-SAT and a solver-free genetic backend."
+description = "Constrained, threshold-aware counterfactual explanations for tree ensembles (XGBoost, LightGBM, CatBoost, sklearn) on a bundled Rust genetic engine."
 readme = "README.md"
 license = { text = "MIT" }
 authors = [{ name = "Daniel Wlazlo", email = "wlazlo.daniel@gmail.com" }]

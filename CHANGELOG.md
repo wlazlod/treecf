@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Release**: platform wheels now include **linux-aarch64** (Graviton, Docker
+  on Apple Silicon) alongside linux/musllinux x86_64, macOS arm64/x86_64, and
+  Windows x64; the PyPI description no longer mentions the removed CP-SAT
+  backend.
 - **Docs**: the standalone Benchmarks page is gone; the headline numbers, the
   single-core explanation, and the batch-parallelism caveat now live in a
   "Performance" section of *Backends and proofs*. Full protocol and
