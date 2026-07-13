@@ -33,8 +33,8 @@ def parity_tolerance(ir: EnsembleIR) -> float:
     """Float32-aware parity bound: accumulation of T float32 leaf additions.
 
     Native GBDT predictors sum leaf values in float32, so parity with exact
-    float64 evaluation cannot beat ~T ulps relative error. The spec's original
-    1e-9/1e-7 float64 tolerances are unattainable against float32 outputs.
+    float64 evaluation cannot beat ~T ulps relative error; fixed float64
+    tolerances like 1e-9 are unattainable against float32 outputs.
     """
     eps32 = float(np.finfo(np.float32).eps)
     return max(1e-7, 2.0 * len(ir.trees) * eps32)

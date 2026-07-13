@@ -9,8 +9,7 @@ This article walks the whole pipeline for one instance: how the question is turn
 precise objective, why the search runs over a finite grid of model behaviors rather than over
 real numbers, how constraints and plausibility enter, what the genetic search actually does, and
 what happens between "the search found something" and "you get a `Counterfactual`". Each stage
-links to a concept page that covers it in depth; spec section references (`§`) point into
-`CFE_SPEC.md`, the design document the code itself cites.
+links to a concept page that covers it in depth.
 
 !!! example "Running example"
     A credit applicant is declined: the model puts their probability of default at 0.62,
@@ -44,7 +43,7 @@ flowchart TD
 
 ## The question, stated precisely
 
-"Smallest realistic change" becomes an optimization problem (§4). Given the factual instance
+"Smallest realistic change" becomes an optimization problem. Given the factual instance
 $x$, treecf searches for $x'$ minimizing
 
 $$
@@ -62,7 +61,7 @@ or three levers instead of nudging everything a little.
 Raw feature deltas are incomparable — 500 units of `income_monthly` is a rounding error, 0.5 of
 `utilization` is half the scale. Each feature's delta is divided by a robust scale $\sigma_j$
 fitted from a background sample: **MAD, falling back to IQR, then range, then 1.0** with a
-warning (§4.1). The chain matters in credit data, where features like DPD counts have a point
+warning. The chain matters in credit data, where features like DPD counts have a point
 mass at zero and `median = mode = 0` makes the MAD degenerate. You can override any $\sigma_j$
 and add per-feature weights $w_j$ — in the tutorials, `income_monthly` gets $w = 2$ because
 income is genuinely hard to change.
@@ -77,7 +76,7 @@ solved one after another. See [Targets](concepts/targets.md).
 ??? note "How NaN transitions are priced"
     A plan may set `months_since_last_delinq` to NaN (the record ages out) or fill a missing
     value in — but only where an `AllowMissing` constraint permits it, and the distance for
-    that transition is the constraint's explicit `delta_miss` (§4.2). There is deliberately
+    that transition is the constraint's explicit `delta_miss`. There is deliberately
     no default: a MAD-based price for "value becomes missing" would be meaningless. See
     [Missing values](concepts/missing-values.md).
 
@@ -85,7 +84,7 @@ solved one after another. See [Targets](concepts/targets.md).
 
 treecf never touches your model object during the search. XGBoost, LightGBM, CatBoost, and
 scikit-learn models — native objects or JSON dumps — are first parsed into one intermediate
-representation, `EnsembleIR` (§3): flat trees whose nodes store `(feature, threshold, op,
+representation, `EnsembleIR`: flat trees whose nodes store `(feature, threshold, op,
 missing_left)` exactly as the library stores them, plus a base score and a link function. The
 raw score is always $S(x) = \text{base\_score} + \sum_t \text{leaf}_t(x)$. Everything downstream
 — cells, the genetic engines, verification — speaks only IR, which is why a JSON dump on an
@@ -105,16 +104,16 @@ exp = Explainer(
 !!! warning "No LT/LE normalization"
     Libraries disagree on whether a split means `v < t` or `v <= t`. A tempting trick is to
     rewrite one into the other by shifting the threshold one float away (`nextafter`). treecf
-    forbids this (§3.2): the shifted threshold is a *different model* at exactly the values
+    forbids this: the shifted threshold is a *different model* at exactly the values
     counterfactuals love — points sitting right at a threshold. Every node keeps its native
     operator, and the parsers are conformance-tested against the source library on thousands
-    of probes, including NaN and threshold-adjacent values (§3.4).
+    of probes, including NaN and threshold-adjacent values.
 
 ## The search space: cells, not real numbers
 
 A tree ensemble is a piecewise-constant function. For any single feature, collect every
 threshold any tree splits on: those thresholds cut the real line into a finite set of
-**routing-atomic cells** (§5.1) — intervals inside which *every tree routes identically*.
+**routing-atomic cells** — intervals inside which *every tree routes identically*.
 Between two adjacent thresholds, moving the feature changes nothing about the model's output;
 only crossing a threshold does.
 
@@ -140,7 +139,7 @@ below 0.42" — treecf steps **one float32 ulp** inside the bound, not one float
 Realism comes from constraints: `Freeze("age")`, `Monotone("max_dpd_12m", "decrease")`,
 `Range`, `Equals`, `OneHot` for exploded categoricals, `Implies`, linear relations written as
 strings — `constraint("max_dpd_30d <= max_dpd_12m")`. Each constraint object is compiled
-**once, by a single visitor**, into two synchronized artifacts (§7.3):
+**once, by a single visitor**, into two synchronized artifacts:
 
 - an abstract constraint form (the MILP-safe subset — integer/bool variables, linear
   inequalities, half-reified implications), and
@@ -160,7 +159,7 @@ Feasible is not the same as *believable*: a plan can satisfy every declared rule
 in a region where no real applicant lives. Optionally, treecf bounds an isolation forest's
 anomaly score: the forest is parsed through the **same IR** (leaf value = depth-adjusted path
 length), and the requirement $s(x') \le \theta$ is algebraically equivalent to one linear bound
-on the summed path lengths (§9):
+on the summed path lengths:
 
 $$
 \sum_{t=1}^{T} h_t(x') \;\ge\; -\,T \cdot c(n) \cdot \log_2 \theta .
@@ -172,7 +171,7 @@ as the model itself. See [Plausibility](concepts/plausibility.md).
 ## The genetic search
 
 With the objective, the cells, and the compiled constraints in hand, the search itself is a
-seeded, constraint-aware genetic algorithm (§8.2). The default engine is a Rust core bundled in
+seeded, constraint-aware genetic algorithm. The default engine is a Rust core bundled in
 the wheel; `backend="python"` runs the numpy reference implementation of the same algorithm.
 [Backends and proofs](concepts/backends.md) summarizes the contract; here is the mechanism.
 
@@ -250,13 +249,13 @@ tier-0 individual wins.
 ## Nothing ships unverified
 
 The GA's winner is a candidate, not yet an answer. Before anything is returned, treecf
-re-verifies it **in float space through the IR** (§8.1 step 5): the raw score is recomputed and
+re-verifies it **in float space through the IR**: the raw score is recomputed and
 checked against the target interval, every feature against its instance bounds, NaN placement
 against `AllowMissing`, every linear constraint, `Implies`, and `OneHot` re-evaluated, and the
 plausibility score re-computed. A candidate that fails any check becomes `Infeasible` — an
 invalid counterfactual is never returned.
 
-Value policies run inside the same safety net (§5.6). If you declare
+Value policies run inside the same safety net. If you declare
 `value_policy={"n_active_loans": "integer"}` or a `Grid(step=50)` for income, the verified plan
 is snapped to conforming values *within their cells*; if snapping breaks validity, snaps are
 reverted one at a time until the plan verifies again. What you get back is honest about it:

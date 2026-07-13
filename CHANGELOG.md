@@ -8,9 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.0.1] - 2026-07-13
 
 First published release (PyPI). Version deliberately resets BELOW 0.1.0 (which
-was never published): per the Rust-migration spec, the Rust-backed rebuild
-supersedes the prior pure-Python implementation outright and restarts the
-version line.
+was never published): the Rust-backed rebuild supersedes the prior pure-Python
+implementation outright and restarts the version line.
 
 ### Changed
 
