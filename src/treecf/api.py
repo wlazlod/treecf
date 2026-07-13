@@ -269,13 +269,24 @@ class Explainer:
         }
 
     def _with_extra_freezes(self, features: Sequence[str]) -> Explainer:
-        """Clone with additional Freeze constraints (used by lever-blocking)."""
-        from treecf.constraints.objects import Freeze
+        """Clone with additional Freeze constraints (lever-blocking, coalitions).
 
+        ``AllowMissing`` on a newly frozen feature is dropped: a frozen value
+        cannot transition to NaN, and keeping both would (correctly) fail
+        constraint validation.
+        """
+        from treecf.constraints.objects import AllowMissing, Freeze
+
+        frozen = set(features)
+        kept = [
+            c
+            for c in self.compiled.constraints
+            if not (isinstance(c, AllowMissing) and c.feature in frozen)
+        ]
         clone = Explainer(
             self.ir,
             background=self.background,
-            constraints=list(self.compiled.constraints) + [Freeze(f) for f in features],
+            constraints=kept + [Freeze(f) for f in features],
             weights=dict(zip(self.ir.feature_names, self.weights.tolist(), strict=True)),
             normalizers=self.sigma,
             value_policy=self.value_policy,

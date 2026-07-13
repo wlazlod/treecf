@@ -106,6 +106,21 @@ class TestSingleRow:
         assert isinstance(baseline, Counterfactual) and isinstance(plain, Counterfactual)
         assert np.array_equal(baseline.x_cf, plain.x_cf, equal_nan=True)
 
+    def test_allow_missing_outside_coalition_is_dropped_not_conflicting(self) -> None:
+        from treecf import AllowMissing
+
+        exp = Explainer(
+            _ir(),
+            normalizers=np.ones(3),
+            constraints=[AllowMissing("c", delta_miss=1.0)],
+        )
+        # freezing the complement of {"a"} freezes "c"; AllowMissing("c") must
+        # not blow up the clone, and "a"-only plans must still be found
+        result = exp.explain_coalitions(X0, TARGET, {"first": ["a"]}, seed=0)
+        outcome = result["first"]
+        assert isinstance(outcome, Counterfactual)
+        assert set(outcome.changes) == {"a"}
+
     def test_frozen_coalition_is_infeasible_alone(self) -> None:
         frozen_a = Explainer(_ir(), normalizers=np.ones(3), constraints=[Freeze("a")])
         result = frozen_a.explain_coalitions(X0, TARGET, COALITIONS, seed=0)
