@@ -1,7 +1,7 @@
-"""Constrained genetic backend (spec §8.2) — numpy only, feasibility-first (Deb ranking).
+"""Constrained genetic backend — numpy only, feasibility-first (Deb ranking).
 
 Works in float space: scores via the vectorized IR evaluator, constraints via the
-compiler's vectorized check/repair pair (§7.3). Never claims optimality; the API
+compiler's vectorized check/repair pair. Never claims optimality; the API
 labels its results ``proof="heuristic"``.
 """
 

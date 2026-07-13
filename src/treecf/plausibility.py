@@ -1,4 +1,4 @@
-"""Plausibility as a hard isolation-forest constraint (spec §9, D7).
+"""Plausibility as a hard isolation-forest constraint.
 
 Anomaly score ``s(x) = 2 ** (-E[h(x)] / c(n))`` with the forest parsed through
 the same IR (leaf value = depth-adjusted path length). The bound ``s(x') <= theta``

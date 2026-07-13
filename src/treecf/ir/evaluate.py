@@ -12,7 +12,7 @@ from treecf.ir.model import EnsembleIR, Link, Node, SplitOp, Tree
 
 
 def raw_score(ir: EnsembleIR, x: npt.NDArray[np.float64]) -> float:
-    """Raw score ``S(x) = base_score + sum of leaf values`` (spec §3.1)."""
+    """Raw score ``S(x) = base_score + sum of leaf values``."""
     total = ir.base_score
     for tree in ir.trees:
         total += _leaf_value(tree, x)

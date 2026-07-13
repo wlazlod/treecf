@@ -1,4 +1,4 @@
-"""Model parsers: native objects or JSON dumps in, ``EnsembleIR`` out (spec §3.3).
+"""Model parsers: native objects or JSON dumps in, ``EnsembleIR`` out.
 
 Dispatch never imports a model library; native objects are recognized by their
 type's module and routed to the parser, which itself uses only dump payloads.

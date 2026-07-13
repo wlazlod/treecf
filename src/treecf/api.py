@@ -358,7 +358,7 @@ class Explainer:
         stats: dict[str, object],
         score: float | None = None,
     ) -> Counterfactual | Infeasible:
-        """Verify, snap, and package one solver candidate (§8.1 step 5).
+        """Verify, snap, and package one solver candidate.
 
         ``score`` is an optional precomputed ``raw_score(self.ir, x_cf)``
         (e.g. from a vectorized batch evaluation); it is recomputed whenever

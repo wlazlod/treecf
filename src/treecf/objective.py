@@ -1,4 +1,4 @@
-"""Per-feature distance normalizers: MAD -> IQR -> range -> 1 (spec §4.1).
+"""Per-feature distance normalizers: MAD -> IQR -> range -> 1.
 
 Credit features are heavy-tailed with point masses at zero (DPD counts,
 utilization), so the robust MAD comes first and the chain handles the

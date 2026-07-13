@@ -46,7 +46,7 @@ def plot_changes(cf: Counterfactual, ax: Any = None) -> Any:
 
 
 def plot_counterfactuals(results: Sequence[Counterfactual], ax: Any = None) -> Any:
-    """Changed-feature matrix comparing diverse counterfactuals (§8.3)."""
+    """Changed-feature matrix comparing diverse counterfactuals."""
     plt = _import_pyplot()
     features = sorted({name for cf in results for name in cf.changes})
     if ax is None:

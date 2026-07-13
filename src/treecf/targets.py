@@ -1,4 +1,4 @@
-"""Targets as intervals on the raw model output (spec §6, D3/D9)."""
+"""Targets as intervals on the raw model output."""
 
 from __future__ import annotations
 

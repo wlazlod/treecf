@@ -1,8 +1,8 @@
-"""Routing-atomic cells per feature (spec §5.1).
+"""Routing-atomic cells per feature.
 
 Cells are built directly from the ``(threshold, op)`` pairs stored in the IR;
 LT and LE at the same threshold produce a singleton cell for the threshold
-value itself. Normalizing operators via ``nextafter`` is forbidden (§3.2).
+value itself. Normalizing operators via ``nextafter`` is forbidden.
 """
 
 from __future__ import annotations
@@ -81,7 +81,7 @@ def build_cells(pairs: Iterable[tuple[float, SplitOp]]) -> tuple[Cell, ...]:
 
 
 def feature_cells(*irs: EnsembleIR) -> tuple[tuple[Cell, ...], ...]:
-    """Cells per feature across all given ensembles (model + optional isolation forest, §9)."""
+    """Cells per feature across all given ensembles (model + optional isolation forest)."""
     n_features = irs[0].n_features
     if any(ir.n_features != n_features for ir in irs):
         raise ValueError("all ensembles must share the same feature space")

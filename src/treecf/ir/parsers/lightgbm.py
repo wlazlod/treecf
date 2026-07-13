@@ -1,11 +1,11 @@
-"""LightGBM parser (spec §3.3): LE convention, double-precision thresholds.
+"""LightGBM parser: LE convention, double-precision thresholds.
 
 Missing-value routing depends on each node's ``missing_type``:
 - "NaN": NaN follows ``default_left``.
 - "None": LightGBM substitutes 0.0 for NaN, so ``missing_left`` is resolved to
   the side that 0.0 takes (``0.0 <= threshold``).
 - "Zero" (``zero_as_missing``): unsupported in v0.1 — zeros and NaN collapse
-  into one state that the IR cannot represent per §3.2.
+  into one state that the IR cannot represent
 
 ``boost_from_average`` folds the intercept into leaf values, so base_score = 0.
 """
@@ -84,7 +84,7 @@ def _walk(node: dict[str, Any], nodes: list[Node]) -> int:
     decision = node["decision_type"]
     if decision != "<=":
         raise UnsupportedModelError(
-            f"categorical split (decision_type {decision!r}) not supported in v0.1 (spec §1.2)"
+            f"categorical split (decision_type {decision!r}) not supported in v0.1"
         )
     threshold = float(node["threshold"])
     op = SplitOp.LE

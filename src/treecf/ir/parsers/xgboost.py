@@ -1,4 +1,4 @@
-"""XGBoost parser (spec §3.3): LT convention, explicit missing branch via default_left.
+"""XGBoost parser: LT convention, explicit missing branch via default_left.
 
 base_score semantics (OQ1): the JSON model stores ``learner_model_param.base_score``
 in *output* space — probability for ``binary:logistic``, target units for
@@ -114,7 +114,7 @@ def _parse_tree(tree: dict[str, Any]) -> Tree:
             continue
         if split_type is not None and split_type[i] != 0:
             raise UnsupportedModelError(
-                f"categorical split at node {i} not supported in v0.1 (spec §1.2)"
+                f"categorical split at node {i} not supported in v0.1"
             )
         nodes.append(
             Node(

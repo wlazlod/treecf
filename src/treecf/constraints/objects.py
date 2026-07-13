@@ -1,4 +1,4 @@
-"""Canonical constraint objects (spec §7.1). Frozen dataclasses; validation at compile time.
+"""Canonical constraint objects. Frozen dataclasses; validation at compile time.
 
 M1 subset: Freeze, Monotone, Range. Linear, Implies, OneHot, AllowMissing arrive in M2.
 """
@@ -34,7 +34,7 @@ class Range:
 
 @dataclass(frozen=True)
 class Linear:
-    """Linear inter-feature constraint: sum(coef * feature) op rhs (spec §7.1).
+    """Linear inter-feature constraint: sum(coef * feature) op rhs.
 
     ``missing_policy`` resolves the constraint when a referenced feature is NaN
     in the counterfactual: "satisfied" (vacuously true, the default),
@@ -72,7 +72,7 @@ class OneHot:
 
 @dataclass(frozen=True)
 class AllowMissing:
-    """NaN is a feasible counterfactual value for this feature (spec §4.2).
+    """NaN is a feasible counterfactual value for this feature.
 
     ``delta_miss`` prices the value<->NaN transition; pass ``delta_from_miss``
     for an asymmetric NaN->value cost (defaults to ``delta_miss``).

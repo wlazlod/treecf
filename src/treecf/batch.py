@@ -347,9 +347,9 @@ def _rows_by_seed_waves(
 
 
 def _wave_scores(explainer: Explainer, results: Sequence[GeneticResult]) -> dict[int, float]:
-    """One vectorized IR pass over a wave's candidates (§8.1 stays in float
-    space through the IR). NaN candidates keep the scalar path so models
-    without missing routing fail exactly as in a single explain."""
+    """One vectorized IR pass over a wave's candidates. NaN candidates keep the
+    scalar path so models without missing routing fail exactly as in a single
+    explain."""
     candidates = {
         t: result.x_cf for t, result in enumerate(results) if result.x_cf is not None
     }

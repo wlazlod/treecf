@@ -1,4 +1,4 @@
-"""Tree-ensemble intermediate representation (spec §3)."""
+"""Tree-ensemble intermediate representation."""
 
 from treecf.ir.model import EnsembleIR, Link, Node, SplitOp, Tree
 

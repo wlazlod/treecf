@@ -1,4 +1,4 @@
-"""Parity utilities between the IR and a native model (spec §3.4).
+"""Parity utilities between the IR and a native model.
 
 Probe points must be float32-representable: GBDT libraries store inputs and
 thresholds as float32, so a float64 probe closer to a threshold than float32

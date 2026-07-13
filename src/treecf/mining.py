@@ -1,4 +1,4 @@
-"""Data-driven constraint suggestion (spec §7.5, D11) — numpy only.
+"""Data-driven constraint suggestion — numpy only.
 
 Mines candidate invariants from a background sample and returns them for
 explicit human review; nothing is ever auto-applied. Mined constraints are
@@ -160,7 +160,7 @@ def suggest_constraints(
                         )
                     )
 
-    # equality-class collapse, then transitive reduction of the <= graph (§7.5)
+    # equality-class collapse, then transitive reduction of the <= graph
     representative = _union_find(p, equal_pairs)
     rep_edges = {
         (representative[a], representative[b])

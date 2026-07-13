@@ -1,4 +1,4 @@
-"""sklearn parsers (spec §3.3): RandomForest*, GradientBoosting*, HistGradientBoosting*.
+"""sklearn parsers: RandomForest*, GradientBoosting*, HistGradientBoosting*.
 
 Raw-score semantics per family (documented because they differ):
 - RandomForestClassifier: raw score = averaged class-1 probability, link IDENTITY.
@@ -9,7 +9,7 @@ Raw-score semantics per family (documented because they differ):
   routing via ``missing_go_to_left``. Reads the private ``_predictors`` arrays —
   covered by the conformance matrix, raises on shape changes rather than guessing.
 
-IsolationForest is parsed separately for plausibility (§9) with depth-based
+IsolationForest is parsed separately for plausibility with depth-based
 leaf values; see ``parse_isolation_forest``.
 """
 
@@ -153,7 +153,7 @@ def _tree_from_hist_nodes(nodes_array: Any) -> Tree:
 
 
 def parse_isolation_forest(model: Any) -> EnsembleIR:
-    """IsolationForest -> IR with depth-adjusted path lengths as leaf values (§9).
+    """IsolationForest -> IR with depth-adjusted path lengths as leaf values.
 
     Leaf value := depth(leaf) + c(n_samples(leaf)), so the ensemble raw score is
     ``sum_t h_t(x)`` and the anomaly score is ``2 ** (-mean_h / c(n))``.

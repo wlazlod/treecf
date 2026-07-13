@@ -1,7 +1,7 @@
-"""IR data model (spec §3.1).
+"""IR data model.
 
 Split operators are stored per node exactly as the source library defines them;
-normalizing LT <-> LE via ``nextafter`` is forbidden (spec §3.2).
+normalizing LT <-> LE via ``nextafter`` is forbidden.
 """
 
 from __future__ import annotations

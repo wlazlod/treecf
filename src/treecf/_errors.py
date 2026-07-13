@@ -1,4 +1,4 @@
-"""Exception types. Parsers and backends raise — they never degrade silently (D1, §3.4)."""
+"""Exception types. Parsers and backends raise — they never degrade silently."""
 
 from __future__ import annotations
 

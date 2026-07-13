@@ -1,4 +1,4 @@
-"""Constraint compiler (spec §7.3) — the single source of truth for constraint semantics.
+"""Constraint compiler — the single source of truth for constraint semantics.
 
 Freeze/Monotone/Range/Equals compile to per-feature interval bounds given the
 factual instance; Linear/Implies/OneHot/AllowMissing are exposed as structured,
@@ -71,7 +71,7 @@ class CompiledConstraints:
     binary_features: frozenset[int] = frozenset()
 
     def check_matrix(self, X: FloatArray, x: FloatArray) -> BoolArray:
-        """Vectorized feasibility of candidate rows against every constraint (§7.3)."""
+        """Vectorized feasibility of candidate rows against every constraint."""
         n, p = X.shape
         ok = np.ones(n, dtype=bool)
         lo, hi, _ = self.instance_bounds(x)
@@ -111,7 +111,7 @@ class CompiledConstraints:
         return ok
 
     def repair_matrix(self, X: FloatArray, x: FloatArray) -> FloatArray:
-        """Best-effort repair hints (§7.3): clip to bounds, fix NaN legality, order pairs."""
+        """Best-effort repair hints: clip to bounds, fix NaN legality, order pairs."""
         X = X.copy()
         p = X.shape[1]
         lo, hi, _ = self.instance_bounds(x)

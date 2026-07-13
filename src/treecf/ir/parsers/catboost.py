@@ -1,9 +1,9 @@
-"""CatBoost parser (spec §3.3): oblivious trees expanded to plain binary IR trees.
+"""CatBoost parser: oblivious trees expanded to plain binary IR trees.
 
 A depth-d oblivious tree stores d shared splits and 2^d leaf values; the leaf
 index is the bit pattern of "x > border" decisions with splits[i] as bit i.
 The expansion puts splits[d-1] at the root so leaf ranges stay contiguous, and
-rewrites "x > border -> bit 1" as op LE (x <= border -> left/bit 0), §3.2.
+rewrites "x > border -> bit 1" as op LE (x <= border -> left/bit 0)
 
 Borders are float32-quantized (cast back through float32, as with XGBoost).
 NaN routing: nan_value_treatment "AsFalse"/"AsIs" -> bit 0 (missing_left=True),
@@ -58,7 +58,7 @@ def parse_catboost_dump(dump: dict[str, Any]) -> EnsembleIR:
 
     float_features = dump["features_info"]["float_features"]
     if "cat_features" in dump["features_info"] and dump["features_info"]["cat_features"]:
-        raise UnsupportedModelError("categorical features are not supported in v0.1 (§1.2)")
+        raise UnsupportedModelError("categorical features are not supported in v0.1")
     flat_of = {f["feature_index"]: f["flat_feature_index"] for f in float_features}
     missing_left_of = {
         f["feature_index"]: f.get("nan_value_treatment", "AsIs") != "AsTrue"

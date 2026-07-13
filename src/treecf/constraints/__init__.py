@@ -1,4 +1,4 @@
-"""Declarative constraint layer (spec §7)."""
+"""Declarative constraint layer."""
 
 from treecf.constraints.compile import CompiledConstraints, compile_constraints
 from treecf.constraints.objects import (

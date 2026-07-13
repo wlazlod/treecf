@@ -1,4 +1,4 @@
-"""Hand-rolled recursive-descent parser for string constraint sugar (spec §7.2).
+"""Hand-rolled recursive-descent parser for string constraint sugar.
 
 Grammar (EBNF):
     constraint := expr op expr
