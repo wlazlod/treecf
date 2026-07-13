@@ -124,8 +124,11 @@ def evaluate_per_instance(
     }
 
 
+Rows = list[dict[str, object]]
+
+
 def run_scenario(
-    spec: dict[str, object], checkpoint: Callable[[list[dict[str, object]], list[dict[str, object]]], None]
+    spec: dict[str, object], checkpoint: Callable[[Rows, Rows], None]
 ) -> dict[str, object]:
     import dice_ml
     import xgboost as xgb
