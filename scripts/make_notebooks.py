@@ -351,7 +351,7 @@ def no_solver() -> nbf.NotebookNode:
             "Model-validation and audit hosts often cannot install the training "
             "framework or a solver. treecf parses **JSON dumps** directly, and its "
             "genetic backend runs on a **compiled Rust core bundled in the wheel** — "
-            "no ortools, no xgboost, no Python dependencies beyond numpy."
+            "no solver, no xgboost, no Python dependencies beyond numpy."
         ),
         nbf.v4.new_code_cell(DATA_CELL.strip()),
         nbf.v4.new_code_cell(TRAIN_CELL.strip()),
@@ -371,7 +371,7 @@ def no_solver() -> nbf.NotebookNode:
             ")"
         ),
         nbf.v4.new_markdown_cell(
-            "## Solve without ortools\n\nThe genetic engine is feasibility-first and "
+            "## Solve with the bundled engine\n\nThe genetic engine is feasibility-first and "
             "seed-deterministic. It returns `proof=\"heuristic\"` — it never claims "
             "optimality, and the result is still float-verified against the model "
             "before being returned."
@@ -391,8 +391,8 @@ def no_solver() -> nbf.NotebookNode:
             "`backend=\"python\"` runs the original numpy implementation of the same "
             "algorithm, kept as a reference engine — identical result quality (the two "
             "are held to statistical parity), just slower. On production-sized models "
-            "(300 trees, 50 features) the gap is 44–58× — see the Benchmarks page. "
-            "On this notebook's small model:"
+            "(300 trees, 50 features) the gap is 44–58× — see *Backends and proofs* "
+            "in the docs. On this notebook's small model:"
         ),
         nbf.v4.new_code_cell(
             "import time\n\n"
