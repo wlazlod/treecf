@@ -10,9 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Competitor benchmark**: `scripts/bench_vs_competitors.py` (PEP 723,
-  self-contained via `uv run`) compares treecf with DiCE and NICE under one
-  protocol; results published in *Backends and proofs* — 8–15× faster than
-  DiCE with 6–15× cheaper plans, 157 rows/s batch production.
+  self-contained via `uv run`) compares treecf with DiCE and NICE on two
+  model scales; results published in *Backends and proofs* — 8–3400× faster
+  than DiCE with far cheaper plans, cheapest plans overall, 157 rows/s batch
+  production on the medium model; NICE's per-instance speed and treecf's own
+  misses reported as-is.
 - **Post-solve pruning**: every returned plan now drops changes that
   verification proves unnecessary (cheapest first, each revert re-verified in
   float space). The search's revert-to-factual mutation is stochastic, so a
