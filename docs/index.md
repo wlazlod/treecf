@@ -6,9 +6,6 @@
 model's raw output lands in a target interval?"* — for XGBoost, LightGBM, CatBoost and
 scikit-learn tree ensembles.
 
-!!! warning "Pre-release"
-    v0.0.1 is an early pre-release. The API shown here may still shift before v0.1.
-
 ```python
 from treecf import Explainer, Freeze, Target
 

@@ -68,7 +68,7 @@ XGBoost model and declined rows per scenario, one counterfactual each, and the
 class flip (probability < 0.5) as the goal, since that is the only target
 every library expresses natively. Per-instance wall time excludes each
 method's one-time setup; validity is re-checked against the model, never taken
-from the library; treecf (v0.0.1, from PyPI) runs without constraints so no
+from the library; treecf (v0.0.1 from PyPI, the version benchmarked) runs without constraints so no
 method solves a harder problem. Distance is the σ-normalized L1 over changed
 features — lower is a cheaper, more actionable plan.
 
