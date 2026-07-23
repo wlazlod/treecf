@@ -153,7 +153,7 @@ class TestCalibrated:
         lo, hi = Target.calibrated(cal, range=(0.0, 0.02)).raw_interval(Link.SIGMOID)
         assert lo == -math.inf
         assert hi == pytest.approx(_logit(0.02) - 0.5, abs=1e-12)
-        lo2, hi2 = Target.calibrated(cal, op=">=", value=0.5).raw_interval(Link.SIGMOID)
+        _, hi2 = Target.calibrated(cal, op=">=", value=0.5).raw_interval(Link.SIGMOID)
         assert hi2 == math.inf
 
     def test_buffer_nests_interval_strictly_inside(self) -> None:

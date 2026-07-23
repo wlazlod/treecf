@@ -61,6 +61,7 @@ nav:
   - Concepts:
       - Models and the IR: concepts/models.md
       - Targets: concepts/targets.md
+      - Calibration: concepts/calibration.md
       - Constraints: concepts/constraints.md
       - Missing values: concepts/missing-values.md
       - Plausibility: concepts/plausibility.md
