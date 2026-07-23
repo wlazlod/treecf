@@ -1,0 +1,1670 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Constrained, threshold-aware counterfactual explanations for tree ensembles.">
+      
+      
+      
+        <link rel="canonical" href="https://wlazlod.github.io/treecf/how-it-works/">
+      
+      
+        <link rel="prev" href="../getting-started/">
+      
+      
+        <link rel="next" href="../concepts/models/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>How it works - treecf</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#how-treecf-finds-counterfactuals" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="treecf" class="md-header__button md-logo" aria-label="treecf" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            treecf
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              How it works
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="teal" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/wlazlod/treecf" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    wlazlod/treecf
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="treecf" class="md-nav__button md-logo" aria-label="treecf" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    treecf
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/wlazlod/treecf" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    wlazlod/treecf
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    How it works
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    How it works
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-question-stated-precisely" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The question, stated precisely
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The question, stated precisely">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#normalizers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Normalizers
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#targets" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Targets
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#one-model-language-the-ir" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        One model language: the IR
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-search-space-cells-not-real-numbers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The search space: cells, not real numbers
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#constraints-compile-once-apply-everywhere" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Constraints compile once, apply everywhere
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Constraints compile once, apply everywhere">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#plausibility-is-just-another-constraint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Plausibility is just another constraint
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-genetic-search" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The genetic search
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The genetic search">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#a-smart-first-generation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A smart first generation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#feasibility-first" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Feasibility first
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#operators-that-drive-sparsity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Operators that drive sparsity
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#knowing-when-to-stop" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Knowing when to stop
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nothing-ships-unverified" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Nothing ships unverified
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#two-engines-one-behavior-one-row-or-ten-thousand" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Two engines, one behavior; one row or ten thousand
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#grouped-recourse-coalitions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Grouped recourse: coalitions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-to-go-next" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where to go next
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Concepts
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/models/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Models and the IR
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/targets/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Targets
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/calibration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Calibration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/constraints/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Constraints
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/missing-values/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Missing values
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/plausibility/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Plausibility
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/coalitions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coalitions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/backends/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backends and proofs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tutorials
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Tutorials
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../notebooks/01-quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../notebooks/02-credit-risk-tutorial/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Credit-risk tutorial
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../notebooks/03-no-solver-environments/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Restricted environments: JSON dumps + the Rust genetic engine
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../faq/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    FAQ
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-question-stated-precisely" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The question, stated precisely
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The question, stated precisely">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#normalizers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Normalizers
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#targets" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Targets
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#one-model-language-the-ir" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        One model language: the IR
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-search-space-cells-not-real-numbers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The search space: cells, not real numbers
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#constraints-compile-once-apply-everywhere" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Constraints compile once, apply everywhere
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Constraints compile once, apply everywhere">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#plausibility-is-just-another-constraint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Plausibility is just another constraint
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-genetic-search" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The genetic search
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The genetic search">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#a-smart-first-generation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A smart first generation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#feasibility-first" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Feasibility first
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#operators-that-drive-sparsity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Operators that drive sparsity
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#knowing-when-to-stop" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Knowing when to stop
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nothing-ships-unverified" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Nothing ships unverified
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#two-engines-one-behavior-one-row-or-ten-thousand" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Two engines, one behavior; one row or ten thousand
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#grouped-recourse-coalitions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Grouped recourse: coalitions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-to-go-next" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where to go next
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="how-treecf-finds-counterfactuals">How treecf finds counterfactuals<a class="headerlink" href="#how-treecf-finds-counterfactuals" title="Permanent link">&para;</a></h1>
+<p>A counterfactual explanation answers one question: <em>what is the smallest realistic change to
+this instance that moves the model's output into a target range?</em> treecf's promise is that the
+answer is never a guess — every returned counterfactual has been re-scored against the model in
+float space and checked against every constraint before you see it.</p>
+<p>This article walks the whole pipeline for one instance: how the question is turned into a
+precise objective, why the search runs over a finite grid of model behaviors rather than over
+real numbers, how constraints and plausibility enter, what the genetic search actually does, and
+what happens between "the search found something" and "you get a <code>Counterfactual</code>". Each stage
+links to a concept page that covers it in depth.</p>
+<div class="admonition example">
+<p class="admonition-title">Running example</p>
+<p>A credit applicant is declined: the model puts their probability of default at 0.62,
+and the policy approves below <strong>PD 0.30</strong>. The features include <code>income_monthly</code>,
+<code>utilization</code>, <code>max_dpd_30d</code>, <code>max_dpd_12m</code>, <code>months_since_last_delinq</code> (NaN when there
+is no delinquency record), and <code>age</code> — which the bank has frozen: no recourse plan may
+ask an applicant to be younger. The question for treecf: <em>what is the cheapest realistic
+set of changes that brings this applicant under the cutoff?</em></p>
+</div>
+<p>The pipeline, end to end — every stage below gets its own section:</p>
+<pre class="mermaid"><code>flowchart TD
+    subgraph setup ["Set up (once per Explainer)"]
+        M["model / JSON dump"] --&gt;|parse| IR["EnsembleIR&lt;br/&gt;trees + thresholds + link"]
+        BG["background sample"] --&gt;|"fit sigma (MAD chain)"| NORM["normalizers"]
+        C["constraints"] --&gt;|"one visitor"| CC["compiled check / repair"]
+        IR --&gt;|"collect thresholds"| CELLS["routing-atomic cells&lt;br/&gt;per feature"]
+    end
+    subgraph solve ["Solve (per instance)"]
+        X["factual x + target interval"] --&gt; GA["genetic search&lt;br/&gt;seeded, feasibility-first"]
+        CELLS --&gt; GA
+        CC --&gt; GA
+        NORM --&gt; GA
+        GA --&gt; V{"float re-verification&lt;br/&gt;through the IR"}
+    end
+    V --&gt;|passes| SNAP["value-policy snapping&lt;br/&gt;(revert until valid)"] --&gt; CF["Counterfactual&lt;br/&gt;proof = heuristic"]
+    V --&gt;|fails| INF["Infeasible"]
+    GA --&gt;|"no feasible individual"| INF</code></pre>
+<h2 id="the-question-stated-precisely">The question, stated precisely<a class="headerlink" href="#the-question-stated-precisely" title="Permanent link">&para;</a></h2>
+<p>"Smallest realistic change" becomes an optimization problem. Given the factual instance
+<span class="arithmatex">\(x\)</span>, treecf searches for <span class="arithmatex">\(x'\)</span> minimizing</p>
+<div class="arithmatex">\[
+J(x') \;=\; \sum_{j\,:\,x'_j \neq x_j} w_j \, \frac{d_j(x_j, x'_j)}{\sigma_j}
+\;+\; \lambda \, \bigl\lVert x' - x \bigr\rVert_0
+\]</div>
+<p>subject to the model's raw score landing in the target interval, <span class="arithmatex">\(L \le S(x') \le U\)</span>, and every
+constraint holding. The first term prices <em>how far</em> each feature moves; the second prices <em>how
+many</em> features move at all — the sparsity weight <span class="arithmatex">\(\lambda\)</span> is why treecf plans tend to touch two
+or three levers instead of nudging everything a little.</p>
+<h3 id="normalizers">Normalizers<a class="headerlink" href="#normalizers" title="Permanent link">&para;</a></h3>
+<p>Raw feature deltas are incomparable — 500 units of <code>income_monthly</code> is a rounding error, 0.5 of
+<code>utilization</code> is half the scale. Each feature's delta is divided by a robust scale <span class="arithmatex">\(\sigma_j\)</span>
+fitted from a background sample: <strong>MAD, falling back to IQR, then range, then 1.0</strong> with a
+warning. The chain matters in credit data, where features like DPD counts have a point
+mass at zero and <code>median = mode = 0</code> makes the MAD degenerate. You can override any <span class="arithmatex">\(\sigma_j\)</span>
+and add per-feature weights <span class="arithmatex">\(w_j\)</span> — in the tutorials, <code>income_monthly</code> gets <span class="arithmatex">\(w = 2\)</span> because
+income is genuinely hard to change.</p>
+<h3 id="targets">Targets<a class="headerlink" href="#targets" title="Permanent link">&para;</a></h3>
+<p>The target is always an <strong>interval on the raw score</strong>. <code>Target.probability(range=(0.0, 0.30))</code>
+on a sigmoid-link model is converted through the logit into raw-score bounds once, so the search
+itself never evaluates a sigmoid. Rating "bands" (one plan per grade) are just several intervals
+solved one after another. See <a href="../concepts/targets/">Targets</a>.</p>
+<details class="note">
+<summary>How NaN transitions are priced</summary>
+<p>A plan may set <code>months_since_last_delinq</code> to NaN (the record ages out) or fill a missing
+value in — but only where an <code>AllowMissing</code> constraint permits it, and the distance for
+that transition is the constraint's explicit <code>delta_miss</code>. There is deliberately
+no default: a MAD-based price for "value becomes missing" would be meaningless. See
+<a href="../concepts/missing-values/">Missing values</a>.</p>
+</details>
+<h2 id="one-model-language-the-ir">One model language: the IR<a class="headerlink" href="#one-model-language-the-ir" title="Permanent link">&para;</a></h2>
+<p>treecf never touches your model object during the search. XGBoost, LightGBM, CatBoost, and
+scikit-learn models — native objects or JSON dumps — are first parsed into one intermediate
+representation, <code>EnsembleIR</code>: flat trees whose nodes store <code>(feature, threshold, op,
+missing_left)</code> exactly as the library stores them, plus a base score and a link function. The
+raw score is always <span class="arithmatex">\(S(x) = \text{base\_score} + \sum_t \text{leaf}_t(x)\)</span>. Everything downstream
+— cells, the genetic engines, verification — speaks only IR, which is why a JSON dump on an
+audit host with no xgboost installed explains identically to the native object. See
+<a href="../concepts/models/">Models and the IR</a>.</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">treecf</span><span class="w"> </span><span class="kn">import</span> <span class="n">Explainer</span><span class="p">,</span> <span class="n">Freeze</span><span class="p">,</span> <span class="n">Target</span><span class="p">,</span> <span class="n">constraint</span>
+
+<span class="n">exp</span> <span class="o">=</span> <span class="n">Explainer</span><span class="p">(</span>
+    <span class="n">model</span><span class="p">,</span>                     <span class="c1"># native object, JSON dump path, or EnsembleIR</span>
+    <span class="n">background</span><span class="o">=</span><span class="n">X_train</span><span class="p">,</span>        <span class="c1"># fits the sigma_j normalizers</span>
+    <span class="n">constraints</span><span class="o">=</span><span class="p">[</span><span class="n">Freeze</span><span class="p">(</span><span class="s2">&quot;age&quot;</span><span class="p">),</span> <span class="n">constraint</span><span class="p">(</span><span class="s2">&quot;max_dpd_30d &lt;= max_dpd_12m&quot;</span><span class="p">)],</span>
+<span class="p">)</span>
+</code></pre></div>
+<div class="admonition warning">
+<p class="admonition-title">No LT/LE normalization</p>
+<p>Libraries disagree on whether a split means <code>v &lt; t</code> or <code>v &lt;= t</code>. A tempting trick is to
+rewrite one into the other by shifting the threshold one float away (<code>nextafter</code>). treecf
+forbids this: the shifted threshold is a <em>different model</em> at exactly the values
+counterfactuals love — points sitting right at a threshold. Every node keeps its native
+operator, and the parsers are conformance-tested against the source library on thousands
+of probes, including NaN and threshold-adjacent values.</p>
+</div>
+<h2 id="the-search-space-cells-not-real-numbers">The search space: cells, not real numbers<a class="headerlink" href="#the-search-space-cells-not-real-numbers" title="Permanent link">&para;</a></h2>
+<p>A tree ensemble is a piecewise-constant function. For any single feature, collect every
+threshold any tree splits on: those thresholds cut the real line into a finite set of
+<strong>routing-atomic cells</strong> — intervals inside which <em>every tree routes identically</em>.
+Between two adjacent thresholds, moving the feature changes nothing about the model's output;
+only crossing a threshold does.</p>
+<p>This turns an intractable search over <span class="arithmatex">\(\mathbb{R}^p\)</span> into a search over a finite grid of
+<em>behaviors</em>. For the declined applicant, the model does not care whether <code>utilization</code> becomes
+0.41 or 0.38 — it cares which side of the 0.42 split the value lands on. And within a chosen
+cell there is exactly one optimal value: <strong>the point of the cell nearest to the factual value</strong>,
+since any deeper move costs more distance and changes nothing.</p>
+<p>One subtlety earns its own rule. When the nearest point of a cell is an open bound — "strictly
+below 0.42" — treecf steps <strong>one float32 ulp</strong> inside the bound, not one float64 ulp.</p>
+<details class="note">
+<summary>Why float32, not float64</summary>
+<p>Gradient-boosting libraries compare feature values against thresholds in float32. A
+float64 value one float64-ulp below a threshold <em>is the threshold</em> after the float32
+cast, and the deployed model routes it the other way — the counterfactual would flip in
+production while verifying cleanly in treecf's float64 IR. Stepping a float32 ulp keeps
+the returned value on the correct side in the model as deployed, with a float64-ulp
+fallback for cells narrower than a float32 ulp.</p>
+</details>
+<h2 id="constraints-compile-once-apply-everywhere">Constraints compile once, apply everywhere<a class="headerlink" href="#constraints-compile-once-apply-everywhere" title="Permanent link">&para;</a></h2>
+<p>Realism comes from constraints: <code>Freeze("age")</code>, <code>Monotone("max_dpd_12m", "decrease")</code>,
+<code>Range</code>, <code>Equals</code>, <code>OneHot</code> for exploded categoricals, <code>Implies</code>, linear relations written as
+strings — <code>constraint("max_dpd_30d &lt;= max_dpd_12m")</code>. Each constraint object is compiled
+<strong>once, by a single visitor</strong>, into two synchronized artifacts:</p>
+<ul>
+<li>an abstract constraint form (the MILP-safe subset — integer/bool variables, linear
+  inequalities, half-reified implications), and</li>
+<li>a vectorized <strong>check / repair</strong> pair the genetic engines run every generation: <code>check</code>
+  answers "does this candidate satisfy the constraint", <code>repair</code> moves a violating candidate
+  to a nearby satisfying one (clipping into ranges, re-normalizing a one-hot group, assigning
+  an implied value).</li>
+</ul>
+<p>One compiler means one semantics: there is no way for a constraint to mean one thing in a check
+and another in a repair, because both are generated from the same visit. See
+<a href="../concepts/constraints/">Constraints</a> — including <code>suggest_constraints</code>, which mines candidate
+invariants from your data instead of making you enumerate them.</p>
+<h3 id="plausibility-is-just-another-constraint">Plausibility is just another constraint<a class="headerlink" href="#plausibility-is-just-another-constraint" title="Permanent link">&para;</a></h3>
+<p>Feasible is not the same as <em>believable</em>: a plan can satisfy every declared rule and still land
+in a region where no real applicant lives. Optionally, treecf bounds an isolation forest's
+anomaly score: the forest is parsed through the <strong>same IR</strong> (leaf value = depth-adjusted path
+length), and the requirement <span class="arithmatex">\(s(x') \le \theta\)</span> is algebraically equivalent to one linear bound
+on the summed path lengths:</p>
+<div class="arithmatex">\[
+\sum_{t=1}^{T} h_t(x') \;\ge\; -\,T \cdot c(n) \cdot \log_2 \theta .
+\]</div>
+<p>To the search this is simply one more feasibility test, evaluated by the same tree-scoring code
+as the model itself. See <a href="../concepts/plausibility/">Plausibility</a>.</p>
+<h2 id="the-genetic-search">The genetic search<a class="headerlink" href="#the-genetic-search" title="Permanent link">&para;</a></h2>
+<p>With the objective, the cells, and the compiled constraints in hand, the search itself is a
+seeded, constraint-aware genetic algorithm. The default engine is a Rust core bundled in
+the wheel; <code>backend="python"</code> runs the numpy reference implementation of the same algorithm.
+<a href="../concepts/backends/">Backends and proofs</a> summarizes the contract; here is the mechanism.</p>
+<pre class="mermaid"><code>flowchart TD
+    INIT["generation 0&lt;br/&gt;factual + one candidate per (feature, cell)&lt;br/&gt;+ NaN flips + background mixes + random fill"]
+    INIT --&gt; SCORE["score whole population through the trees&lt;br/&gt;+ constraint check (one vectorized pass)"]
+    SCORE --&gt; RANK["Deb ranking&lt;br/&gt;tier 0: feasible, in target — by J&lt;br/&gt;tier 1: feasible, off target — by gap&lt;br/&gt;tier 2: infeasible — below everything"]
+    RANK --&gt; STOP{"stall 30 gens /&lt;br/&gt;200 gens / time budget?"}
+    STOP --&gt;|yes| BEST["best tier-0 individual&lt;br/&gt;(or Infeasible)"]
+    STOP --&gt;|no| BREED["elite kept (pop/8), uniform crossover;&lt;br/&gt;per feature: 15% mutate (cell / Gaussian / NaN),&lt;br/&gt;15% revert to factual"]
+    BREED --&gt; REPAIR["constraint repair + pin frozen features"]
+    REPAIR --&gt; SCORE</code></pre>
+<h3 id="a-smart-first-generation">A smart first generation<a class="headerlink" href="#a-smart-first-generation" title="Permanent link">&para;</a></h3>
+<p>The GA does not start from noise. Generation zero contains:</p>
+<ul>
+<li>the factual instance itself (a free feasibility probe),</li>
+<li><strong>one candidate per (feature, cell) pair</strong> — every single-feature move the model can
+  distinguish, each placed at the cell's nearest-to-factual point,</li>
+<li>a NaN flip for every feature <code>AllowMissing</code> permits,</li>
+<li>up to 20 crossovers between the factual and rows of the background sample — real applicants
+  donate realistic joint values,</li>
+<li>random multi-feature perturbations to fill the population (default 80).</li>
+</ul>
+<p>For many instances the answer — or something within a mutation of it — is already present in
+generation zero; the loop's job is to refine and sparsify it.</p>
+<h3 id="feasibility-first">Feasibility first<a class="headerlink" href="#feasibility-first" title="Permanent link">&para;</a></h3>
+<p>Ranking uses Deb's feasibility-first rules. Every candidate is scored in one vectorized pass
+(the whole population through the trees at once), checked against the constraints, and placed
+in a tier:</p>
+<table>
+<thead>
+<tr>
+<th>tier</th>
+<th>meaning</th>
+<th>ranked by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>feasible <strong>and</strong> score in the target interval</td>
+<td>objective <span class="arithmatex">\(J\)</span></td>
+</tr>
+<tr>
+<td>1</td>
+<td>feasible, score off-target</td>
+<td>gap to the target interval</td>
+</tr>
+<tr>
+<td>2</td>
+<td>violates a constraint</td>
+<td>pushed below everything feasible</td>
+</tr>
+</tbody>
+</table>
+<p>Any feasible candidate outranks every infeasible one — the search cannot trade a constraint
+violation for a better distance. The plausibility bound, when present, is folded into the same
+feasibility test.</p>
+<h3 id="operators-that-drive-sparsity">Operators that drive sparsity<a class="headerlink" href="#operators-that-drive-sparsity" title="Permanent link">&para;</a></h3>
+<p>Each generation keeps an elite (population/8), then breeds children by uniform crossover
+between parents drawn from the better half. Each mutable feature of a child then rolls:</p>
+<ul>
+<li><strong>15%</strong> — mutate: jump to a random cell value, take a Gaussian step scaled by <span class="arithmatex">\(\sigma_j\)</span>, or
+  (where allowed) flip to NaN;</li>
+<li>a further <strong>15%</strong> — <strong>revert to the factual value</strong>.</li>
+</ul>
+<p>That revert mutation is the explicit <span class="arithmatex">\(\lambda\)</span>-pressure in the operators: plans are constantly
+tempted to un-change features, so a change only survives generations if it earns its place in
+the score. After breeding, every child is passed through constraint <code>repair</code> and frozen
+features are pinned back — the population never drifts away from the rules.</p>
+<h3 id="knowing-when-to-stop">Knowing when to stop<a class="headerlink" href="#knowing-when-to-stop" title="Permanent link">&para;</a></h3>
+<p>The loop ends at whichever comes first: no improvement of the best feasible objective for 30
+generations (the usual exit), 200 generations, or the per-solve <code>time_budget_s</code>. The best
+tier-0 individual wins.</p>
+<div class="admonition info">
+<p class="admonition-title">Heuristic, but bracketed</p>
+<p>Results carry <code>proof="heuristic"</code> — the search does not prove optimality, and
+<code>Infeasible</code> from it means "search exhausted", not "no solution exists". In treecf's
+test suite a brute-force oracle brackets the GA on small models, and early development
+versions carried an exact CP-SAT backend whose removal is documented in
+<a href="../concepts/backends/#history">Backends — history</a>. If you need provable optimality,
+pair the IR with a dedicated exact solver.</p>
+</div>
+<h2 id="nothing-ships-unverified">Nothing ships unverified<a class="headerlink" href="#nothing-ships-unverified" title="Permanent link">&para;</a></h2>
+<p>The GA's winner is a candidate, not yet an answer. Before anything is returned, treecf
+re-verifies it <strong>in float space through the IR</strong>: the raw score is recomputed and
+checked against the target interval, every feature against its instance bounds, NaN placement
+against <code>AllowMissing</code>, every linear constraint, <code>Implies</code>, and <code>OneHot</code> re-evaluated, and the
+plausibility score re-computed. A candidate that fails any check becomes <code>Infeasible</code> — an
+invalid counterfactual is never returned.</p>
+<p>Value policies run inside the same safety net. If you declare
+<code>value_policy={"n_active_loans": "integer"}</code> or a <code>Grid(step=50)</code> for income, the verified plan
+is snapped to conforming values <em>within their cells</em>; if snapping breaks validity, snaps are
+reverted one at a time until the plan verifies again. What you get back is honest about it:</p>
+<div class="highlight"><pre><span></span><code><span class="n">res</span> <span class="o">=</span> <span class="n">exp</span><span class="o">.</span><span class="n">explain</span><span class="p">(</span><span class="n">applicant</span><span class="p">,</span> <span class="n">target</span><span class="o">=</span><span class="n">Target</span><span class="o">.</span><span class="n">probability</span><span class="p">(</span><span class="nb">range</span><span class="o">=</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.30</span><span class="p">)),</span> <span class="n">seed</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+<span class="n">res</span><span class="o">.</span><span class="n">proof</span>        <span class="c1"># &quot;heuristic&quot;</span>
+<span class="n">res</span><span class="o">.</span><span class="n">score_prob</span>   <span class="c1"># 0.29…  — recomputed, in target</span>
+<span class="n">res</span><span class="o">.</span><span class="n">changes</span>      <span class="c1"># {&quot;utilization&quot;: (0.71, 0.419…), &quot;max_dpd_12m&quot;: (9.0, 3.0)}</span>
+<span class="n">res</span><span class="o">.</span><span class="n">snapped</span>      <span class="c1"># which value policies actually applied</span>
+</code></pre></div>
+<h2 id="two-engines-one-behavior-one-row-or-ten-thousand">Two engines, one behavior; one row or ten thousand<a class="headerlink" href="#two-engines-one-behavior-one-row-or-ten-thousand" title="Permanent link">&para;</a></h2>
+<p>Both engines — the Rust default and the numpy reference — share the IR, the compiled
+constraints, and the algorithm above; they are seed-deterministic and held to statistical
+parity, and the Rust core is bitwise-identical on tree evaluation and constraint check/repair
+(the speed difference is documented in <a href="../concepts/backends/#performance">Backends — performance</a>).</p>
+<p>Batch production builds directly on the same machinery. <code>explain_batch</code> derives an independent
+seed per (row, attempt) and hands whole <em>waves</em> of searches to the Rust core in one call, which
+fans them out across cores; because every task is independently seeded, the records are
+identical to running the rows one by one in a Python loop. One caveat: <code>time_budget_s</code> remains
+a per-solve wall-clock budget, and concurrent solves share cores — a solve that actually hits
+its budget under contention may stop a generation earlier than it would alone. Stall and
+max-generation stops, the common case, are deterministic. The
+<a href="../notebooks/02-credit-risk-tutorial/">credit-risk walkthrough</a> mass-produces a day of
+recourse plans this way and visualizes the batch.</p>
+<h2 id="grouped-recourse-coalitions">Grouped recourse: coalitions<a class="headerlink" href="#grouped-recourse-coalitions" title="Permanent link">&para;</a></h2>
+<p>Everything above optimizes one global plan — the cheapest feasible change-set, wherever the
+levers happen to live. Sometimes that is the wrong shape for advice: a plan that asks the
+declined applicant to raise <code>income_monthly</code>, cut <code>utilization</code>, <em>and</em> wait out a delinquency
+mixes three different life projects into one instruction.</p>
+<p>The opt-in <strong>coalitions mode</strong> runs the very same pipeline once per named feature group, with
+every feature outside the group frozen — freezing is already a constraint the compiler and
+verifier understand, so no new search semantics are involved. For the running example:</p>
+<div class="highlight"><pre><span></span><code><span class="n">result</span> <span class="o">=</span> <span class="n">exp</span><span class="o">.</span><span class="n">explain_coalitions</span><span class="p">(</span>
+    <span class="n">applicant</span><span class="p">,</span> <span class="n">target</span><span class="o">=</span><span class="n">Target</span><span class="o">.</span><span class="n">probability</span><span class="p">(</span><span class="nb">range</span><span class="o">=</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.30</span><span class="p">)),</span>
+    <span class="n">coalitions</span><span class="o">=</span><span class="p">{</span>
+        <span class="s2">&quot;debt history&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;max_dpd_30d&quot;</span><span class="p">,</span> <span class="s2">&quot;max_dpd_12m&quot;</span><span class="p">,</span> <span class="s2">&quot;months_since_last_delinq&quot;</span><span class="p">],</span>
+        <span class="s2">&quot;credit usage&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;utilization&quot;</span><span class="p">,</span> <span class="s2">&quot;n_active_loans&quot;</span><span class="p">,</span> <span class="s2">&quot;n_loans_total&quot;</span><span class="p">],</span>
+        <span class="s2">&quot;income&quot;</span><span class="p">:</span>       <span class="p">[</span><span class="s2">&quot;income_monthly&quot;</span><span class="p">],</span>
+    <span class="p">},</span>
+    <span class="n">include_full</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span>
+<span class="p">)</span>
+</code></pre></div>
+<p>Each group answers its own question. A <code>Counterfactual</code> for <code>"debt history"</code> is a plan the
+applicant can execute on that front alone; an <code>Infeasible</code> for <code>"income"</code> is the finding that
+no realistic income change reaches the cutoff by itself — a hint a single mixed plan would
+have buried. The <code>"(all levers)"</code> baseline anchors the comparison: how much does restricting
+to one group cost relative to the unrestricted optimum? Verification is unchanged — every
+coalition plan is float-verified against that coalition's constraint set before it is
+returned. In batch mode (<code>explain_batch(..., diversity="coalitions")</code>) each coalition's rows
+solve as one parallel Rust wave.</p>
+<p><a href="../concepts/coalitions/">Coalitions</a> covers the semantics (overlaps, uncovered features, the
+reserved baseline name) and the comparison plots.</p>
+<h2 id="where-to-go-next">Where to go next<a class="headerlink" href="#where-to-go-next" title="Permanent link">&para;</a></h2>
+<ul>
+<li><a href="../concepts/models/">Models and the IR</a> — supported libraries, score semantics, parser
+  pitfalls.</li>
+<li><a href="../concepts/targets/">Targets</a> — probability vs raw targets, rating bands.</li>
+<li><a href="../concepts/constraints/">Constraints</a> — the constraint objects, string sugar, and mining.</li>
+<li><a href="../concepts/missing-values/">Missing values</a> — NaN as a first-class value.</li>
+<li><a href="../concepts/plausibility/">Plausibility</a> — the isolation-forest bound.</li>
+<li><a href="../concepts/coalitions/">Coalitions</a> — grouped recourse, one plan per feature group.</li>
+<li><a href="../concepts/backends/">Backends and proofs</a> — engine contract and history.</li>
+<li>Tutorials: <a href="../notebooks/01-quickstart/">Quickstart</a>, the
+  <a href="../notebooks/02-credit-risk-tutorial/">credit-risk walkthrough</a>, and
+  <a href="../notebooks/03-no-solver-environments/">no-solver environments</a>.</li>
+<li><a href="../api/">API reference</a>.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.sections", "navigation.top", "content.code.copy"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="../javascripts/mathjax.js"></script>
+      
+        <script src="https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js"></script>
+      
+    
+  </body>
+</html>
