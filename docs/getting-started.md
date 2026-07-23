@@ -50,6 +50,23 @@ the bundled Rust engine in milliseconds even on 300-tree models;
 `backend="python"` runs the reference numpy implementation of the same
 algorithm. [How it works](how-it-works.md) walks the whole pipeline.
 
+## Calibrated models
+
+If your pipeline post-hoc calibrates the model's probabilities, express the
+target on the *calibrated* scale — `Target.probability` would silently target
+the uncalibrated output:
+
+```python
+res = exp.explain(
+    x_row,
+    target=Target.calibrated(cal, range=(0.0, 0.04)),  # calibrated PD ≤ 4%
+    seed=0,
+)
+```
+
+`cal` is any monotone calibrator exposing `interval_inverse` and
+`is_monotone_`; see the FAQ for the exact protocol and the `buffer_logit` robustness margin.
+
 ## Read the result
 
 | Field | Meaning |

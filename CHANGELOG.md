@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Calibrated targets**: `Target.calibrated(calibrator, ...)` expresses the
+  target on the post-hoc *calibrated* probability scale and lazily inverts it
+  through the calibrator's duck-typed generalized inverse
+  (`interval_inverse(lo, hi, *, space="logit", buffer_logit=...)` +
+  `is_monotone_`) — no calibration-library dependency. `Target.bands` accepts
+  `space="calibrated"` with `calibrator=`/`buffer_logit=` for masterscales
+  defined on calibrated PD. `Target.probability` now documents that it targets
+  the *uncalibrated* model probability.
+
+### Fixed
+
+- **`Target.band_intervals` field propagation**: per-band targets were rebuilt
+  from `(space, lo, hi)` only, silently dropping any other field — now all
+  fields propagate (surfaced by the calibrated-bands work).
+
 - **Competitor benchmark**: `scripts/bench_vs_competitors.py` (PEP 723,
   self-contained via `uv run`) compares treecf with DiCE and NICE on two
   model scales; results published in *Backends and proofs* — 8–3400× faster

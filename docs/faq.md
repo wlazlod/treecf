@@ -5,6 +5,41 @@ Forest classifiers average probabilities; there is no sigmoid link to invert.
 Their raw score *is* the averaged probability — use
 `Target.raw(range=(0.0, 0.3))`.
 
+**How do I target a *calibrated* probability?**
+If model outputs are post-hoc calibrated (`p' = g(predict_proba)`), decisions
+are made on the calibrated scale — and `Target.probability` becomes a silent
+trap: it inverts the model's own sigmoid link, not `g`. Example: with an
+isotonic `g` mapping model-p 5% to calibrated 2%, `Target.probability(op="<=",
+value=0.02)` demands model-p ≤ 2% — a materially harder (or unattainable)
+target than the intended calibrated-PD ≤ 2%. Use `Target.calibrated` with any
+calibrator object (e.g. a probcal calibrator) satisfying the duck-typed
+protocol — no calibration library is imported:
+
+```python
+class SupportsIntervalInverse(Protocol):
+    is_monotone_: bool
+    def interval_inverse(
+        self, lo: float, hi: float, *, space: str = "probability", buffer_logit: float = 0.0
+    ) -> tuple[float, float]: ...
+```
+
+```python
+target = treecf.Target.calibrated(cal, op="<=", value=0.02)   # calibrated PD ≤ 2%
+result = explainer.explain(x, target=target)
+```
+
+Pass `buffer_logit=m` to guard the counterfactual against future
+recalibration or central-tendency drift of magnitude ≤ m in log-odds. For a
+masterscale defined on calibrated PD, bands invert per band:
+
+```python
+target = treecf.Target.bands(
+    {"A": (0.0, 0.005), "B": (0.005, 0.02), "C": (0.02, 0.10)},
+    space="calibrated",
+    calibrator=cal,
+)
+```
+
 **Why is my counterfactual `Infeasible`?**
 The search exhausted its budget without a candidate satisfying the target and
 every constraint. Check for contradictory constraints (e.g. everything frozen),
