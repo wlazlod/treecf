@@ -1,6 +1,6 @@
 [project]
 name = "treecf"
-version = "0.0.1"
+version = "0.1.0"
 description = "Constrained, threshold-aware counterfactual explanations for tree ensembles (XGBoost, LightGBM, CatBoost, sklearn) on a bundled Rust genetic engine."
 readme = "README.md"
 license = { text = "MIT" }
