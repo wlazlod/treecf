@@ -94,3 +94,18 @@ jobs:
 
       - name: Unit tests
         run: cargo test --manifest-path rust/Cargo.toml
+
+  msrv:
+    name: rust MSRV (1.86)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install MSRV toolchain
+        uses: dtolnay/rust-toolchain@1.86
+
+      # featureless deliberately: the python/extension features need a
+      # libpython at build time and are covered on stable above; the
+      # featureless crate is what defines the MSRV surface
+      - name: Test on MSRV
+        run: cargo test --manifest-path rust/Cargo.toml

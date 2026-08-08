@@ -55,7 +55,8 @@ ship the dump file.
 `backend="genetic"` runs a compiled Rust engine bundled inside the platform
 wheel (44–58× faster than the equivalent numpy implementation — see
 [backends — performance](concepts/backends.md#performance)). Installing from a wheel needs no
-toolchain; only building from the sdist compiles Rust. The engine is held to
+toolchain; only building from the sdist compiles Rust, which requires
+rustc 1.86 or newer. The engine is held to
 bitwise parity with Python on tree evaluation and constraint checking, and to
 statistical parity on end-to-end GA outcomes; every result is float-verified
 in Python before being returned.
