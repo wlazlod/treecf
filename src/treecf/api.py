@@ -91,7 +91,7 @@ class Explainer:
     alternatively pass ``normalizers`` explicitly (array or name->sigma dict).
     """
 
-    _rust_cache: dict[str, object]  # marshaled Rust objects, created on first solve
+    _rust_cache: dict[str, object]  # marshaled Rust objects, filled on first solve
     _prepared_trees: tuple[TreeArrays, ...]  # vectorized-verify arrays, created on first batch
 
     def __init__(
@@ -122,6 +122,7 @@ class Explainer:
         self.sigma = _resolve_sigma(names, background, normalizers)
         self.weights = np.array([(weights or {}).get(name, 1.0) for name in names])
         self.value_policy = value_policy or {}
+        self._rust_cache = {}
         for name, policy in self.value_policy.items():
             if name not in names:
                 raise TreecfError(f"value_policy references unknown feature {name!r}")
@@ -294,11 +295,10 @@ class Explainer:
         )
         # Same frozen IR -> the marshaled Rust ensembles are reusable; only the
         # constraints differ, so that cache entry is deliberately left out.
-        parent_cache: dict[str, object] = getattr(self, "_rust_cache", {})
         clone._rust_cache = {
-            key: parent_cache[key]
+            key: self._rust_cache[key]
             for key in ("ensemble", "if_ensemble")
-            if key in parent_cache
+            if key in self._rust_cache
         }
         return clone
 
@@ -314,8 +314,6 @@ class Explainer:
         if rust:
             from treecf.backends.genetic_rust import solve_genetic_rust
 
-            if not hasattr(self, "_rust_cache"):
-                self._rust_cache = {}
             result = solve_genetic_rust(
                 self.ir,
                 x,
@@ -429,8 +427,6 @@ class Explainer:
         """Run independent seeded searches in one parallel Rust call."""
         from treecf.backends.genetic_rust import solve_genetic_batch_rust
 
-        if not hasattr(self, "_rust_cache"):
-            self._rust_cache = {}
         return solve_genetic_batch_rust(
             self.ir,
             X,
@@ -490,6 +486,8 @@ class Explainer:
             if x_cf[imp.cond_index] == imp.cond_value and x_cf[imp.cons_index] != imp.cons_value:
                 return "Implies constraint violated"
         for group in self.compiled.onehot_groups:
+            # exact float equality is intentional: repair writes literal 0.0/1.0,
+            # and a tolerance would mask genuinely broken candidates
             if sum(x_cf[j] for j in group) != 1.0:
                 return "OneHot constraint violated"
         if self.plausibility is not None:

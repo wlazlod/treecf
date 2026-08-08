@@ -107,6 +107,8 @@ class CompiledConstraints:
             cons = X[:, imp.cons_index] == imp.cons_value
             ok &= ~cond | cons
         for group in self.onehot_groups:
+            # exact float equality is intentional: repair writes literal 0.0/1.0,
+            # and a tolerance would mask genuinely broken candidates
             ok &= X[:, list(group)].sum(axis=1) == 1.0
         return ok
 
