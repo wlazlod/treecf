@@ -21,7 +21,11 @@ def raw_score(ir: EnsembleIR, x: npt.NDArray[np.float64]) -> float:
 
 def apply_link(link: Link, score: float) -> float:
     if link is Link.SIGMOID:
-        return 1.0 / (1.0 + math.exp(-score))
+        # branch on sign: math.exp raises OverflowError for exponents above ~709
+        if score >= 0.0:
+            return 1.0 / (1.0 + math.exp(-score))
+        e = math.exp(score)
+        return e / (1.0 + e)
     return score
 
 

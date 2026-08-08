@@ -1,7 +1,9 @@
 [package]
 name = "treecf-core"
-version = "0.0.1"
+version = "0.1.1"
 edition = "2021"
+# f64::next_down (cells.rs) stabilized in 1.86; pyo3 0.29 needs 1.83
+rust-version = "1.86"
 description = "Rust genetic counterfactual core for treecf (dev-only until the benchmark gate)"
 license = "MIT"
 

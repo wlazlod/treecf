@@ -3,11 +3,21 @@
 from __future__ import annotations
 
 import math
+import warnings
 
 import numpy as np
 import pytest
 
-from treecf import AllowMissing, Counterfactual, Explainer, Freeze, Infeasible, Monotone, Target
+from treecf import (
+    AllowMissing,
+    Counterfactual,
+    Explainer,
+    Freeze,
+    Infeasible,
+    Monotone,
+    Target,
+    TreecfWarning,
+)
 from treecf.ir.model import EnsembleIR, Link, Node, SplitOp, Tree
 
 from ..parity.harness import load_scenario, run_python, scenario_paths
@@ -116,17 +126,21 @@ def test_stage_a_battery_through_public_api() -> None:
             # fixtures carry the raw (if_ir, min_total_path) bound; inject it directly
             bound = (scenario.if_ir, float(scenario.min_total_path))  # type: ignore[arg-type]
             exp._plausibility_bound = lambda bound=bound: bound  # type: ignore[method-assign]
-        res = exp.explain(
-            scenario.x,
-            target=Target.raw(range=(scenario.interval[0], scenario.interval[1]))
-            if math.isfinite(scenario.interval[0]) and math.isfinite(scenario.interval[1])
-            else Target.raw(op=">=", value=scenario.interval[0])
-            if math.isfinite(scenario.interval[0])
-            else Target.raw(op="<=", value=scenario.interval[1]),
-            backend="genetic-rust",
-            seed=0,
-            sparsity_weight=scenario.lam,
-        )
+        with warnings.catch_warnings():
+            # some fixtures (11-linear-projection) violate a constraint at the
+            # factual by design; the battery is about solve outcomes
+            warnings.simplefilter("ignore", TreecfWarning)
+            res = exp.explain(
+                scenario.x,
+                target=Target.raw(range=(scenario.interval[0], scenario.interval[1]))
+                if math.isfinite(scenario.interval[0]) and math.isfinite(scenario.interval[1])
+                else Target.raw(op=">=", value=scenario.interval[0])
+                if math.isfinite(scenario.interval[0])
+                else Target.raw(op="<=", value=scenario.interval[1]),
+                backend="genetic-rust",
+                seed=0,
+                sparsity_weight=scenario.lam,
+            )
         python_record = run_python(scenario, 0)
         if python_record["feasible"]:
             assert isinstance(res, Counterfactual), f"{scenario.name}: rust found nothing"

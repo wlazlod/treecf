@@ -1,5 +1,7 @@
 """Compilation and validation of the full M2 constraint set."""
 
+import math
+
 import numpy as np
 import pytest
 
@@ -11,6 +13,7 @@ from treecf.constraints import (
     Implies,
     Linear,
     OneHot,
+    Range,
     compile_constraints,
     constraint,
 )
@@ -80,3 +83,108 @@ class TestStructuredAccess:
         compiled = compile_constraints([Equals("flag1", 1.0)], NAMES)
         lo, hi, _ = compiled.instance_bounds(np.zeros(len(NAMES)))
         assert lo[3] == hi[3] == 1.0
+
+
+class TestDerivedRanges:
+    def test_ge_derives_lower_bound(self) -> None:
+        compiled = compile_constraints([constraint("a >= 100")], NAMES)
+        assert compiled.derived_ranges == (Range("a", 100.0, math.inf),)
+        assert len(compiled.linears) == 1  # original Linear retained
+
+    def test_le_derives_upper_bound(self) -> None:
+        compiled = compile_constraints([constraint("2*a <= 10")], NAMES)
+        assert compiled.derived_ranges == (Range("a", -math.inf, 5.0),)
+
+    def test_negative_coef_flips_inequality(self) -> None:
+        compiled = compile_constraints([Linear({"a": -2.0}, "<=", -10.0)], NAMES)
+        assert compiled.derived_ranges == (Range("a", 5.0, math.inf),)
+
+    def test_negative_coef_ge_gives_upper_bound(self) -> None:
+        compiled = compile_constraints([Linear({"a": -2.0}, ">=", -10.0)], NAMES)
+        assert compiled.derived_ranges == (Range("a", -math.inf, 5.0),)
+
+    def test_eq_derives_pin(self) -> None:
+        compiled = compile_constraints([Linear({"a": 2.0}, "==", 7.0)], NAMES)
+        (rng,) = compiled.derived_ranges
+        assert rng.lo == rng.hi == 3.5
+
+    @pytest.mark.parametrize(("op", "rhs"), [("<=", 3.0), ("<=", 0.0), (">=", -1.0), ("==", 0.0)])
+    def test_zero_coef_vacuous_is_dropped(self, op: str, rhs: float) -> None:
+        compiled = compile_constraints([Linear({"a": 0.0}, op, rhs)], NAMES)
+        assert compiled.linears == ()
+        assert compiled.derived_ranges == ()
+
+    @pytest.mark.parametrize(("op", "rhs"), [(">=", 3.0), ("<=", -1.0), ("==", 3.0)])
+    def test_zero_coef_unsatisfiable_raises(self, op: str, rhs: float) -> None:
+        with pytest.raises(ConstraintValidationError, match="unsatisfiable"):
+            compile_constraints([Linear({"a": 0.0}, op, rhs)], NAMES)
+
+    def test_zero_coef_unknown_feature_still_rejected(self) -> None:
+        with pytest.raises(ConstraintValidationError, match="ghost"):
+            compile_constraints([Linear({"ghost": 0.0}, "<=", 3.0)], NAMES)
+
+    def test_multi_feature_linear_derives_nothing(self) -> None:
+        compiled = compile_constraints([constraint("a + b >= 100")], NAMES)
+        assert compiled.derived_ranges == ()
+
+    def test_derived_bound_reaches_instance_bounds(self) -> None:
+        compiled = compile_constraints([constraint("a >= 100")], NAMES)
+        lo, hi, _ = compiled.instance_bounds(np.zeros(len(NAMES)))
+        assert lo[0] == 100.0
+        assert hi[0] == math.inf
+
+
+class TestFactualViolations:
+    def test_linear_message_shape(self) -> None:
+        compiled = compile_constraints([constraint("a <= b")], NAMES)
+        x = np.array([2.75, 0.0, 0.0, 0.0, 0.0, 0.0])
+        assert compiled.factual_violations(x) == (
+            "Linear 1*a - 1*b <= 0 violated at the factual (lhs=2.75)",
+        )
+
+    def test_linear_within_slack_is_not_violated(self) -> None:
+        compiled = compile_constraints([constraint("a <= b")], NAMES)
+        x = np.array([1e-12, 0.0, 0.0, 0.0, 0.0, 0.0])
+        assert compiled.factual_violations(x) == ()
+
+    def test_linear_nan_forbid_missing_reports(self) -> None:
+        lin = Linear({"a": 1.0, "b": -1.0}, "<=", 0.0, missing_policy="forbid_missing")
+        compiled = compile_constraints([lin], NAMES)
+        x = np.array([np.nan, 0.0, 0.0, 0.0, 0.0, 0.0])
+        (desc,) = compiled.factual_violations(x)
+        assert "references a missing value" in desc
+        assert "missing_policy=forbid_missing" in desc
+
+    def test_linear_nan_satisfied_is_not_violated(self) -> None:
+        compiled = compile_constraints([constraint("a <= b")], NAMES)
+        x = np.array([np.nan, 0.0, 0.0, 0.0, 0.0, 0.0])
+        assert compiled.factual_violations(x) == ()
+
+    def test_range_violation_and_nan_skip(self) -> None:
+        compiled = compile_constraints([Range("a", 0.0, 1.0)], NAMES)
+        assert compiled.factual_violations(np.array([2.0, 0, 0, 0, 0, 0.0])) != ()
+        assert compiled.factual_violations(np.array([np.nan, 0, 0, 0, 0, 0.0])) == ()
+
+    def test_freeze_monotone_derived_never_reported(self) -> None:
+        compiled = compile_constraints(
+            [Freeze("a"), constraint("b >= 100")], NAMES
+        )
+        x = np.array([1.0, 2.0, 0.0, 0.0, 0.0, 0.0])
+        # b >= 100 is violated -> exactly one report (the Linear), never the
+        # derived range duplicate and never Freeze
+        (desc,) = compiled.factual_violations(x)
+        assert desc.startswith("Linear")
+
+    def test_implies_and_onehot(self) -> None:
+        compiled = compile_constraints(
+            [
+                Implies(Equals("flag1", 1.0), Equals("flag2", 1.0)),
+                OneHot(("flag2", "flag3")),
+            ],
+            NAMES,
+        )
+        x = np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0])
+        descs = compiled.factual_violations(x)
+        assert len(descs) == 2
+        assert any(d.startswith("Implies") for d in descs)
+        assert any(d.startswith("OneHot") for d in descs)

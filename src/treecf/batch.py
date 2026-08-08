@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import warnings
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -18,7 +19,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import numpy.typing as npt
 
-from treecf._errors import TreecfError
+from treecf._errors import TreecfError, TreecfWarning
 from treecf._json import decode_floats, encode_floats
 from treecf.ir.evaluate import raw_score_batch_prepared
 
@@ -204,6 +205,25 @@ def explain_batch(
     row_ids: Sequence[object] = range(len(X)) if ids is None else list(ids)
     if len(row_ids) != len(X):
         raise TreecfError("ids must have one entry per row of X")
+
+    # one aggregate factual-violation warning for the whole batch; the per-row
+    # solve paths all run with warn_factual=False so nothing warns twice
+    counts: dict[str, int] = {}
+    affected = 0
+    for row in X:
+        items = explainer.compiled._factual_violation_items(row)
+        if items:
+            affected += 1
+            for label, _ in items:
+                counts[label] = counts.get(label, 0) + 1
+    if affected:
+        summary = "; ".join(f"{label}: {n} rows" for label, n in counts.items())
+        warnings.warn(
+            f"factual constraint violations in {affected}/{len(X)} rows ({summary}); "
+            "affected plans include changes made solely to satisfy them.",
+            TreecfWarning,
+            stacklevel=2,
+        )
 
     records: list[BatchRecord] = []
     essential: dict[object, list[str]] = {}
@@ -446,7 +466,10 @@ def _rows_by_coalitions(
             ]
         else:
             outcomes[name] = [
-                solver._explain_one(X[i], target, backend, time_budget_s, sparsity_weight, seed)
+                solver._explain_one(
+                    X[i], target, backend, time_budget_s, sparsity_weight, seed,
+                    warn_factual=False,
+                )
                 for i in range(len(X))
             ]
 
@@ -485,9 +508,9 @@ def _row_by_seeds(
     found: dict[frozenset[str], tuple[Counterfactual, int]] = {}
     for attempt in range(_SEED_ATTEMPT_FACTOR * n_per_example):
         attempt_seed = master_seed + attempt
-        result = explainer.explain(
-            x, target, backend=backend, time_budget_s=time_budget_s,
-            sparsity_weight=sparsity_weight, seed=attempt_seed,
+        result = explainer._explain(
+            x, target, backend, time_budget_s, sparsity_weight, attempt_seed,
+            warn_factual=False,  # explain_batch already warned in aggregate
         )
         if isinstance(result, Counterfactual):
             key = frozenset(result.changes)
@@ -519,9 +542,9 @@ def _row_by_lever_blocking(
     from treecf.api import Counterfactual
 
     if primary is None:
-        explained = explainer.explain(
-            x, target, backend=backend, time_budget_s=time_budget_s,
-            sparsity_weight=sparsity_weight, seed=seed,
+        explained = explainer._explain(
+            x, target, backend, time_budget_s, sparsity_weight, seed,
+            warn_factual=False,  # explain_batch already warned in aggregate
         )
         assert not isinstance(explained, dict)  # bands are rejected by explain_batch
         primary = explained
@@ -542,9 +565,9 @@ def _row_by_lever_blocking(
     for lever in levers:
         if len(records) >= n_per_example:
             break
-        alternative = explainer._with_extra_freezes([lever]).explain(
-            x, target, backend=backend, time_budget_s=time_budget_s,
-            sparsity_weight=sparsity_weight, seed=seed,
+        alternative = explainer._with_extra_freezes([lever])._explain(
+            x, target, backend, time_budget_s, sparsity_weight, seed,
+            warn_factual=False,  # explain_batch already warned in aggregate
         )
         if isinstance(alternative, Counterfactual):
             key = frozenset(alternative.changes)

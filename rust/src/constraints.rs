@@ -182,11 +182,13 @@ impl Constraints {
     }
 
     /// In-place best-effort repair per row, matching `repair_matrix` exactly.
-    /// `parallel` only picks the execution strategy (RNG-free stage).
+    /// `parallel` only picks the execution strategy (RNG-free stage). The
+    /// linear projection is per-row with no cross-row state, so the
+    /// thread-count-invariance argument in the `ga.rs` header holds verbatim.
     pub fn repair(&self, xs: &mut [f64], n_rows: usize, x: &[f64], parallel: bool) {
         use rayon::prelude::*;
         let p = self.n_features;
-        let (lo, hi, _) = self.instance_bounds(x);
+        let (lo, hi, frozen) = self.instance_bounds(x);
         let lo: Vec<f64> = lo
             .iter()
             .map(|&v| if v.is_nan() { f64::NEG_INFINITY } else { v })
@@ -197,17 +199,17 @@ impl Constraints {
             .collect();
         if parallel {
             xs.par_chunks_mut(p).for_each(|row| {
-                self.repair_row(row, x, &lo, &hi);
+                self.repair_row(row, x, &lo, &hi, &frozen);
             });
         } else {
             for row in xs.chunks_mut(p) {
-                self.repair_row(row, x, &lo, &hi);
+                self.repair_row(row, x, &lo, &hi, &frozen);
             }
         }
         debug_assert_eq!(xs.len(), n_rows * p);
     }
 
-    fn repair_row(&self, row: &mut [f64], x: &[f64], lo: &[f64], hi: &[f64]) {
+    fn repair_row(&self, row: &mut [f64], x: &[f64], lo: &[f64], hi: &[f64], frozen: &[bool]) {
         let p = self.n_features;
         for j in 0..p {
             if !self.allows_missing(j) {
@@ -231,18 +233,70 @@ impl Constraints {
                 row[j] = v;
             }
         }
-        for lin in &self.linears {
-            // canonical order-pair hint only: a - b <= 0 -> clip a to b
-            if lin.op == LIN_LE && lin.rhs == 0.0 && lin.coefs.len() == 2 {
-                let mut sorted = lin.coefs.clone();
-                sorted.sort_by(f64::total_cmp);
-                if sorted == [-1.0, 1.0] {
-                    let a = lin.indices[lin.coefs.iter().position(|&c| c == 1.0).unwrap()];
-                    let b = lin.indices[lin.coefs.iter().position(|&c| c == -1.0).unwrap()];
-                    let (a, b) = (a as usize, b as usize);
-                    if !row[a].is_nan() && !row[b].is_nan() {
-                        row[a] = py_min(row[a], row[b]); // np.minimum on non-NaN values
+        // cyclic projection: boxes intersected with halfspaces, a few sweeps
+        // (must mirror repair_matrix float-for-float: same term order, one
+        // residual/denom division, lower-bound-first clipping)
+        const REPAIR_ROUNDS: usize = 3;
+        for _ in 0..REPAIR_ROUNDS {
+            for lin in &self.linears {
+                // canonical order pair a - b <= 0: clip a to b (unchanged;
+                // moving one feature beats a split projection here)
+                if lin.op == LIN_LE && lin.rhs == 0.0 && lin.coefs.len() == 2 {
+                    let mut sorted = lin.coefs.clone();
+                    sorted.sort_by(f64::total_cmp);
+                    if sorted == [-1.0, 1.0] {
+                        let a = lin.indices[lin.coefs.iter().position(|&c| c == 1.0).unwrap()];
+                        let b = lin.indices[lin.coefs.iter().position(|&c| c == -1.0).unwrap()];
+                        let (a, b) = (a as usize, b as usize);
+                        if !row[a].is_nan() && !row[b].is_nan() {
+                            row[a] = py_min(row[a], row[b]); // np.minimum on non-NaN values
+                        }
+                        continue;
                     }
+                }
+                // halfspace projection onto {sum(coefs * row) op rhs}
+                if lin.indices.iter().any(|&j| row[j as usize].is_nan()) {
+                    continue; // NaN legality is missing_policy's job, enforced by check
+                }
+                let mut total = 0.0;
+                for (k, &j) in lin.indices.iter().enumerate() {
+                    total += lin.coefs[k] * row[j as usize];
+                }
+                let residual = total - lin.rhs;
+                let violated = match lin.op {
+                    LIN_LE => residual > 0.0,
+                    LIN_GE => residual < 0.0,
+                    _ => residual != 0.0,
+                };
+                if !violated {
+                    continue;
+                }
+                let mut denom = 0.0;
+                for (k, &j) in lin.indices.iter().enumerate() {
+                    let j = j as usize;
+                    if !frozen[j] && lo[j] < hi[j] {
+                        denom += lin.coefs[k] * lin.coefs[k];
+                    }
+                }
+                if denom == 0.0 {
+                    continue; // nothing can move
+                }
+                let step = residual / denom;
+                for (k, &j) in lin.indices.iter().enumerate() {
+                    let j = j as usize;
+                    // lo/hi are NaN-normalized to +-inf, so >= is the exact
+                    // negation of the `lo < hi` movability test above
+                    if frozen[j] || lo[j] >= hi[j] {
+                        continue;
+                    }
+                    let mut v = row[j] - lin.coefs[k] * step;
+                    if v < lo[j] {
+                        v = lo[j];
+                    }
+                    if v > hi[j] {
+                        v = hi[j];
+                    }
+                    row[j] = v;
                 }
             }
         }

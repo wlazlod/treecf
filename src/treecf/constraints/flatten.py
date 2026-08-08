@@ -30,7 +30,7 @@ def flatten_constraints(compiled: CompiledConstraints) -> dict[str, Any]:
     equals_val: list[float] = []
     mono_idx: list[int] = []
     mono_dir: list[int] = []
-    for c in compiled.constraints:
+    for c in list(compiled.constraints) + list(compiled.derived_ranges):
         if isinstance(c, Freeze):
             freeze.append(index[c.feature])
         elif isinstance(c, Range):

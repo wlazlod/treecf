@@ -6,6 +6,7 @@ from treecf._errors import (
     MissingExtraError,
     TargetError,
     TreecfError,
+    TreecfWarning,
     UnsupportedModelError,
 )
 from treecf.api import Counterfactual, Explainer, Grid, Infeasible
@@ -25,7 +26,7 @@ from treecf.mining import DataQualityFinding, SuggestedConstraint, suggest_const
 from treecf.plausibility import Plausibility
 from treecf.targets import Target
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 __all__ = [
     "AllowMissing",
@@ -51,6 +52,7 @@ __all__ = [
     "Target",
     "TargetError",
     "TreecfError",
+    "TreecfWarning",
     "UnsupportedModelError",
     "__version__",
     "constraint",

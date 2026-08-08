@@ -25,3 +25,7 @@ class ConstraintParseError(TreecfError):
 
 class TargetError(TreecfError):
     """The target specification is malformed or incompatible with the model link."""
+
+
+class TreecfWarning(UserWarning):
+    """Non-fatal treecf diagnostics (e.g. the factual violates a constraint)."""

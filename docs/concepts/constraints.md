@@ -19,6 +19,27 @@ OneHot(("channel_web", "channel_app", "channel_branch"))
 Only linear expressions are expressible as strings by design; richer constraints
 are objects. Parse errors carry a caret marking the offending token.
 
+## When the factual violates a constraint
+
+If the factual itself violates a declared constraint (say `debt <= income` when
+the row has more debt than income), the search still runs, but every returned
+plan must land in the feasible region — so the plan will contain changes made
+solely to satisfy the constraint, indistinguishable from score-driven changes.
+`explain` emits a `TreecfWarning` naming each violated constraint when this
+happens; `explain_batch` emits one aggregate warning with per-constraint row
+counts instead of one warning per row.
+
+## How constraints steer the search
+
+Single-feature linear constraints (`constraint("income >= 100")`) are lowered
+into per-feature bounds at compile time, so candidates are clipped into the
+feasible interval directly. Multi-feature linears are enforced by a cyclic
+projection repair: each violated constraint projects the candidate onto its
+boundary (three rounds, respecting frozen and pinned features), which handles
+feasible regions far from the factual. Repair is best-effort — with mutually
+conflicting constraints no repair exists, the feasibility check remains the
+arbiter, and the result is reported as `Infeasible` rather than silently bent.
+
 ## Mining candidates from data
 
 `suggest_constraints` scans a background sample for invariants — pairwise
