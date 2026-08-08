@@ -107,3 +107,14 @@ class TestScoreComposition:
         assert apply_link(Link.IDENTITY, 0.3) == 0.3
         assert apply_link(Link.SIGMOID, 0.0) == 0.5
         assert apply_link(Link.SIGMOID, 4.0) == pytest.approx(1.0 / (1.0 + math.exp(-4.0)))
+
+    def test_apply_link_extreme_scores_do_not_overflow(self) -> None:
+        lo = apply_link(Link.SIGMOID, -1000.0)
+        hi = apply_link(Link.SIGMOID, 1000.0)
+        assert 0.0 <= lo < 1e-300
+        assert 1.0 - 1e-15 < hi <= 1.0
+        assert math.isfinite(lo) and math.isfinite(hi)
+
+    def test_apply_link_midrange_bit_identical_to_naive_formula(self) -> None:
+        score = 1.5
+        assert apply_link(Link.SIGMOID, score) == 1.0 / (1.0 + math.exp(-score))
