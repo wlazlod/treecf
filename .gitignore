@@ -26,8 +26,9 @@ site/
 .vscode/
 .DS_Store
 
-# Claude Code local settings
+# Claude Code local settings and project-memory binding layer (runtime-only)
 .claude/settings.local.json
+.claude/project-memory/
 
 # Local-only working documents
 /CFE_SPEC.md
