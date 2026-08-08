@@ -69,6 +69,10 @@ class CompiledConstraints:
     onehot_groups: tuple[tuple[int, ...], ...] = ()
     allow_missing: dict[int, tuple[float, float]] = field(default_factory=dict)
     binary_features: frozenset[int] = frozenset()
+    # per-feature bounds implied by single-feature Linear constraints; kept out of
+    # ``constraints`` so recompiling a clone from ``constraints`` re-derives them
+    # exactly once (idempotent)
+    derived_ranges: tuple[Range, ...] = ()
 
     def check_matrix(self, X: FloatArray, x: FloatArray) -> BoolArray:
         """Vectorized feasibility of candidate rows against every constraint."""
@@ -173,6 +177,10 @@ class CompiledConstraints:
                     lo[j] = max(lo[j], x[j])
                 else:
                     hi[j] = min(hi[j], x[j])
+        for derived in self.derived_ranges:
+            j = index[derived.feature]
+            lo[j] = max(lo[j], derived.lo)
+            hi[j] = min(hi[j], derived.hi)
         return lo, hi, frozen
 
 
@@ -184,6 +192,7 @@ def compile_constraints(
     index = {name: j for j, name in enumerate(names)}
 
     linears: list[ResolvedLinear] = []
+    derived: list[Range] = []
     implications: list[ResolvedImplication] = []
     onehot_groups: list[tuple[int, ...]] = []
     allow_missing: dict[int, tuple[float, float]] = {}
@@ -223,6 +232,29 @@ def compile_constraints(
             if not c.coefficients:
                 raise ConstraintValidationError("Linear constraint has no coefficients")
             indices = tuple(resolve(name, kind) for name in c.coefficients)
+            if len(c.coefficients) == 1:
+                ((lin_name, coef),) = c.coefficients.items()
+                if coef == 0.0:
+                    vacuous = (
+                        (c.op == "<=" and c.rhs >= 0.0)
+                        or (c.op == ">=" and c.rhs <= 0.0)
+                        or (c.op == "==" and c.rhs == 0.0)
+                    )
+                    if vacuous:
+                        continue  # 0 op rhs holds for every x: no linear, no bound
+                    raise ConstraintValidationError(
+                        f"Linear constraint over {lin_name!r} is unsatisfiable: "
+                        f"0 {c.op} {c.rhs}"
+                    )
+                # lower the constraint into an equivalent per-feature bound (the
+                # Linear itself is retained so missing_policy still governs NaN)
+                bound = c.rhs / coef
+                if c.op == "==":
+                    derived.append(Range(lin_name, bound, bound))
+                elif (c.op == "<=") == (coef > 0.0):
+                    derived.append(Range(lin_name, -math.inf, bound))
+                else:
+                    derived.append(Range(lin_name, bound, math.inf))
             linears.append(
                 ResolvedLinear(
                     coefficients=dict(c.coefficients),
@@ -281,6 +313,7 @@ def compile_constraints(
         onehot_groups=tuple(onehot_groups),
         allow_missing=allow_missing,
         binary_features=frozenset(binary),
+        derived_ranges=tuple(derived),
     )
 
 

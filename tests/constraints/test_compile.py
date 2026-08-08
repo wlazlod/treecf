@@ -1,5 +1,7 @@
 """Compilation and validation of the full M2 constraint set."""
 
+import math
+
 import numpy as np
 import pytest
 
@@ -11,6 +13,7 @@ from treecf.constraints import (
     Implies,
     Linear,
     OneHot,
+    Range,
     compile_constraints,
     constraint,
 )
@@ -80,3 +83,52 @@ class TestStructuredAccess:
         compiled = compile_constraints([Equals("flag1", 1.0)], NAMES)
         lo, hi, _ = compiled.instance_bounds(np.zeros(len(NAMES)))
         assert lo[3] == hi[3] == 1.0
+
+
+class TestDerivedRanges:
+    def test_ge_derives_lower_bound(self) -> None:
+        compiled = compile_constraints([constraint("a >= 100")], NAMES)
+        assert compiled.derived_ranges == (Range("a", 100.0, math.inf),)
+        assert len(compiled.linears) == 1  # original Linear retained
+
+    def test_le_derives_upper_bound(self) -> None:
+        compiled = compile_constraints([constraint("2*a <= 10")], NAMES)
+        assert compiled.derived_ranges == (Range("a", -math.inf, 5.0),)
+
+    def test_negative_coef_flips_inequality(self) -> None:
+        compiled = compile_constraints([Linear({"a": -2.0}, "<=", -10.0)], NAMES)
+        assert compiled.derived_ranges == (Range("a", 5.0, math.inf),)
+
+    def test_negative_coef_ge_gives_upper_bound(self) -> None:
+        compiled = compile_constraints([Linear({"a": -2.0}, ">=", -10.0)], NAMES)
+        assert compiled.derived_ranges == (Range("a", -math.inf, 5.0),)
+
+    def test_eq_derives_pin(self) -> None:
+        compiled = compile_constraints([Linear({"a": 2.0}, "==", 7.0)], NAMES)
+        (rng,) = compiled.derived_ranges
+        assert rng.lo == rng.hi == 3.5
+
+    @pytest.mark.parametrize(("op", "rhs"), [("<=", 3.0), ("<=", 0.0), (">=", -1.0), ("==", 0.0)])
+    def test_zero_coef_vacuous_is_dropped(self, op: str, rhs: float) -> None:
+        compiled = compile_constraints([Linear({"a": 0.0}, op, rhs)], NAMES)
+        assert compiled.linears == ()
+        assert compiled.derived_ranges == ()
+
+    @pytest.mark.parametrize(("op", "rhs"), [(">=", 3.0), ("<=", -1.0), ("==", 3.0)])
+    def test_zero_coef_unsatisfiable_raises(self, op: str, rhs: float) -> None:
+        with pytest.raises(ConstraintValidationError, match="unsatisfiable"):
+            compile_constraints([Linear({"a": 0.0}, op, rhs)], NAMES)
+
+    def test_zero_coef_unknown_feature_still_rejected(self) -> None:
+        with pytest.raises(ConstraintValidationError, match="ghost"):
+            compile_constraints([Linear({"ghost": 0.0}, "<=", 3.0)], NAMES)
+
+    def test_multi_feature_linear_derives_nothing(self) -> None:
+        compiled = compile_constraints([constraint("a + b >= 100")], NAMES)
+        assert compiled.derived_ranges == ()
+
+    def test_derived_bound_reaches_instance_bounds(self) -> None:
+        compiled = compile_constraints([constraint("a >= 100")], NAMES)
+        lo, hi, _ = compiled.instance_bounds(np.zeros(len(NAMES)))
+        assert lo[0] == 100.0
+        assert hi[0] == math.inf
