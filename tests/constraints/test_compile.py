@@ -132,3 +132,59 @@ class TestDerivedRanges:
         lo, hi, _ = compiled.instance_bounds(np.zeros(len(NAMES)))
         assert lo[0] == 100.0
         assert hi[0] == math.inf
+
+
+class TestFactualViolations:
+    def test_linear_message_shape(self) -> None:
+        compiled = compile_constraints([constraint("a <= b")], NAMES)
+        x = np.array([2.75, 0.0, 0.0, 0.0, 0.0, 0.0])
+        assert compiled.factual_violations(x) == (
+            "Linear 1*a - 1*b <= 0 violated at the factual (lhs=2.75)",
+        )
+
+    def test_linear_within_slack_is_not_violated(self) -> None:
+        compiled = compile_constraints([constraint("a <= b")], NAMES)
+        x = np.array([1e-12, 0.0, 0.0, 0.0, 0.0, 0.0])
+        assert compiled.factual_violations(x) == ()
+
+    def test_linear_nan_forbid_missing_reports(self) -> None:
+        lin = Linear({"a": 1.0, "b": -1.0}, "<=", 0.0, missing_policy="forbid_missing")
+        compiled = compile_constraints([lin], NAMES)
+        x = np.array([np.nan, 0.0, 0.0, 0.0, 0.0, 0.0])
+        (desc,) = compiled.factual_violations(x)
+        assert "references a missing value" in desc
+        assert "missing_policy=forbid_missing" in desc
+
+    def test_linear_nan_satisfied_is_not_violated(self) -> None:
+        compiled = compile_constraints([constraint("a <= b")], NAMES)
+        x = np.array([np.nan, 0.0, 0.0, 0.0, 0.0, 0.0])
+        assert compiled.factual_violations(x) == ()
+
+    def test_range_violation_and_nan_skip(self) -> None:
+        compiled = compile_constraints([Range("a", 0.0, 1.0)], NAMES)
+        assert compiled.factual_violations(np.array([2.0, 0, 0, 0, 0, 0.0])) != ()
+        assert compiled.factual_violations(np.array([np.nan, 0, 0, 0, 0, 0.0])) == ()
+
+    def test_freeze_monotone_derived_never_reported(self) -> None:
+        compiled = compile_constraints(
+            [Freeze("a"), constraint("b >= 100")], NAMES
+        )
+        x = np.array([1.0, 2.0, 0.0, 0.0, 0.0, 0.0])
+        # b >= 100 is violated -> exactly one report (the Linear), never the
+        # derived range duplicate and never Freeze
+        (desc,) = compiled.factual_violations(x)
+        assert desc.startswith("Linear")
+
+    def test_implies_and_onehot(self) -> None:
+        compiled = compile_constraints(
+            [
+                Implies(Equals("flag1", 1.0), Equals("flag2", 1.0)),
+                OneHot(("flag2", "flag3")),
+            ],
+            NAMES,
+        )
+        x = np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0])
+        descs = compiled.factual_violations(x)
+        assert len(descs) == 2
+        assert any(d.startswith("Implies") for d in descs)
+        assert any(d.startswith("OneHot") for d in descs)

@@ -59,6 +59,18 @@ class ResolvedImplication:
     cons_value: float
 
 
+def _format_linear(lin: ResolvedLinear) -> str:
+    parts: list[str] = []
+    for name, coef in lin.coefficients.items():
+        if not parts:
+            parts.append(f"{coef:g}*{name}")
+        elif coef < 0:
+            parts.append(f"- {-coef:g}*{name}")
+        else:
+            parts.append(f"+ {coef:g}*{name}")
+    return f"Linear {' '.join(parts)} {lin.op} {lin.rhs:g}"
+
+
 @dataclass(frozen=True)
 class CompiledConstraints:
     """Constraints resolved against a feature space."""
@@ -221,6 +233,71 @@ class CompiledConstraints:
             lo[j] = max(lo[j], derived.lo)
             hi[j] = min(hi[j], derived.hi)
         return lo, hi, frozen
+
+    def factual_violations(self, x: FloatArray) -> tuple[str, ...]:
+        """One human-readable description per constraint the factual violates."""
+        return tuple(desc for _, desc in self._factual_violation_items(x))
+
+    def _factual_violation_items(self, x: FloatArray) -> tuple[tuple[str, str], ...]:
+        """(label, description) pairs; labels are row-independent for aggregation.
+
+        Same 1e-9 slack as ``check_matrix``. Freeze/Monotone are vacuous at the
+        factual by construction; ``derived_ranges`` duplicate a reported Linear —
+        all three are skipped.
+        """
+        slack = 1e-9
+        index = {name: j for j, name in enumerate(self.feature_names)}
+        items: list[tuple[str, str]] = []
+        for c in self.constraints:
+            if isinstance(c, Range):
+                v = float(x[index[c.feature]])
+                if not math.isnan(v) and not (c.lo - slack <= v <= c.hi + slack):
+                    label = f"Range({c.feature!r}, {c.lo:g}, {c.hi:g})"
+                    items.append((label, f"{label} violated at the factual (value={v:g})"))
+            elif isinstance(c, Equals):
+                v = float(x[index[c.feature]])
+                if not math.isnan(v) and not abs(v - c.value) <= slack:
+                    label = f"Equals({c.feature!r}, {c.value:g})"
+                    items.append((label, f"{label} violated at the factual (value={v:g})"))
+            elif isinstance(c, Implies):
+                cond = x[index[c.condition.feature]] == c.condition.value
+                cons = x[index[c.consequence.feature]] == c.consequence.value
+                if cond and not cons:
+                    label = (
+                        f"Implies({c.condition.feature} == {c.condition.value:g} -> "
+                        f"{c.consequence.feature} == {c.consequence.value:g})"
+                    )
+                    items.append((label, f"{label} violated at the factual"))
+            elif isinstance(c, OneHot):
+                total = sum(float(x[index[f]]) for f in c.features)
+                # exact equality mirrors check_matrix; a NaN sum compares unequal
+                if total != 1.0:
+                    label = f"OneHot({', '.join(c.features)})"
+                    items.append((label, f"{label} violated at the factual (sum={total:g})"))
+        for lin in self.linears:
+            label = _format_linear(lin)
+            vals = [float(x[j]) for j in lin.indices]
+            if any(math.isnan(v) for v in vals):
+                if lin.missing_policy != "satisfied":
+                    items.append((
+                        label,
+                        f"{label} references a missing value "
+                        f"(missing_policy={lin.missing_policy})",
+                    ))
+                continue
+            total = 0.0
+            for coef, v in zip(lin.coefs, vals, strict=True):
+                total += coef * v
+            holds = (
+                total <= lin.rhs + slack
+                if lin.op == "<="
+                else total >= lin.rhs - slack
+                if lin.op == ">="
+                else abs(total - lin.rhs) <= slack
+            )
+            if not holds:
+                items.append((label, f"{label} violated at the factual (lhs={total:g})"))
+        return tuple(items)
 
 
 def compile_constraints(

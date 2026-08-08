@@ -6,6 +6,7 @@ from treecf._errors import (
     MissingExtraError,
     TargetError,
     TreecfError,
+    TreecfWarning,
     UnsupportedModelError,
 )
 from treecf.api import Counterfactual, Explainer, Grid, Infeasible
@@ -51,6 +52,7 @@ __all__ = [
     "Target",
     "TargetError",
     "TreecfError",
+    "TreecfWarning",
     "UnsupportedModelError",
     "__version__",
     "constraint",

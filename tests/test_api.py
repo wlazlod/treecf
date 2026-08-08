@@ -14,6 +14,7 @@ from treecf import (
     Range,
     Target,
     TreecfError,
+    TreecfWarning,
     constraint,
 )
 
@@ -89,12 +90,14 @@ def test_far_single_feature_linear_matches_range(backend: str) -> None:
     # not come back Infeasible because the halfspace is many sigma away
     x = np.array([2.12, 0.0])
     target = Target.probability(range=(0.0, 1.0))
-    via_range = Explainer(
-        _stump_dump(), constraints=[Range("f0", 100, 1e9)], normalizers=np.ones(2)
-    ).explain(x, target, backend=backend, seed=0)
-    via_linear = Explainer(
-        _stump_dump(), constraints=[constraint("f0 >= 100")], normalizers=np.ones(2)
-    ).explain(x, target, backend=backend, seed=0)
+    with pytest.warns(TreecfWarning):  # the factual violates the constraint by design
+        via_range = Explainer(
+            _stump_dump(), constraints=[Range("f0", 100, 1e9)], normalizers=np.ones(2)
+        ).explain(x, target, backend=backend, seed=0)
+    with pytest.warns(TreecfWarning):
+        via_linear = Explainer(
+            _stump_dump(), constraints=[constraint("f0 >= 100")], normalizers=np.ones(2)
+        ).explain(x, target, backend=backend, seed=0)
     assert isinstance(via_range, Counterfactual)
     assert isinstance(via_linear, Counterfactual)
     assert via_linear.x_cf[0] == via_range.x_cf[0] == 100.0
@@ -106,9 +109,10 @@ def test_far_multi_feature_linear_is_feasible(backend: str) -> None:
     exp = Explainer(
         _stump_dump(), constraints=[constraint("f0 + f1 >= 100")], normalizers=np.ones(2)
     )
-    res = exp.explain(
-        np.array([2.12, 0.0]), Target.probability(range=(0.0, 1.0)), backend=backend, seed=0
-    )
+    with pytest.warns(TreecfWarning):  # the factual violates the constraint by design
+        res = exp.explain(
+            np.array([2.12, 0.0]), Target.probability(range=(0.0, 1.0)), backend=backend, seed=0
+        )
     assert isinstance(res, Counterfactual)
     assert res.x_cf[0] + res.x_cf[1] >= 100.0 - 1e-6
 
@@ -119,11 +123,12 @@ def test_conflicting_linears_still_infeasible() -> None:
         constraints=[constraint("f0 + f1 >= 100"), constraint("f0 + f1 <= -100")],
         normalizers=np.ones(2),
     )
-    res = exp.explain(
-        np.array([0.0, 0.0]),
-        Target.probability(range=(0.0, 1.0)),
-        backend="genetic",
-        seed=0,
-        time_budget_s=5.0,
-    )
+    with pytest.warns(TreecfWarning):  # the factual violates both constraints by design
+        res = exp.explain(
+            np.array([0.0, 0.0]),
+            Target.probability(range=(0.0, 1.0)),
+            backend="genetic",
+            seed=0,
+            time_budget_s=5.0,
+        )
     assert isinstance(res, Infeasible)

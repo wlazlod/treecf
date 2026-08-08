@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import warnings
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -10,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import numpy.typing as npt
 
-from treecf._errors import TreecfError
+from treecf._errors import TreecfError, TreecfWarning
 from treecf.aim.cells import cell_index, feature_cells
 from treecf.constraints.compile import compile_constraints
 from treecf.constraints.objects import Constraint
@@ -143,8 +144,39 @@ class Explainer:
         ``backend="genetic"`` runs the bundled Rust engine (default);
         ``backend="python"`` runs the reference numpy implementation of the
         same algorithm. Every result is float-verified before being returned.
+
+        If the factual itself violates a constraint, a :class:`TreecfWarning`
+        is emitted: the returned plan will include changes made solely to
+        satisfy the constraint set.
         """
+        return self._explain(
+            x, target, backend, time_budget_s, sparsity_weight, seed, warn_factual=True
+        )
+
+    def _explain(
+        self,
+        x: FloatArray,
+        target: Target,
+        backend: str,
+        time_budget_s: float,
+        sparsity_weight: float,
+        seed: int | None,
+        *,
+        warn_factual: bool,
+    ) -> Counterfactual | Infeasible | dict[str, object]:
+        """``explain`` body; ``explain_batch`` calls it with ``warn_factual=False``
+        after emitting its own aggregate warning."""
         x = np.asarray(x, dtype=np.float64)
+        if warn_factual:
+            violations = self.compiled.factual_violations(x)
+            if violations:
+                warnings.warn(
+                    f"factual violates {len(violations)} constraint(s): "
+                    + "; ".join(violations)
+                    + ". The returned plan will include changes made solely to satisfy them.",
+                    TreecfWarning,
+                    stacklevel=3,  # _explain <- explain <- user code
+                )
         if self.plausibility is not None and np.isnan(x).any():
             raise TreecfError("plausibility with missing factual values is not supported")
         if backend in ("genetic", "genetic-rust"):
@@ -250,11 +282,12 @@ class Explainer:
         time_budget_s: float,
         sparsity_weight: float,
         seed: int | None,
+        warn_factual: bool = True,
     ) -> Counterfactual | Infeasible:
         """`explain` for a single-interval target, with the bands arm ruled out."""
-        result = self.explain(
-            x, target, backend=backend, time_budget_s=time_budget_s,
-            sparsity_weight=sparsity_weight, seed=seed,
+        result = self._explain(
+            x, target, backend, time_budget_s, sparsity_weight, seed,
+            warn_factual=warn_factual,
         )
         assert not isinstance(result, dict)  # bands are rejected by the callers
         return result

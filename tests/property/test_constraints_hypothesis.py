@@ -5,6 +5,7 @@ constraint and the target in float space, independently re-checked here
 from __future__ import annotations
 
 import math
+import warnings
 
 import numpy as np
 from hypothesis import given, settings
@@ -18,6 +19,7 @@ from treecf import (
     Monotone,
     Range,
     Target,
+    TreecfWarning,
     constraint,
 )
 from treecf.constraints.objects import Constraint, Linear
@@ -65,7 +67,13 @@ def test_returned_counterfactuals_satisfy_everything(seed: int) -> None:
         exp = Explainer(ir, normalizers=np.ones(P), constraints=constraints)
     except Exception:
         return  # contradictory random constraint sets may be rejected at compile: fine
-    res = exp.explain(x, target=Target.raw(op=">=", value=lo_t), sparsity_weight=0.05, seed=0)
+    with warnings.catch_warnings():
+        # random factuals may violate the random constraints; the property under
+        # test is about returned counterfactuals, not the factual warning
+        warnings.simplefilter("ignore", TreecfWarning)
+        res = exp.explain(
+            x, target=Target.raw(op=">=", value=lo_t), sparsity_weight=0.05, seed=0
+        )
     if not isinstance(res, Counterfactual):
         return
 

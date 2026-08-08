@@ -3,11 +3,20 @@
 from __future__ import annotations
 
 import math
+import warnings
 
 import numpy as np
 import pytest
 
-from treecf import AllowMissing, Counterfactual, Explainer, Linear, Target, constraint
+from treecf import (
+    AllowMissing,
+    Counterfactual,
+    Explainer,
+    Linear,
+    Target,
+    TreecfWarning,
+    constraint,
+)
 from treecf.constraints.compile import compile_constraints
 from treecf.ir.evaluate import raw_score
 from treecf.ir.model import EnsembleIR, Link, Node, SplitOp, Tree
@@ -124,7 +133,12 @@ class TestMissingPolicy:
                 constraint("a >= 100"),  # impossible for values; vacuous when NaN
             ],
         )
-        res = exp.explain(np.array([0.0, 0.0]), target=Target.raw(op=">=", value=0.5), seed=0)
+        with warnings.catch_warnings():
+            # the factual a=0.0 violates a >= 100 by design (NaN is the only out)
+            warnings.simplefilter("ignore", TreecfWarning)
+            res = exp.explain(
+                np.array([0.0, 0.0]), target=Target.raw(op=">=", value=0.5), seed=0
+            )
         assert isinstance(res, Counterfactual)
         assert math.isnan(res.x_cf[0])
 
