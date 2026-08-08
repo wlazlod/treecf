@@ -34,6 +34,7 @@ BoolArray = npt.NDArray[np.bool_]
 
 _LINEAR_OPS = ("<=", ">=", "==")
 _MISSING_POLICIES = ("satisfied", "violated", "forbid_missing")
+_REPAIR_ROUNDS = 3  # cyclic projection sweeps over the linear constraints
 
 
 @dataclass(frozen=True)
@@ -117,10 +118,13 @@ class CompiledConstraints:
         return ok
 
     def repair_matrix(self, X: FloatArray, x: FloatArray) -> FloatArray:
-        """Best-effort repair hints: clip to bounds, fix NaN legality, order pairs."""
+        """Best-effort repair hints: clip to bounds, fix NaN legality, project linears.
+
+        Feasibility is decided by ``check_matrix``, never assumed from repair.
+        """
         X = X.copy()
         p = X.shape[1]
-        lo, hi, _ = self.instance_bounds(x)
+        lo, hi, frozen = self.instance_bounds(x)
         lo = np.where(np.isnan(lo), -math.inf, lo)
         hi = np.where(np.isnan(hi), math.inf, hi)
         for j in range(p):
@@ -132,13 +136,48 @@ class CompiledConstraints:
                 X[nan_col, j] = x[j]
             valid = ~np.isnan(X[:, j])
             X[valid, j] = np.clip(X[valid, j], lo[j], hi[j])
-        for lin in self.linears:
-            # repair hint only for the canonical order pair a - b <= 0: clip a to b
-            if lin.op == "<=" and lin.rhs == 0.0 and sorted(lin.coefs) == [-1.0, 1.0]:
-                a = lin.indices[lin.coefs.index(1.0)]
-                b = lin.indices[lin.coefs.index(-1.0)]
-                both = ~np.isnan(X[:, a]) & ~np.isnan(X[:, b])
-                X[both, a] = np.minimum(X[both, a], X[both, b])
+        # cyclic projection: boxes intersected with halfspaces, a few sweeps
+        for _ in range(_REPAIR_ROUNDS):
+            for lin in self.linears:
+                if lin.op == "<=" and lin.rhs == 0.0 and sorted(lin.coefs) == [-1.0, 1.0]:
+                    # canonical order pair a - b <= 0: clip a to b (unchanged;
+                    # moving one feature beats a split projection here)
+                    a = lin.indices[lin.coefs.index(1.0)]
+                    b = lin.indices[lin.coefs.index(-1.0)]
+                    both = ~np.isnan(X[:, a]) & ~np.isnan(X[:, b])
+                    X[both, a] = np.minimum(X[both, a], X[both, b])
+                    continue
+                # halfspace projection; sequential term order and the single
+                # residual/denom division are float-parity requirements with Rust
+                cols = list(lin.indices)
+                finite = ~np.isnan(X[:, cols]).any(axis=1)
+                total = np.zeros(len(X))
+                for coef, j in zip(lin.coefs, cols, strict=True):
+                    total += coef * X[:, j]
+                residual = total - lin.rhs
+                with np.errstate(invalid="ignore"):
+                    if lin.op == "<=":
+                        hit = residual > 0.0
+                    elif lin.op == ">=":
+                        hit = residual < 0.0
+                    else:
+                        hit = residual != 0.0
+                hit &= finite
+                if not hit.any():
+                    continue
+                movable = [k for k, j in enumerate(cols) if not frozen[j] and lo[j] < hi[j]]
+                denom = 0.0
+                for k in movable:
+                    denom += lin.coefs[k] * lin.coefs[k]
+                if denom == 0.0:
+                    continue
+                step = residual[hit] / denom
+                for k in movable:
+                    j = cols[k]
+                    v = X[hit, j] - lin.coefs[k] * step
+                    v = np.where(v < lo[j], lo[j], v)
+                    v = np.where(v > hi[j], hi[j], v)
+                    X[hit, j] = v
         for imp in self.implications:
             cond = X[:, imp.cond_index] == imp.cond_value
             X[cond, imp.cons_index] = imp.cons_value

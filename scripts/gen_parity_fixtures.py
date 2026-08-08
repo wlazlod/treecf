@@ -245,6 +245,19 @@ def main() -> None:
         sigma=np.maximum(np.std(Xr, axis=0), 1e-6), background=Xr[:50],
     ))
 
+    ir11 = make_random_ir(rng, n_features=4, n_trees=5, depth=3)
+    x11 = rng.normal(scale=1.0, size=4)
+    scenarios.append(scenario(
+        "11-linear-projection", ir11, x11,
+        [
+            # violated at the factual and far from it: exercises the halfspace
+            # projection repair (non-canonical multi-feature linear)
+            {"type": "Linear", "coefficients": {"x0": 1.0, "x1": 1.0}, "op": ">=",
+             "rhs": float(abs(x11[0]) + abs(x11[1]) + 25.0)},
+        ],
+        (target_from_percentile(ir11, rng, 60), float("inf")),
+    ))
+
     for data in scenarios:
         path = out_dir / f"{data['name']}.json"
         with open(path, "w", encoding="utf-8") as fh:

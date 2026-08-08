@@ -9,6 +9,7 @@ from treecf import (
     Counterfactual,
     Explainer,
     Freeze,
+    Infeasible,
     Monotone,
     Range,
     Target,
@@ -97,3 +98,32 @@ def test_far_single_feature_linear_matches_range(backend: str) -> None:
     assert isinstance(via_range, Counterfactual)
     assert isinstance(via_linear, Counterfactual)
     assert via_linear.x_cf[0] == via_range.x_cf[0] == 100.0
+
+
+@pytest.mark.parametrize("backend", ["genetic", "python"])
+def test_far_multi_feature_linear_is_feasible(backend: str) -> None:
+    # review repro: f0 + f1 >= 100 with the factual near the origin
+    exp = Explainer(
+        _stump_dump(), constraints=[constraint("f0 + f1 >= 100")], normalizers=np.ones(2)
+    )
+    res = exp.explain(
+        np.array([2.12, 0.0]), Target.probability(range=(0.0, 1.0)), backend=backend, seed=0
+    )
+    assert isinstance(res, Counterfactual)
+    assert res.x_cf[0] + res.x_cf[1] >= 100.0 - 1e-6
+
+
+def test_conflicting_linears_still_infeasible() -> None:
+    exp = Explainer(
+        _stump_dump(),
+        constraints=[constraint("f0 + f1 >= 100"), constraint("f0 + f1 <= -100")],
+        normalizers=np.ones(2),
+    )
+    res = exp.explain(
+        np.array([0.0, 0.0]),
+        Target.probability(range=(0.0, 1.0)),
+        backend="genetic",
+        seed=0,
+        time_budget_s=5.0,
+    )
+    assert isinstance(res, Infeasible)
