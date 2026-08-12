@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - PyPI development-status classifier raised to `4 - Beta`.
+- Rust core: rand upgraded 0.9 → 0.10 (with rand_distr 0.6 and rand_pcg 0.10).
+  Seeded runs stay deterministic for a given treecf version, but the random
+  stream may differ from builds against rand 0.9, so genetic-search results for
+  the same seed can change across this upgrade.
 
 ## [0.1.1] - 2026-08-08
 
