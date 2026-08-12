@@ -36,7 +36,7 @@ jobs:
           - { name: macos-x86_64, runner: macos-14, target: x86_64, smoke: skip }
           - { name: windows-x86_64, runner: windows-latest, target: x64, smoke: native }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Build wheel
         uses: PyO3/maturin-action@v1
@@ -75,7 +75,7 @@ jobs:
     name: sdist
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Build sdist
         uses: PyO3/maturin-action@v1
