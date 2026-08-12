@@ -45,7 +45,7 @@ jobs:
           manylinux: ${{ matrix.platform.manylinux }}
           args: --release --out dist
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         if: matrix.platform.smoke == 'native'
         with:
           python-version: "3.12"
