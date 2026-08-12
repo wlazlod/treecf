@@ -8,7 +8,7 @@
 
 use std::time::Instant;
 
-use rand::Rng;
+use rand::RngExt;
 use rand::SeedableRng;
 use rand_distr::{Distribution, Normal};
 use rand_pcg::Pcg64Mcg;
@@ -50,7 +50,7 @@ pub fn solve_genetic(
     let p = ens.n_features;
     let mut rng = match seed {
         Some(s) => Pcg64Mcg::seed_from_u64(s),
-        None => Pcg64Mcg::from_os_rng(),
+        None => Pcg64Mcg::from_rng(&mut rand::rng()),
     };
     let normal = Normal::new(0.0, 1.0).unwrap();
 
