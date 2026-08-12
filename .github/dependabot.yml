@@ -4,6 +4,10 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # The version tag of this action pins the Rust toolchain itself; the
+      # MSRV job must keep installing 1.86, so never auto-bump it.
+      - dependency-name: dtolnay/rust-toolchain
   - package-ecosystem: pip
     directory: /
     schedule:
@@ -12,3 +16,10 @@ updates:
     directory: /rust
     schedule:
       interval: weekly
+    groups:
+      # rand, rand_distr, and rand_pcg share trait definitions and must be
+      # upgraded together; individual bumps do not compile.
+      rand:
+        patterns:
+          - rand
+          - rand_*
