@@ -228,8 +228,10 @@ def plot_recourse_map(
     ``annotate`` is set; ``show_factual_label`` adds a block below the
     factual dot listing the features any plan changed, at their original
     values. Infeasible entries in ``results`` are drawn as grey markers above
-    the plans with their failure reason. ``region_labels`` names the two
-    sides of the boundary in ``schematic`` mode.
+    the plans, labeled by name (``"infeasible"`` alone when unlabeled, with
+    a ``(certified)`` suffix when the entry carries a certified proof).
+    ``region_labels`` names the two sides of the boundary in ``schematic``
+    mode.
 
     ``schematic=True`` swaps the quantitative axes and target band for a
     slide-friendly rendering: a wavy decision-boundary line instead of a
@@ -330,6 +332,49 @@ def plot_recourse_map(
         ax.set_xlabel("model output (probability)" if prob else "model output (raw score)")
         ax.set_ylabel("recourse cost J")
         ax.set_title(f"{len(plans)} recourse option(s)")
+
+    inverted = ax.xaxis_inverted()
+    offset = (-8, 4) if inverted else (8, 4)
+    ha = "right" if inverted else "left"
+
+    if annotate:
+        for label, plan, px, py in plan_points:
+            text = _format_plan(
+                label, plan, explainer, fmt, max_changes_per_label, schematic=schematic
+            )
+            ax.annotate(text, xy=(px, py), xytext=offset, textcoords="offset points", ha=ha)
+
+    if show_factual_label:
+        touched: dict[str, float] = {}
+        for _label, plan, _px, _py in plan_points:
+            for name, (source, _dest) in plan.changes.items():
+                touched.setdefault(name, source)
+        if touched:
+            lines = [
+                f"{name} = NaN"
+                if math.isnan(touched[name])
+                else f"{name} = {fmt.format(touched[name])}"
+                for name in sorted(touched)
+            ]
+            ax.annotate(
+                "\n".join(lines),
+                xy=(x_fact, 0.0),
+                xytext=(0, -10),
+                textcoords="offset points",
+                va="top",
+                ha="center",
+            )
+
+    y_top = max((py for _, _, _, py in plan_points), default=0.0)
+    step_y = 0.12 * (y_top or 1.0)
+    for i, (label, r) in enumerate(failures):
+        y = y_top + (i + 1) * step_y
+        ax.plot([x_fact], [y], "x", color="0.5")
+        text = f"{label}: infeasible" if label is not None else "infeasible"
+        if getattr(r, "proof", "") == "certified":
+            text += " (certified)"
+        ax.annotate(text, xy=(x_fact, y), xytext=offset, textcoords="offset points", ha=ha)
+
     ax.set_ylim(bottom=-0.05 * ax.get_ylim()[1])
     return ax
 

@@ -533,3 +533,142 @@ def test_plot_recourse_map_identity_link_never_touches_score_prob() -> None:
     plan = SimpleNamespace(changes={"a": (0.0, 2.0)}, distance=1.0, score_raw=0.8)
     ax = plot_recourse_map(exp, np.zeros(3), [plan], Target.raw(op=">=", value=0.5))
     assert ax.get_xlabel() == "model output (raw score)"
+
+
+def test_plot_recourse_map_annotate_false_and_no_factual_label_has_no_text() -> None:
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    plans = [
+        _cf({"a": (0.0, 2.0)}, distance=1.0, score_prob=0.6),
+        _cf({"b": (0.0, 3.0)}, distance=2.0, score_prob=0.7),
+    ]
+    ax = plot_recourse_map(
+        exp,
+        np.zeros(3),
+        plans,
+        Target.probability(op=">=", value=0.6),
+        annotate=False,
+        show_factual_label=False,
+    )
+    labels = [t.get_text() for t in ax.texts if t.get_text()]
+    assert labels == []
+
+
+def test_plot_recourse_map_infeasible_markers_and_labels() -> None:
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    results = {
+        "debt": _cf({"a": (0.0, 1.0)}, distance=1.0, score_prob=0.65),
+        "behavior": _cf({"b": (0.0, 2.0)}, distance=2.0, score_prob=0.7),
+        "income": Infeasible(reason="unreachable"),
+    }
+    ax = plot_recourse_map(exp, np.zeros(3), results, Target.probability(op=">=", value=0.6))
+    greens = [ln for ln in ax.lines if ln.get_marker() == "o" and ln.get_color() == "tab:green"]
+    greys = [ln for ln in ax.lines if ln.get_marker() == "x"]
+    assert len(greens) == 2
+    assert len(greys) == 1
+    texts = [t.get_text() for t in ax.texts]
+    assert "income: infeasible" in texts
+    assert not any("certified" in t for t in texts)
+
+
+def test_plot_recourse_map_all_infeasible_draws_only_markers() -> None:
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    failures = {
+        "income": Infeasible(reason="unreachable"),
+        "debt": Infeasible(reason="constraint violated"),
+    }
+    ax = plot_recourse_map(exp, np.zeros(3), failures, Target.probability(op=">=", value=0.6))
+    greens = [ln for ln in ax.lines if ln.get_marker() == "o" and ln.get_color() == "tab:green"]
+    greys = [ln for ln in ax.lines if ln.get_marker() == "x"]
+    assert len(greens) == 0
+    assert len(greys) == 2
+
+
+def test_plot_recourse_map_infeasible_certified_stub_appends_word() -> None:
+    from types import SimpleNamespace
+
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    plan = _cf({"a": (0.0, 1.0)}, distance=1.0, score_prob=0.65)
+    infeasible = SimpleNamespace(feasible=False, proof="certified")
+    ax = plot_recourse_map(
+        exp, np.zeros(3), [plan, infeasible], Target.probability(op=">=", value=0.6)
+    )
+    texts = [t.get_text() for t in ax.texts]
+    assert "infeasible (certified)" in texts
+
+
+def test_plot_recourse_map_labels_use_drop_and_provide_words() -> None:
+    from treecf import AllowMissing
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer(constraints=[AllowMissing("a", delta_miss=0.3)])
+    plan = _cf({"a": (1.0, float("nan"))}, distance=0.5, score_prob=0.65)
+    ax = plot_recourse_map(
+        exp, np.array([1.0, 0.0, 0.0]), [plan], Target.probability(op=">=", value=0.6)
+    )
+    texts = " ".join(t.get_text() for t in ax.texts)
+    assert "drop a" in texts
+
+
+def test_plot_recourse_map_max_changes_per_label_truncates() -> None:
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    plan = _cf(
+        {"a": (0.0, 1.0), "b": (0.0, 2.0), "c": (0.0, 3.0)}, distance=6.0, score_prob=0.65
+    )
+    ax = plot_recourse_map(
+        exp,
+        np.zeros(3),
+        [plan],
+        Target.probability(op=">=", value=0.6),
+        max_changes_per_label=1,
+    )
+    texts = " ".join(t.get_text() for t in ax.texts)
+    assert "(+2 more)" in texts
+
+
+def test_plot_recourse_map_factual_label_present_and_absent() -> None:
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    plan = _cf({"a": (1.0, 2.0)}, distance=1.0, score_prob=0.65)
+    ax_on = plot_recourse_map(
+        exp, np.array([1.0, 0.0, 0.0]), [plan], Target.probability(op=">=", value=0.6)
+    )
+    assert any("a = 1" in t.get_text() for t in ax_on.texts)
+
+    ax_off = plot_recourse_map(
+        exp,
+        np.array([1.0, 0.0, 0.0]),
+        [plan],
+        Target.probability(op=">=", value=0.6),
+        show_factual_label=False,
+    )
+    assert not any("a = 1" in t.get_text() for t in ax_off.texts)
+
+
+def test_plot_recourse_map_region_phrase_end_to_end() -> None:
+    from types import SimpleNamespace
+
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+
+    class _RegionStub:
+        def describe(self) -> dict[str, str]:
+            return {"a": "keep a within [0, 5]"}
+
+    plan = SimpleNamespace(
+        changes={"a": (0.0, 1.0)}, distance=1.0, score_prob=0.65, region=_RegionStub()
+    )
+    ax = plot_recourse_map(exp, np.zeros(3), [plan], Target.probability(op=">=", value=0.6))
+    texts = " ".join(t.get_text() for t in ax.texts)
+    assert "keep a within [0, 5]" in texts
