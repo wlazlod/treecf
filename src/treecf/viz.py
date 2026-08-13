@@ -300,7 +300,8 @@ def plot_recourse_map(
     lo, hi = _display_interval(target, link, space)
     finite_edges = [b for b in (lo, hi) if math.isfinite(b)]
     xs = [x_fact, *(px for _, _, px, _ in plan_points), *finite_edges]
-    pad = 0.08 * (max(xs) - min(xs))
+    span = max(xs) - min(xs)
+    pad = 0.08 * span
 
     if not schematic:
         lo_edge = lo if math.isfinite(lo) else min(xs)
@@ -377,7 +378,51 @@ def plot_recourse_map(
         ax.annotate(text, xy=(x_fact, y), xytext=offset, textcoords="offset points", ha=ha)
 
     ax.set_ylim(bottom=-0.05 * ax.get_ylim()[1])
+
+    if schematic:
+        _schematic_dressing(ax, finite_edges, span, region_labels)
+
     return ax
+
+
+def _schematic_dressing(
+    ax: Any,
+    finite_edges: Sequence[float],
+    x_span: float,
+    region_labels: tuple[str, str],
+) -> None:
+    """Slide-style dressing: hide chrome, wavy boundary per edge, region labels.
+
+    Runs after the caller's final ``set_ylim`` so the wave spans the visible
+    y-range (``ax.get_ylim()``); ``x_span`` is the data-envelope x-range
+    already computed by the caller, used for the wave amplitude.
+    """
+    ax.set_xticks([])
+    ax.set_yticks([])
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    amplitude = 0.02 * x_span
+    y_lo, y_hi = ax.get_ylim()
+    t = [i / 199 for i in range(200)]
+    y = [y_lo + ti * (y_hi - y_lo) for ti in t]
+    for edge in finite_edges:
+        wave_x = [edge + amplitude * math.sin(2 * math.pi * 1.5 * ti) for ti in t]
+        ax.plot(wave_x, y, linestyle="--", color="tab:blue")
+        ax.annotate(
+            "ML model decision boundary",
+            xy=(edge, y_hi),
+            xytext=(0, -4),
+            textcoords="offset points",
+            ha="center",
+            va="top",
+            fontsize=9,
+        )
+
+    accept_on_right = not ax.xaxis_inverted()
+    reject_fx, accept_fx = (0.18, 0.82) if accept_on_right else (0.82, 0.18)
+    ax.text(reject_fx, 0.95, region_labels[0], transform=ax.transAxes, fontsize=14, ha="center")
+    ax.text(accept_fx, 0.95, region_labels[1], transform=ax.transAxes, fontsize=14, ha="center")
 
 
 def _plans_with_labels(results: Any) -> list[tuple[str | None, Any]]:

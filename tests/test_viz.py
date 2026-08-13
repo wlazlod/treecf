@@ -702,3 +702,124 @@ def test_plot_recourse_map_region_phrase_end_to_end() -> None:
     ax = plot_recourse_map(exp, np.zeros(3), [plan], Target.probability(op=">=", value=0.6))
     texts = " ".join(t.get_text() for t in ax.texts)
     assert "keep a within [0, 5]" in texts
+
+
+def test_plot_recourse_map_schematic_hides_ticks_spines_and_band() -> None:
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    plan = _cf({"a": (0.0, 2.0)}, distance=1.0, score_prob=0.7)
+    ax = plot_recourse_map(
+        exp, np.zeros(3), [plan], Target.probability(op=">=", value=0.6), schematic=True
+    )
+    assert len(ax.get_xticks()) == 0
+    assert len(ax.get_yticks()) == 0
+    assert not any(spine.get_visible() for spine in ax.spines.values())
+    assert len(ax.patches) == 0  # axvspan band dropped
+    assert ax.get_title() == ""
+    assert ax.get_xlabel() == ""
+    assert ax.get_ylabel() == ""
+
+
+def test_plot_recourse_map_schematic_wavy_boundary_has_200_samples_and_spans_ylim() -> None:
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    plan = _cf({"a": (0.0, 2.0)}, distance=1.0, score_prob=0.7)
+    ax = plot_recourse_map(
+        exp, np.zeros(3), [plan], Target.probability(op=">=", value=0.6), schematic=True
+    )
+    waves = [
+        ln for ln in ax.lines if ln.get_linestyle() == "--" and ln.get_color() == "tab:blue"
+    ]
+    assert len(waves) == 1  # one finite target edge
+    xdata, ydata = waves[0].get_data()
+    assert len(xdata) == 200
+    ylo, yhi = ax.get_ylim()
+    assert ydata[0] == pytest.approx(ylo)
+    assert ydata[-1] == pytest.approx(yhi)
+
+
+def test_plot_recourse_map_schematic_region_labels_and_boundary_annotation() -> None:
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    plan = _cf({"a": (0.0, 2.0)}, distance=1.0, score_prob=0.7)
+    ax = plot_recourse_map(
+        exp,
+        np.zeros(3),
+        [plan],
+        Target.probability(op=">=", value=0.6),
+        schematic=True,
+        annotate=False,  # region labels/boundary draw regardless of annotate
+    )
+    texts = [t.get_text() for t in ax.texts]
+    assert "Reject" in texts
+    assert "Accept" in texts
+    assert "ML model decision boundary" in texts
+
+
+def test_plot_recourse_map_schematic_custom_region_labels() -> None:
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    plan = _cf({"a": (0.0, 2.0)}, distance=1.0, score_prob=0.7)
+    ax = plot_recourse_map(
+        exp,
+        np.zeros(3),
+        [plan],
+        Target.probability(op=">=", value=0.6),
+        schematic=True,
+        region_labels=("No", "Yes"),
+    )
+    texts = [t.get_text() for t in ax.texts]
+    assert "No" in texts
+    assert "Yes" in texts
+    assert "Reject" not in texts
+    assert "Accept" not in texts
+
+
+def test_plot_recourse_map_schematic_plan_labels_start_with_if() -> None:
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    plan = _cf({"a": (0.0, 2.0)}, distance=1.0, score_prob=0.7)
+    ax = plot_recourse_map(
+        exp, np.zeros(3), [plan], Target.probability(op=">=", value=0.6), schematic=True
+    )
+    texts = [t.get_text() for t in ax.texts]
+    assert any(t.startswith("If ") for t in texts)
+
+
+def test_plot_recourse_map_schematic_accept_side_flips_with_inversion() -> None:
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+
+    plan_up = _cf({"a": (0.0, 2.0)}, distance=1.0, score_prob=0.7)
+    ax_up = plot_recourse_map(
+        exp,
+        np.zeros(3),
+        [plan_up],
+        Target.probability(op=">=", value=0.6),
+        schematic=True,
+    )
+    assert not ax_up.xaxis_inverted()
+    accept_up = next(t for t in ax_up.texts if t.get_text() == "Accept")
+    reject_up = next(t for t in ax_up.texts if t.get_text() == "Reject")
+    assert accept_up.get_position()[0] == pytest.approx(0.82)
+    assert reject_up.get_position()[0] == pytest.approx(0.18)
+
+    plan_down = _cf({"a": (2.0, 0.0)}, distance=1.0, score_prob=0.2)
+    ax_down = plot_recourse_map(
+        exp,
+        np.array([2.0, 0.0, 0.0]),
+        [plan_down],
+        Target.probability(op="<=", value=0.3),
+        schematic=True,
+    )
+    assert ax_down.xaxis_inverted()
+    accept_down = next(t for t in ax_down.texts if t.get_text() == "Accept")
+    reject_down = next(t for t in ax_down.texts if t.get_text() == "Reject")
+    assert accept_down.get_position()[0] == pytest.approx(0.18)
+    assert reject_down.get_position()[0] == pytest.approx(0.82)
