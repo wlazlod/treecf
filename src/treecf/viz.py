@@ -219,6 +219,19 @@ def _target_bounds(target: Any, prob_space: bool) -> list[float]:
     return [b for b in (lo, hi) if math.isfinite(b)]
 
 
+def _display_interval(target: Any, link: Any, space: str) -> tuple[float, float]:
+    """Target's raw interval, mapped to display space; infinite endpoints pass through."""
+    from treecf.ir.evaluate import apply_link
+    from treecf.ir.model import Link
+
+    resolved = ("probability" if link is Link.SIGMOID else "raw") if space == "auto" else space
+    lo, hi = target.raw_interval(link)
+    if resolved == "probability":
+        lo = apply_link(Link.SIGMOID, lo) if math.isfinite(lo) else lo
+        hi = apply_link(Link.SIGMOID, hi) if math.isfinite(hi) else hi
+    return lo, hi
+
+
 def plot_waterfall(explainer: Any, cf: Counterfactual, target: Any = None, ax: Any = None) -> Any:
     """SHAP-style waterfall: exact score deltas of the counterfactual's changes.
 

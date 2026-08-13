@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pytest
 
@@ -254,3 +256,33 @@ def test_plot_effort_bars_sum_to_distance() -> None:
     assert sum(widths) == pytest.approx(res.distance)
     labels = [t.get_text() for t in ax.get_yticklabels()]
     assert set(labels) == {"big", "small"}
+
+
+def test_display_interval_raw_space_explicit_no_link_mapping() -> None:
+    from treecf.ir.model import Link
+    from treecf.viz import _display_interval
+
+    target = Target.raw(op=">=", value=0.5)
+    lo, hi = _display_interval(target, Link.SIGMOID, "raw")
+    assert lo == 0.5
+    assert hi == math.inf
+
+
+def test_display_interval_auto_identity_passthrough() -> None:
+    from treecf.ir.model import Link
+    from treecf.viz import _display_interval
+
+    target = Target.raw(op=">=", value=0.5)
+    lo, hi = _display_interval(target, Link.IDENTITY, "auto")
+    assert lo == 0.5
+    assert hi == math.inf
+
+
+def test_display_interval_auto_sigmoid_maps_finite_endpoint_only() -> None:
+    from treecf.ir.model import Link
+    from treecf.viz import _display_interval
+
+    target = Target.probability(range=(0.0, 0.05))
+    lo, hi = _display_interval(target, Link.SIGMOID, "auto")
+    assert lo == -math.inf
+    assert hi == pytest.approx(0.05)
