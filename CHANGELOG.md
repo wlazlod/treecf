@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `plot_recourse_map`: one-axes map of a single applicant's recourse options — model
+  output on x, recourse cost J on y — with the accept band, an arrow per plan, infeasible
+  coalitions marked, and a `schematic=True` slide-style mode.
+
 ### Changed
 
 - PyPI development-status classifier raised to `4 - Beta`.

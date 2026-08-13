@@ -76,10 +76,11 @@ The outcome dict plugs straight into the comparison plots — coalition names be
 infeasible groups are skipped:
 
 ```python
-from treecf.viz import plot_alternatives, plot_tradeoff
+from treecf.viz import plot_alternatives, plot_recourse_map, plot_tradeoff
 
 plot_alternatives(result, explainer=exp)   # per-plan changes, one color per coalition
 plot_tradeoff(result, target=t)            # what each group's plan costs and buys
+plot_recourse_map(exp, applicant, result, target=t)   # one applicant, model output vs. cost
 ```
 
 ## When to use it
