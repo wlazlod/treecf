@@ -791,35 +791,56 @@ def test_plot_recourse_map_schematic_plan_labels_start_with_if() -> None:
     assert any(t.startswith("If ") for t in texts)
 
 
-def test_plot_recourse_map_schematic_accept_side_flips_with_inversion() -> None:
+def _axes_frac_x(ax, data_x):
+    """Data-space x, transformed to axes-fraction x (0=left edge, 1=right edge)."""
+    display = ax.transData.transform((data_x, 0.0))
+    return float(ax.transAxes.inverted().transform(display)[0])
+
+
+def test_plot_recourse_map_schematic_accept_label_matches_accept_screen_side() -> None:
+    """Accept/Reject label sides track real geometry, not the inversion flag directly.
+
+    ``invert_xaxis()`` fires exactly when the band lies below the factual, which
+    flips the data->screen mapping so the accept side is screen-right in both
+    orientations — checked here against the actual plotted dot positions rather
+    than hardcoded fx values, for both an increase-direction and a
+    decrease-direction target.
+    """
     from treecf.viz import plot_recourse_map
 
     exp = _map_explainer()
+    cases = [
+        (
+            Target.probability(op=">=", value=0.6),
+            _cf({"a": (0.0, 2.0)}, distance=1.0, score_prob=0.7),
+            np.zeros(3),
+            False,
+        ),
+        (
+            Target.probability(op="<=", value=0.3),
+            _cf({"a": (2.0, 0.0)}, distance=1.0, score_prob=0.2),
+            np.array([2.0, 0.0, 0.0]),
+            True,
+        ),
+    ]
+    for target, plan, x_factual, expect_inverted in cases:
+        ax = plot_recourse_map(exp, x_factual, [plan], target, schematic=True)
+        assert bool(ax.xaxis_inverted()) == expect_inverted
 
-    plan_up = _cf({"a": (0.0, 2.0)}, distance=1.0, score_prob=0.7)
-    ax_up = plot_recourse_map(
-        exp,
-        np.zeros(3),
-        [plan_up],
-        Target.probability(op=">=", value=0.6),
-        schematic=True,
-    )
-    assert not ax_up.xaxis_inverted()
-    accept_up = next(t for t in ax_up.texts if t.get_text() == "Accept")
-    reject_up = next(t for t in ax_up.texts if t.get_text() == "Reject")
-    assert accept_up.get_position()[0] == pytest.approx(0.82)
-    assert reject_up.get_position()[0] == pytest.approx(0.18)
+        accept_fx = next(t for t in ax.texts if t.get_text() == "Accept").get_position()[0]
+        reject_fx = next(t for t in ax.texts if t.get_text() == "Reject").get_position()[0]
+        assert accept_fx > reject_fx
 
-    plan_down = _cf({"a": (2.0, 0.0)}, distance=1.0, score_prob=0.2)
-    ax_down = plot_recourse_map(
-        exp,
-        np.array([2.0, 0.0, 0.0]),
-        [plan_down],
-        Target.probability(op="<=", value=0.3),
-        schematic=True,
-    )
-    assert ax_down.xaxis_inverted()
-    accept_down = next(t for t in ax_down.texts if t.get_text() == "Accept")
-    reject_down = next(t for t in ax_down.texts if t.get_text() == "Reject")
-    assert accept_down.get_position()[0] == pytest.approx(0.18)
-    assert reject_down.get_position()[0] == pytest.approx(0.82)
+        plan_dot = next(
+            ln for ln in ax.lines if ln.get_marker() == "o" and ln.get_color() == "tab:green"
+        )
+        factual_dot = next(
+            ln for ln in ax.lines if ln.get_marker() == "o" and ln.get_color() == "tab:red"
+        )
+        plan_fx = _axes_frac_x(ax, plan_dot.get_xdata()[0])
+        factual_fx = _axes_frac_x(ax, factual_dot.get_xdata()[0])
+
+        # Accept sits on the same screen side as the (accepted) plan's dot;
+        # Reject sits on the same screen side as the factual's dot.
+        assert (accept_fx > 0.5) == (plan_fx > 0.5)
+        assert (reject_fx > 0.5) == (factual_fx > 0.5)

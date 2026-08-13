@@ -419,10 +419,11 @@ def _schematic_dressing(
             fontsize=9,
         )
 
-    accept_on_right = not ax.xaxis_inverted()
-    reject_fx, accept_fx = (0.18, 0.82) if accept_on_right else (0.82, 0.18)
-    ax.text(reject_fx, 0.95, region_labels[0], transform=ax.transAxes, fontsize=14, ha="center")
-    ax.text(accept_fx, 0.95, region_labels[1], transform=ax.transAxes, fontsize=14, ha="center")
+    # invert_xaxis() is only called when the band lies below the factual, which
+    # flips the data->screen mapping so the accept side is screen-right in both
+    # cases — the labels do not depend on ax.xaxis_inverted().
+    ax.text(0.18, 0.95, region_labels[0], transform=ax.transAxes, fontsize=14, ha="center")
+    ax.text(0.82, 0.95, region_labels[1], transform=ax.transAxes, fontsize=14, ha="center")
 
 
 def _plans_with_labels(results: Any) -> list[tuple[str | None, Any]]:
