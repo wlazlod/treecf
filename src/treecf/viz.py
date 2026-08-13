@@ -376,6 +376,50 @@ def _change_effort(explainer: Any, changes: Mapping[str, tuple[float, float]]) -
     return efforts
 
 
+def _format_plan(
+    name: str | None,
+    plan: Any,
+    explainer: Any,
+    fmt: str = "{:.3g}",
+    max_changes: int = 3,
+    *,
+    schematic: bool = False,
+) -> str:
+    """Arrow-label text for one plan: effort-ordered changes, NaN- and region-aware.
+
+    NaN legs read as ``drop {feature}`` / ``provide {feature} = value``;
+    ``plan.region.describe()`` (when present) supplies a phrase for changes
+    it covers instead of ``feature = value``. Truncated to ``max_changes``
+    with a ``(+k more)`` suffix; ``schematic`` joins with "If ... and ..."
+    instead of a comma list.
+    """
+    changes = plan.changes
+    efforts = _change_effort(explainer, changes)
+    region = getattr(plan, "region", None)
+    describe = getattr(region, "describe", None)
+    region_phrases: dict[str, str] = describe() if callable(describe) else {}
+    ordered = sorted(changes, key=lambda f: (-efforts[f], f))
+
+    parts = []
+    for f in ordered[:max_changes]:
+        source, dest = changes[f]
+        if math.isnan(dest):
+            parts.append(f"drop {f}")
+        elif math.isnan(source):
+            parts.append(f"provide {f} = {fmt.format(dest)}")
+        elif f in region_phrases:
+            parts.append(region_phrases[f])
+        else:
+            parts.append(f"{f} = {fmt.format(dest)}")
+
+    body = "If " + " and ".join(parts) if schematic else ", ".join(parts)
+    remaining = len(ordered) - max_changes
+    if remaining > 0:
+        body += f" (+{remaining} more)"
+    prefix = f"{name}: " if name is not None else ""
+    return f"{prefix}{body} (J={plan.distance:.3g})"
+
+
 def _import_pyplot() -> Any:
     try:
         import matplotlib.pyplot as plt

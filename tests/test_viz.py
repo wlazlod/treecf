@@ -207,6 +207,30 @@ def _waterfall_setup():
     return exp, res
 
 
+def _map_explainer(normalizers=None, constraints=()):
+    """Small inline-IR Explainer over features a/b/c, default sigmoid link."""
+    from treecf import Explainer
+    from treecf.ir.model import EnsembleIR, Link, Node, SplitOp, Tree
+
+    stump = Tree(
+        nodes=(
+            Node(0, 0, 1.0, SplitOp.LT, True, 1, 2, None),
+            Node(1, None, None, None, None, None, None, 0.0),
+            Node(2, None, None, None, None, None, None, 1.0),
+        )
+    )
+    ir = EnsembleIR(
+        trees=(stump,),
+        base_score=0.0,
+        link=Link.SIGMOID,
+        n_features=3,
+        feature_names=("a", "b", "c"),
+        meta={},
+    )
+    norm = np.ones(3) if normalizers is None else normalizers
+    return Explainer(ir, normalizers=norm, constraints=constraints)
+
+
 def test_plot_waterfall_bars_sum_to_score_move() -> None:
     from treecf.viz import plot_waterfall
 
@@ -335,3 +359,65 @@ def test_plans_and_failures_sequence_of_batch_records() -> None:
     plans, failures = _plans_and_failures([feasible, infeasible])
     assert plans == [("grp1", feasible)]
     assert failures == [("grp2", infeasible)]
+
+
+def test_format_plan_orders_changes_by_descending_effort() -> None:
+    from treecf.viz import _format_plan
+
+    exp = _map_explainer(normalizers=np.array([2.0, 1.0, 4.0]))
+    plan = _cf({"a": (0.0, 2.0), "b": (0.0, 3.0), "c": (0.0, 4.0)}, distance=5.0)
+    text = _format_plan(None, plan, exp)
+    assert text == "b = 3, a = 2, c = 4 (J=5)"
+
+
+def test_format_plan_nan_legs_use_drop_and_provide_words() -> None:
+    from treecf import AllowMissing
+    from treecf.viz import _format_plan
+
+    exp = _map_explainer(
+        constraints=[
+            AllowMissing("a", delta_miss=0.3),
+            AllowMissing("b", delta_miss=0.3, delta_from_miss=0.5),
+        ]
+    )
+    plan = _cf(
+        {"a": (1.0, float("nan")), "b": (float("nan"), 2.0), "c": (0.0, 1.0)}, distance=1.8
+    )
+    text = _format_plan(None, plan, exp)
+    assert text == "c = 1, provide b = 2, drop a (J=1.8)"
+
+
+def test_format_plan_truncates_and_dresses_with_more_count() -> None:
+    from treecf.viz import _format_plan
+
+    exp = _map_explainer()
+    plan = _cf({"a": (0.0, 1.0), "b": (0.0, 2.0), "c": (0.0, 3.0)}, distance=6.0)
+    text = _format_plan(None, plan, exp, max_changes=2)
+    assert text == "c = 3, b = 2 (+1 more) (J=6)"
+
+
+def test_format_plan_uses_region_phrase_when_available() -> None:
+    from types import SimpleNamespace
+
+    from treecf.viz import _format_plan
+
+    exp = _map_explainer()
+
+    class _RegionStub:
+        def describe(self) -> dict[str, str]:
+            return {"a": "keep a within the safe band"}
+
+    plan = SimpleNamespace(
+        changes={"a": (0.0, 1.0)}, distance=1.0, region=_RegionStub()
+    )
+    text = _format_plan("bandA", plan, exp)
+    assert text == "bandA: keep a within the safe band (J=1)"
+
+
+def test_format_plan_schematic_joins_with_if_and_and() -> None:
+    from treecf.viz import _format_plan
+
+    exp = _map_explainer()
+    plan = _cf({"a": (0.0, 1.0), "b": (0.0, 2.0)}, distance=3.0)
+    text = _format_plan("bandA", plan, exp, schematic=True)
+    assert text == "bandA: If b = 2 and a = 1 (J=3)"
