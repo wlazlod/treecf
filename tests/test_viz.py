@@ -555,6 +555,36 @@ def test_plot_recourse_map_annotate_false_and_no_factual_label_has_no_text() -> 
     assert labels == []
 
 
+def test_plot_recourse_map_annotate_false_alone_suppresses_factual_block() -> None:
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    plan = _cf({"a": (1.0, 2.0)}, distance=1.0, score_prob=0.65)
+    ax = plot_recourse_map(
+        exp,
+        np.array([1.0, 0.0, 0.0]),
+        [plan],
+        Target.probability(op=">=", value=0.6),
+        annotate=False,  # show_factual_label left at its default True
+    )
+    assert not any("a = 1" in t.get_text() for t in ax.texts)
+
+
+def test_plot_recourse_map_annotate_false_still_labels_infeasible_entries() -> None:
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    results = {
+        "debt": _cf({"a": (0.0, 1.0)}, distance=1.0, score_prob=0.65),
+        "income": Infeasible(reason="unreachable"),
+    }
+    ax = plot_recourse_map(
+        exp, np.zeros(3), results, Target.probability(op=">=", value=0.6), annotate=False
+    )
+    texts = [t.get_text() for t in ax.texts]
+    assert "income: infeasible" in texts
+
+
 def test_plot_recourse_map_infeasible_markers_and_labels() -> None:
     from treecf.viz import plot_recourse_map
 

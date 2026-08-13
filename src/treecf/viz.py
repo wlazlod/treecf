@@ -225,13 +225,13 @@ def plot_recourse_map(
 
     Each plan is labeled with its changed features (largest-effort first,
     truncated to ``max_changes_per_label``, formatted with ``fmt``) when
-    ``annotate`` is set; ``show_factual_label`` adds a block below the
-    factual dot listing the features any plan changed, at their original
-    values. Infeasible entries in ``results`` are drawn as grey markers above
-    the plans, labeled by name (``"infeasible"`` alone when unlabeled, with
-    a ``(certified)`` suffix when the entry carries a certified proof).
-    ``region_labels`` names the two sides of the boundary in ``schematic``
-    mode.
+    ``annotate`` is set; ``annotate`` also gates the ``show_factual_label``
+    block below the factual dot listing the features any plan changed, at
+    their original values. Infeasible entries in ``results`` are drawn as
+    grey markers above the plans, labeled by name (``"infeasible"`` alone
+    when unlabeled, with a ``(certified)`` suffix when the entry carries a
+    certified proof) regardless of ``annotate``. ``region_labels`` names the
+    two sides of the boundary in ``schematic`` mode.
 
     ``schematic=True`` swaps the quantitative axes and target band for a
     slide-friendly rendering: a wavy decision-boundary line instead of a
@@ -250,7 +250,8 @@ def plot_recourse_map(
         ax: Existing axes to draw on; a new figure is created if omitted.
         space: ``"probability"``, ``"raw"``, or ``"auto"`` (default) to pick
             the model-output axis space from the model's link function.
-        annotate: Draw a text label at each plan's point.
+        annotate: Draw a text label at each plan's point; also gates whether
+            ``show_factual_label`` draws its block.
         max_changes_per_label: Number of changed features shown per label
             before truncating to "(+k more)".
         fmt: Format string for changed feature values in labels.
@@ -344,7 +345,7 @@ def plot_recourse_map(
             )
             ax.annotate(text, xy=(px, py), xytext=offset, textcoords="offset points", ha=ha)
 
-    if show_factual_label:
+    if annotate and show_factual_label:
         touched: dict[str, float] = {}
         for _label, plan, _px, _py in plan_points:
             for name, (source, _dest) in plan.changes.items():
@@ -369,7 +370,7 @@ def plot_recourse_map(
     step_y = 0.12 * (y_top or 1.0)
     for i, (label, r) in enumerate(failures):
         y = y_top + (i + 1) * step_y
-        ax.plot([x_fact], [y], "x", color="0.5")
+        ax.plot([x_fact], [y], "x", color="0.5", markersize=8)
         text = f"{label}: infeasible" if label is not None else "infeasible"
         if getattr(r, "proof", "") == "certified":
             text += " (certified)"
