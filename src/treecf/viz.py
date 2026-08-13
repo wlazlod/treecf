@@ -197,6 +197,143 @@ def plot_tradeoff(results: Any, target: Any = None, ax: Any = None) -> Any:
     return ax
 
 
+def plot_recourse_map(
+    explainer: Any,
+    x: Any,
+    results: Any,
+    target: Any,
+    *,
+    ax: Any = None,
+    space: str = "auto",
+    annotate: bool = True,
+    max_changes_per_label: int = 3,
+    fmt: str = "{:.3g}",
+    schematic: bool = False,
+    region_labels: tuple[str, str] = ("Reject", "Accept"),
+    show_factual_label: bool = True,
+) -> Any:
+    """Recourse diagram: what each plan costs and where it lands relative to the target.
+
+    Plots one point per feasible plan in ``results`` at (model output, recourse
+    cost ``J``), with the factual instance drawn as a red dot at cost 0 and an
+    arrow from the factual to each plan. A green band marks the target
+    interval on the model-output axis; the axis flips automatically so that
+    "improving" always reads as a move toward the band. Model output is shown
+    as a probability for sigmoid-link models (or when ``space="probability"``)
+    and as the raw score otherwise (``space="raw"``; ``space="auto"`` picks
+    based on the model's link function).
+
+    Each plan is labeled with its changed features (largest-effort first,
+    truncated to ``max_changes_per_label``, formatted with ``fmt``) when
+    ``annotate`` is set; ``show_factual_label`` adds a block below the
+    factual dot listing the features any plan changed, at their original
+    values. Infeasible entries in ``results`` are drawn as grey markers above
+    the plans with their failure reason. ``region_labels`` names the two
+    sides of the boundary in ``schematic`` mode.
+
+    ``schematic=True`` swaps the quantitative axes and target band for a
+    slide-friendly rendering: a wavy decision-boundary line instead of a
+    band, no ticks or axis labels, and "If ..." phrased plan labels.
+
+    Args:
+        explainer: Explainer wrapping the model; supplies the link function
+            and the counterfactual distance weights used to order each
+            plan's changes.
+        x: Factual feature vector.
+        results: Counterfactual outcomes for ``x`` — a single result, a
+            sequence, or a mapping (as returned by ``explain_coalitions``).
+            Feasible and infeasible entries are both accepted.
+        target: The target interval the plans were solved against; also
+            drawn as the band (or boundary, in schematic mode).
+        ax: Existing axes to draw on; a new figure is created if omitted.
+        space: ``"probability"``, ``"raw"``, or ``"auto"`` (default) to pick
+            the model-output axis space from the model's link function.
+        annotate: Draw a text label at each plan's point.
+        max_changes_per_label: Number of changed features shown per label
+            before truncating to "(+k more)".
+        fmt: Format string for changed feature values in labels.
+        schematic: Render the slide-friendly boundary view instead of the
+            quantitative axes.
+        region_labels: The (reject-side, accept-side) names drawn next to
+            the boundary in schematic mode.
+        show_factual_label: Draw a block below the factual dot listing the
+            features any plan changed.
+
+    Returns:
+        The axes the recourse map was drawn on.
+
+    Raises:
+        TreecfError: If ``results`` contains no plans at all, or more than
+            10 feasible plans.
+    """
+    from treecf.ir.evaluate import apply_link, raw_score
+    from treecf.ir.model import Link
+
+    plt = _import_pyplot()
+    plans, failures = _plans_and_failures(results)
+    if not plans and not failures:
+        raise TreecfError("no plans to plot")
+    if len(plans) > 10:
+        raise TreecfError("plot_recourse_map compares at most 10 plans")
+
+    link = explainer.ir.link
+    prob = space == "probability" or (space == "auto" and link is Link.SIGMOID)
+    s_raw = raw_score(explainer.ir, x)
+    x_fact = apply_link(Link.SIGMOID, s_raw) if prob else s_raw
+
+    def _plan_x(plan: Any) -> float:
+        if prob and plan.score_prob is not None:
+            return float(plan.score_prob)
+        if prob:
+            return apply_link(Link.SIGMOID, plan.score_raw)
+        return float(plan.score_raw)
+
+    ordered = sorted(plans, key=lambda pair: pair[1].distance)
+    plan_points = [(label, plan, _plan_x(plan), plan.distance) for label, plan in ordered]
+
+    if ax is None:
+        _, ax = plt.subplots(figsize=(7, 5))
+
+    lo, hi = _display_interval(target, link, space)
+    finite_edges = [b for b in (lo, hi) if math.isfinite(b)]
+    xs = [x_fact, *(px for _, _, px, _ in plan_points), *finite_edges]
+    pad = 0.08 * (max(xs) - min(xs))
+
+    if not schematic:
+        lo_edge = lo if math.isfinite(lo) else min(xs)
+        hi_edge = hi if math.isfinite(hi) else max(xs)
+        ax.axvspan(lo_edge - pad, hi_edge + pad, color="tab:green", alpha=0.12)
+        for edge in finite_edges:
+            ax.axvline(edge, color="0.4", linestyle="--")
+
+    if math.isfinite(hi) and hi < x_fact:
+        ax.invert_xaxis()
+
+    ax.plot([x_fact], [0.0], "o", color="tab:red", markersize=9, zorder=3)
+    for i, (_label, _plan, px, py) in enumerate(plan_points):
+        ax.plot([px], [py], "o", color="tab:green", markersize=8)
+        sign = 1 if i % 2 else -1
+        r = 0.0 if i == 0 else sign * 0.12 * math.ceil(i / 2)
+        ax.annotate(
+            "",
+            xy=(px, py),
+            xytext=(x_fact, 0.0),
+            arrowprops={
+                "arrowstyle": "->",
+                "color": "0.15",
+                "lw": 1.2,
+                "connectionstyle": f"arc3,rad={r}",
+            },
+        )
+
+    if not schematic:
+        ax.set_xlabel("model output (probability)" if prob else "model output (raw score)")
+        ax.set_ylabel("recourse cost J")
+        ax.set_title(f"{len(plans)} recourse option(s)")
+    ax.set_ylim(bottom=-0.05 * ax.get_ylim()[1])
+    return ax
+
+
 def _plans_with_labels(results: Any) -> list[tuple[str | None, Any]]:
     """Feasible plans paired with labels (mapping keys, `coalition` fields, or None)."""
     if isinstance(results, Mapping):

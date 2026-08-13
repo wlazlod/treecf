@@ -421,3 +421,115 @@ def test_format_plan_schematic_joins_with_if_and_and() -> None:
     plan = _cf({"a": (0.0, 1.0), "b": (0.0, 2.0)}, distance=3.0)
     text = _format_plan("bandA", plan, exp, schematic=True)
     assert text == "bandA: If b = 2 and a = 1 (J=3)"
+
+
+def test_plot_recourse_map_smoke_single_cf() -> None:
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    plan = _cf({"a": (0.0, 2.0)}, distance=1.0, score_prob=0.7)
+    ax = plot_recourse_map(exp, np.zeros(3), [plan], Target.probability(op=">=", value=0.6))
+    assert ax.get_title() == "1 recourse option(s)"
+
+
+def test_plot_recourse_map_returns_given_ax() -> None:
+    import matplotlib.pyplot as plt
+
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    plan = _cf({"a": (0.0, 2.0)}, distance=1.0, score_prob=0.7)
+    _, ax0 = plt.subplots()
+    ax = plot_recourse_map(
+        exp, np.zeros(3), [plan], Target.probability(op=">=", value=0.6), ax=ax0
+    )
+    assert ax is ax0
+
+
+def test_plot_recourse_map_marker_and_arrow_counts() -> None:
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    plans = [
+        _cf({"a": (0.0, 2.0)}, distance=1.0, score_prob=0.6),
+        _cf({"b": (0.0, 3.0)}, distance=2.0, score_prob=0.7),
+    ]
+    ax = plot_recourse_map(
+        exp, np.zeros(3), plans, Target.probability(op=">=", value=0.6), annotate=False
+    )
+    dots = [ln for ln in ax.lines if ln.get_marker() == "o"]
+    assert len(dots) == 3  # factual + 2 plans
+    arrows = [t for t in ax.texts if t.get_text() == "" and t.arrow_patch is not None]
+    assert len(arrows) == 2
+
+
+def test_plot_recourse_map_draws_target_band() -> None:
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    plan = _cf({"a": (0.0, 2.0)}, distance=1.0, score_prob=0.7)
+    ax = plot_recourse_map(exp, np.zeros(3), [plan], Target.probability(op=">=", value=0.6))
+    assert len(ax.patches) == 1  # the axvspan band
+
+
+def test_plot_recourse_map_inverts_when_band_is_below_high_factual() -> None:
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    plan = _cf({"a": (2.0, 0.0)}, distance=1.0, score_prob=0.2)
+    ax = plot_recourse_map(
+        exp, np.array([2.0, 0.0, 0.0]), [plan], Target.probability(op="<=", value=0.3)
+    )
+    assert ax.xaxis_inverted()
+
+
+def test_plot_recourse_map_no_inversion_when_factual_inside_band() -> None:
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    plan = _cf({"b": (0.0, 1.0)}, distance=1.0, score_prob=0.6)
+    ax = plot_recourse_map(
+        exp, np.zeros(3), [plan], Target.probability(range=(0.3, 0.7))
+    )
+    assert not ax.xaxis_inverted()
+
+
+def test_plot_recourse_map_too_many_plans_raises() -> None:
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    plans = [_cf({"a": (0.0, float(i))}, distance=float(i + 1)) for i in range(11)]
+    with pytest.raises(TreecfError, match="at most 10 plans"):
+        plot_recourse_map(exp, np.zeros(3), plans, Target.probability(op=">=", value=0.5))
+
+
+def test_plot_recourse_map_empty_raises_no_plans_message() -> None:
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    with pytest.raises(TreecfError, match="no plans to plot"):
+        plot_recourse_map(exp, np.zeros(3), [], Target.probability(op=">=", value=0.5))
+
+
+def test_plot_recourse_map_identity_link_never_touches_score_prob() -> None:
+    from types import SimpleNamespace
+
+    from treecf import Explainer
+    from treecf.ir.model import EnsembleIR, Link, Node, SplitOp, Tree
+    from treecf.viz import plot_recourse_map
+
+    stump = Tree(
+        nodes=(
+            Node(0, 0, 1.0, SplitOp.LT, True, 1, 2, None),
+            Node(1, None, None, None, None, None, None, 0.0),
+            Node(2, None, None, None, None, None, None, 1.0),
+        )
+    )
+    ir = EnsembleIR(
+        trees=(stump,), base_score=0.0, link=Link.IDENTITY,
+        n_features=3, feature_names=("a", "b", "c"), meta={},
+    )
+    exp = Explainer(ir, normalizers=np.ones(3))
+    plan = SimpleNamespace(changes={"a": (0.0, 2.0)}, distance=1.0, score_raw=0.8)
+    ax = plot_recourse_map(exp, np.zeros(3), [plan], Target.raw(op=">=", value=0.5))
+    assert ax.get_xlabel() == "model output (raw score)"
