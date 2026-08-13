@@ -206,6 +206,33 @@ def _plans_with_labels(results: Any) -> list[tuple[str | None, Any]]:
     ]
 
 
+def _plans_and_failures(
+    results: Any,
+) -> tuple[list[tuple[str | None, Any]], list[tuple[str | None, Any]]]:
+    """Split any results shape into labeled (feasible, infeasible) lists.
+
+    Dispatches on shape: a ``Mapping`` keeps every value labeled by
+    ``str(key)``; a ``Sequence`` (excluding ``str``/``bytes``) labels each
+    entry by its ``coalition`` attribute; anything else is one bare result.
+    """
+    labeled: list[tuple[str | None, Any]]
+    if isinstance(results, Mapping):
+        labeled = [(str(k), v) for k, v in results.items()]
+    elif isinstance(results, Sequence) and not isinstance(results, (str, bytes)):
+        labeled = [(getattr(r, "coalition", None), r) for r in results]
+    else:
+        labeled = [(None, results)]
+
+    plans: list[tuple[str | None, Any]] = []
+    failures: list[tuple[str | None, Any]] = []
+    for label, r in labeled:
+        if isinstance(r, Infeasible) or getattr(r, "feasible", True) is False:
+            failures.append((label, r))
+        else:
+            plans.append((label, r))
+    return plans, failures
+
+
 def _target_bounds(target: Any, prob_space: bool) -> list[float]:
     """Finite target-interval bounds in the plotted space (probability or raw)."""
     from treecf.ir.evaluate import apply_link

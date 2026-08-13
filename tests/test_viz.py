@@ -286,3 +286,52 @@ def test_display_interval_auto_sigmoid_maps_finite_endpoint_only() -> None:
     lo, hi = _display_interval(target, Link.SIGMOID, "auto")
     assert lo == -math.inf
     assert hi == pytest.approx(0.05)
+
+
+def test_plans_and_failures_bare_counterfactual() -> None:
+    from treecf.viz import _plans_and_failures
+
+    cf = _cf({"a": (0.0, 1.0)}, 1.0)
+    plans, failures = _plans_and_failures(cf)
+    assert plans == [(None, cf)]
+    assert failures == []
+
+
+def test_plans_and_failures_bare_infeasible() -> None:
+    from treecf.viz import _plans_and_failures
+
+    inf = Infeasible(reason="unreachable")
+    plans, failures = _plans_and_failures(inf)
+    assert plans == []
+    assert failures == [(None, inf)]
+
+
+def test_plans_and_failures_mapping_keeps_all_labeled_by_key_in_order() -> None:
+    from treecf.viz import _plans_and_failures
+
+    debt_cf = _cf({"a": (0.0, 1.0)}, 1.0)
+    income_inf = Infeasible(reason="unreachable")
+    behavior_cf = _cf({"b": (0.0, 2.0)}, 2.0)
+    outcomes = {"debt": debt_cf, "income": income_inf, "behavior": behavior_cf}
+    plans, failures = _plans_and_failures(outcomes)
+    assert plans == [("debt", debt_cf), ("behavior", behavior_cf)]
+    assert failures == [("income", income_inf)]
+
+
+def test_plans_and_failures_sequence_of_batch_records() -> None:
+    from treecf.batch import BatchRecord
+    from treecf.viz import _plans_and_failures
+
+    feasible = BatchRecord(
+        id=0, k=0, feasible=True, x_cf=np.zeros(3),
+        changes={"a": (0.0, 1.0)}, distance=1.0, n_changed=1,
+        score_raw=0.1, score_prob=None, coalition="grp1",
+    )
+    infeasible = BatchRecord(
+        id=0, k=0, feasible=False, x_cf=None, changes={},
+        distance=None, n_changed=None, score_raw=None, score_prob=None,
+        coalition="grp2",
+    )
+    plans, failures = _plans_and_failures([feasible, infeasible])
+    assert plans == [("grp1", feasible)]
+    assert failures == [("grp2", infeasible)]
