@@ -367,7 +367,7 @@ def test_format_plan_orders_changes_by_descending_effort() -> None:
     exp = _map_explainer(normalizers=np.array([2.0, 1.0, 4.0]))
     plan = _cf({"a": (0.0, 2.0), "b": (0.0, 3.0), "c": (0.0, 4.0)}, distance=5.0)
     text = _format_plan(None, plan, exp)
-    assert text == "b = 3, a = 2, c = 4 (J=5)"
+    assert text == "b = 3\na = 2\nc = 4 (J=5)"
 
 
 def test_format_plan_nan_legs_use_drop_and_provide_words() -> None:
@@ -384,7 +384,7 @@ def test_format_plan_nan_legs_use_drop_and_provide_words() -> None:
         {"a": (1.0, float("nan")), "b": (float("nan"), 2.0), "c": (0.0, 1.0)}, distance=1.8
     )
     text = _format_plan(None, plan, exp)
-    assert text == "c = 1, provide b = 2, drop a (J=1.8)"
+    assert text == "c = 1\nprovide b = 2\ndrop a (J=1.8)"
 
 
 def test_format_plan_truncates_and_dresses_with_more_count() -> None:
@@ -393,7 +393,7 @@ def test_format_plan_truncates_and_dresses_with_more_count() -> None:
     exp = _map_explainer()
     plan = _cf({"a": (0.0, 1.0), "b": (0.0, 2.0), "c": (0.0, 3.0)}, distance=6.0)
     text = _format_plan(None, plan, exp, max_changes=2)
-    assert text == "c = 3, b = 2 (+1 more) (J=6)"
+    assert text == "c = 3\nb = 2\n(+1 more) (J=6)"
 
 
 def test_format_plan_uses_region_phrase_when_available() -> None:
@@ -411,7 +411,7 @@ def test_format_plan_uses_region_phrase_when_available() -> None:
         changes={"a": (0.0, 1.0)}, distance=1.0, region=_RegionStub()
     )
     text = _format_plan("bandA", plan, exp)
-    assert text == "bandA: keep a within the safe band (J=1)"
+    assert text == "bandA:\nkeep a within the safe band (J=1)"
 
 
 def test_format_plan_schematic_joins_with_if_and_and() -> None:
@@ -420,7 +420,7 @@ def test_format_plan_schematic_joins_with_if_and_and() -> None:
     exp = _map_explainer()
     plan = _cf({"a": (0.0, 1.0), "b": (0.0, 2.0)}, distance=3.0)
     text = _format_plan("bandA", plan, exp, schematic=True)
-    assert text == "bandA: If b = 2 and a = 1 (J=3)"
+    assert text == "bandA: If b = 2\nand a = 1 (J=3)"
 
 
 def test_plot_recourse_map_smoke_single_cf() -> None:
@@ -665,6 +665,27 @@ def test_plot_recourse_map_max_changes_per_label_truncates() -> None:
     assert "(+2 more)" in texts
 
 
+def test_plot_recourse_map_schematic_max_changes_zero_does_not_crash() -> None:
+    """Regression: schematic + max_changes_per_label=0 used to IndexError on parts[0]."""
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    plan = _cf(
+        {"a": (0.0, 1.0), "b": (0.0, 2.0), "c": (0.0, 3.0)}, distance=6.0, score_prob=0.65
+    )
+    ax = plot_recourse_map(
+        exp,
+        np.zeros(3),
+        [plan],
+        Target.probability(op=">=", value=0.6),
+        schematic=True,
+        max_changes_per_label=0,
+    )
+    texts = " ".join(t.get_text() for t in ax.texts)
+    assert "(+3 more)" in texts
+    assert "(J=6)" in texts
+
+
 def test_plot_recourse_map_factual_label_present_and_absent() -> None:
     from treecf.viz import plot_recourse_map
 
@@ -674,6 +695,7 @@ def test_plot_recourse_map_factual_label_present_and_absent() -> None:
         exp, np.array([1.0, 0.0, 0.0]), [plan], Target.probability(op=">=", value=0.6)
     )
     assert any("a = 1" in t.get_text() for t in ax_on.texts)
+    assert any("factual:" in t.get_text() for t in ax_on.texts)
 
     ax_off = plot_recourse_map(
         exp,
@@ -789,6 +811,44 @@ def test_plot_recourse_map_schematic_plan_labels_start_with_if() -> None:
     )
     texts = [t.get_text() for t in ax.texts]
     assert any(t.startswith("If ") for t in texts)
+
+
+def test_plot_recourse_map_inverted_labels_stay_inside_axes() -> None:
+    """Regression for PR #18 feedback: labels must not escape the axes.
+
+    Uses the low-side (inverted) fixture, where the old offset/ha flip put
+    plan and infeasible labels on the wrong side of the plot, spilling text
+    past the axes edge. Every rendered text's window extent must lie inside
+    the axes bbox (small pixel tolerance for anti-aliasing/rounding).
+    """
+    import matplotlib.pyplot as plt
+
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    results = {
+        "debt history": _cf(
+            {"a": (2.0, 0.0), "b": (1.0, 0.0)}, distance=1.0, score_prob=0.2
+        ),
+        "income": Infeasible(reason="unreachable"),
+    }
+    fig, ax = plt.subplots()
+    ax = plot_recourse_map(
+        exp, np.array([2.0, 0.0, 0.0]), results, Target.probability(op="<=", value=0.3), ax=ax
+    )
+    assert ax.xaxis_inverted()
+    fig.canvas.draw()
+    ax_bbox = ax.get_window_extent()
+    tol = 2.0  # px tolerance
+    checked_any = False
+    for t in ax.texts:
+        if not t.get_text():
+            continue
+        checked_any = True
+        text_bbox = t.get_window_extent()
+        assert text_bbox.x0 >= ax_bbox.x0 - tol
+        assert text_bbox.x1 <= ax_bbox.x1 + tol
+    assert checked_any
 
 
 def _axes_frac_x(ax, data_x):

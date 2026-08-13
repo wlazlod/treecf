@@ -226,12 +226,13 @@ def plot_recourse_map(
     Each plan is labeled with its changed features (largest-effort first,
     truncated to ``max_changes_per_label``, formatted with ``fmt``) when
     ``annotate`` is set; ``annotate`` also gates the ``show_factual_label``
-    block below the factual dot listing the features any plan changed, at
-    their original values. Infeasible entries in ``results`` are drawn as
-    grey markers above the plans, labeled by name (``"infeasible"`` alone
-    when unlabeled, with a ``(certified)`` suffix when the entry carries a
-    certified proof) regardless of ``annotate``. ``region_labels`` names the
-    two sides of the boundary in ``schematic`` mode.
+    block, an anchored corner box on the factual's screen side listing the
+    features any plan changed, at their original values. Infeasible entries
+    in ``results`` are drawn as grey markers above the plans, labeled by
+    name (``"infeasible"`` alone when unlabeled, with a ``(certified)``
+    suffix when the entry carries a certified proof) regardless of
+    ``annotate``. ``region_labels`` names the two sides of the boundary in
+    ``schematic`` mode.
 
     ``schematic=True`` swaps the quantitative axes and target band for a
     slide-friendly rendering: a wavy decision-boundary line instead of a
@@ -259,8 +260,8 @@ def plot_recourse_map(
             quantitative axes.
         region_labels: The (reject-side, accept-side) names drawn next to
             the boundary in schematic mode.
-        show_factual_label: Draw a block below the factual dot listing the
-            features any plan changed.
+        show_factual_label: Draw an anchored corner box, on the factual's
+            screen side, listing the features any plan changed.
 
     Returns:
         The axes the recourse map was drawn on.
@@ -315,7 +316,7 @@ def plot_recourse_map(
 
     ax.plot([x_fact], [0.0], "o", color="tab:red", markersize=9, zorder=3)
     for i, (_label, _plan, px, py) in enumerate(plan_points):
-        ax.plot([px], [py], "o", color="tab:green", markersize=8)
+        ax.plot([px], [py], "o", color="tab:green", markersize=8, zorder=3)
         sign = 1 if i % 2 else -1
         r = 0.0 if i == 0 else sign * 0.12 * math.ceil(i / 2)
         ax.annotate(
@@ -335,16 +336,30 @@ def plot_recourse_map(
         ax.set_ylabel("recourse cost J")
         ax.set_title(f"{len(plans)} recourse option(s)")
 
-    inverted = ax.xaxis_inverted()
-    offset = (-8, 4) if inverted else (8, 4)
-    ha = "right" if inverted else "left"
+    label_bbox = {
+        "boxstyle": "round,pad=0.25",
+        "facecolor": "white",
+        "edgecolor": "none",
+        "alpha": 0.75,
+    }
 
     if annotate:
         for label, plan, px, py in plan_points:
             text = _format_plan(
                 label, plan, explainer, fmt, max_changes_per_label, schematic=schematic
             )
-            ax.annotate(text, xy=(px, py), xytext=offset, textcoords="offset points", ha=ha)
+            dx, ha = _grow_inward(ax, px)
+            ax.annotate(
+                text,
+                xy=(px, py),
+                xytext=(dx, 4),
+                textcoords="offset points",
+                ha=ha,
+                va="bottom",
+                fontsize=8,
+                bbox=label_bbox,
+                zorder=2,  # marker (zorder=3) stays on top of its own label box
+            )
 
     if annotate and show_factual_label:
         touched: dict[str, float] = {}
@@ -352,32 +367,53 @@ def plot_recourse_map(
             for name, (source, _dest) in plan.changes.items():
                 touched.setdefault(name, source)
         if touched:
-            lines = [
+            lines = ["factual:"] + [
                 f"{name} = NaN"
                 if math.isnan(touched[name])
                 else f"{name} = {fmt.format(touched[name])}"
                 for name in sorted(touched)
             ]
-            ax.annotate(
+            _, side_ha = _grow_inward(ax, x_fact)
+            fx = 0.02 if side_ha == "left" else 0.98
+            ax.text(
+                fx,
+                0.03,
                 "\n".join(lines),
-                xy=(x_fact, 0.0),
-                xytext=(0, -10),
-                textcoords="offset points",
-                va="top",
-                ha="center",
+                transform=ax.transAxes,
+                ha=side_ha,
+                va="bottom",
+                fontsize=8,
+                bbox={**label_bbox, "facecolor": "0.96"},
+                zorder=2,  # factual dot (zorder=3) stays on top of the box background
             )
 
     y_top = max((py for _, _, _, py in plan_points), default=0.0)
     step_y = 0.12 * (y_top or 1.0)
+    fail_dx, fail_ha = _grow_inward(ax, x_fact)
+    top_data = y_top
     for i, (label, r) in enumerate(failures):
         y = y_top + (i + 1) * step_y
-        ax.plot([x_fact], [y], "x", color="0.5", markersize=8)
+        top_data = y
+        ax.plot([x_fact], [y], "x", color="0.5", markersize=8, zorder=3)
         text = f"{label}: infeasible" if label is not None else "infeasible"
         if getattr(r, "proof", "") == "certified":
             text += " (certified)"
-        ax.annotate(text, xy=(x_fact, y), xytext=offset, textcoords="offset points", ha=ha)
+        ax.annotate(
+            text,
+            xy=(x_fact, y),
+            xytext=(fail_dx, 0),
+            textcoords="offset points",
+            ha=fail_ha,
+            fontsize=8,
+            bbox=label_bbox,
+            zorder=2,  # marker (zorder=3) stays on top of its own label box
+        )
 
-    ax.set_ylim(bottom=-0.05 * ax.get_ylim()[1])
+    # Extra top headroom keeps multi-line plan labels and the topmost infeasible
+    # marker's label clear of the schematic region labels (y=0.95) and boundary
+    # caption (y=0.86), which both sit near the top of the axes.
+    top_ref = top_data or 1.0
+    ax.set_ylim(bottom=-0.05 * top_ref, top=1.5 * top_ref)
 
     if schematic:
         _schematic_dressing(ax, finite_edges, span, region_labels)
@@ -406,17 +442,26 @@ def _schematic_dressing(
     y_lo, y_hi = ax.get_ylim()
     t = [i / 199 for i in range(200)]
     y = [y_lo + ti * (y_hi - y_lo) for ti in t]
+    caption_bbox = {
+        "boxstyle": "round,pad=0.25",
+        "facecolor": "white",
+        "edgecolor": "none",
+        "alpha": 0.75,
+    }
     for edge in finite_edges:
         wave_x = [edge + amplitude * math.sin(2 * math.pi * 1.5 * ti) for ti in t]
         ax.plot(wave_x, y, linestyle="--", color="tab:blue")
+        dx, ha = _grow_inward(ax, edge)
         ax.annotate(
             "ML model decision boundary",
-            xy=(edge, y_hi),
-            xytext=(0, -4),
+            xy=(edge, 0.86),
+            xycoords=ax.get_xaxis_transform(),
+            xytext=(dx, 0),
             textcoords="offset points",
-            ha="center",
-            va="top",
-            fontsize=9,
+            ha=ha,
+            va="center",
+            fontsize=8,
+            bbox=caption_bbox,
         )
 
     # invert_xaxis() is only called when the band lies below the factual, which
@@ -424,6 +469,13 @@ def _schematic_dressing(
     # cases — the labels do not depend on ax.xaxis_inverted().
     ax.text(0.18, 0.95, region_labels[0], transform=ax.transAxes, fontsize=14, ha="center")
     ax.text(0.82, 0.95, region_labels[1], transform=ax.transAxes, fontsize=14, ha="center")
+
+
+def _grow_inward(ax: Any, x_data: float) -> tuple[int, str]:
+    """Offset/ha for a label anchored at ``x_data`` so its text grows toward plot center."""
+    lo_v, hi_v = ax.get_xlim()  # reflects inversion
+    frac = (x_data - lo_v) / (hi_v - lo_v) if hi_v != lo_v else 0.5
+    return (8, "left") if frac < 0.5 else (-8, "right")
 
 
 def _plans_with_labels(results: Any) -> list[tuple[str | None, Any]]:
@@ -614,13 +666,15 @@ def _format_plan(
     *,
     schematic: bool = False,
 ) -> str:
-    """Arrow-label text for one plan: effort-ordered changes, NaN- and region-aware.
+    """Arrow-label text for one plan: effort-ordered changes, one phrase per line.
 
     NaN legs read as ``drop {feature}`` / ``provide {feature} = value``;
     ``plan.region.describe()`` (when present) supplies a phrase for changes
     it covers instead of ``feature = value``. Truncated to ``max_changes``
-    with a ``(+k more)`` suffix; ``schematic`` joins with "If ... and ..."
-    instead of a comma list.
+    phrase lines with a trailing ``"(+k more)"`` line; ``schematic`` phrases
+    each line as an "If ..." / "and ..." clause instead of a bare value.
+    ``name``, when given, gets its own line in quantitative mode or prefixes
+    the "If" line in schematic mode. ``(J=...)`` is appended to the last line.
     """
     changes = plan.changes
     efforts = _change_effort(explainer, changes)
@@ -641,12 +695,27 @@ def _format_plan(
         else:
             parts.append(f"{f} = {fmt.format(dest)}")
 
-    body = "If " + " and ".join(parts) if schematic else ", ".join(parts)
+    prefix = f"{name}: " if name is not None else ""
+    if schematic and parts:
+        lines = [f"{prefix}If {parts[0]}", *(f"and {p}" for p in parts[1:])]
+    else:
+        # No phrase lines to show (e.g. max_changes=0): fall back to the
+        # quantitative layout, which degrades gracefully to just the name
+        # line (if any) and the truncation/J line below.
+        lines = list(parts)
+        if name is not None:
+            lines.insert(0, f"{name}:")
+
     remaining = len(ordered) - max_changes
     if remaining > 0:
-        body += f" (+{remaining} more)"
-    prefix = f"{name}: " if name is not None else ""
-    return f"{prefix}{body} (J={plan.distance:.3g})"
+        lines.append(f"(+{remaining} more)")
+
+    if not lines:
+        lines = [""]
+
+    j_suffix = f"(J={plan.distance:.3g})"
+    lines[-1] = f"{lines[-1]} {j_suffix}" if lines[-1] else j_suffix
+    return "\n".join(lines)
 
 
 def _import_pyplot() -> Any:
