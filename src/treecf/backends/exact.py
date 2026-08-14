@@ -1,20 +1,26 @@
-"""Exact backend foundations — domains, state costs, canonical orders, validation.
+"""Exact backend — domains, state costs, canonical orders, branch-and-bound search.
 
 This file is the Python reference implementation of the exact backend; a Rust
 mirror lands later and must match it bit-for-bit, so operation order in the
 cost arithmetic below is a compatibility contract, not a style choice — every
 multiply/divide/add mirrors ``treecf.backends.genetic``'s ``objective()``
-term-for-term.
+term-for-term. The same contract governs the score brackets the search prunes
+on: they are re-summed in full over the trees in ascending index after every
+assignment, never patched with an incremental delta, so the two
+implementations take the same prune decisions and expand the same nodes.
 
-No search loop lives here: ``_build_domains`` turns a factual, the joint cell
-grid, and the compiled constraints into a per-feature list of candidate
-counterfactual states (the branching alphabet a later depth-first search
-consumes), already in the cost order that search wants them in.
+``_build_domains`` turns a factual, the joint cell grid, and the compiled
+constraints into a per-feature list of candidate counterfactual states — the
+branching alphabet — already in the cost order that search wants them in.
+``solve_exact`` then walks that alphabet depth-first with an explicit stack,
+bounding each partial assignment by the score interval the ensemble can still
+reach and by the cost already spent plus the cheapest possible remainder.
 """
 
 from __future__ import annotations
 
 import math
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -22,7 +28,7 @@ import numpy as np
 import numpy.typing as npt
 
 from treecf._errors import ConstraintValidationError
-from treecf.aim.cells import Cell, cell_index
+from treecf.aim.cells import Cell, cell_index, feature_cells
 from treecf.api import ValuePolicy, _snap
 from treecf.constraints.compile import CompiledConstraints
 from treecf.constraints.objects import (
@@ -35,6 +41,8 @@ from treecf.constraints.objects import (
     OneHot,
     Range,
 )
+from treecf.ir.evaluate import raw_score
+from treecf.ir.model import EnsembleIR, SplitOp, Tree
 
 FloatArray = npt.NDArray[np.float64]
 
@@ -174,7 +182,10 @@ def _build_domains(
     gets that exact value ``v`` as its only non-NaN state, at its normal
     movement cost (zero only if ``v`` happens to equal the factual) — the
     pinned value is authoritative and exempt from value-policy snapping,
-    since constraints win over policies. A NaN factual without
+    since constraints win over policies. ``AllowMissing`` still adds the
+    missing state next to it: a pin restricts which value the feature may
+    take, not whether it may go missing, exactly as the bounds check reads
+    it. A NaN factual without
     ``AllowMissing`` gets a single keep-NaN state; with ``AllowMissing`` it
     additionally offers moving to the pinned value ``v``, priced by
     ``delta_from_miss``; either NaN-involving state is dropped when a
@@ -222,8 +233,18 @@ def _build_domains(
         if pinned:
             v = lo_j
             if not x_nan:
+                # The pin fixes the only value the feature may *take*; it says
+                # nothing about becoming missing, which the bounds check waves
+                # through, so AllowMissing still offers that second state here.
                 cost = _term_cost(x_j, v, weight_j, sigma_j, lam, to_miss, from_miss)
-                domains.append([_State(v, cost, cell_index(cells, v), False)])
+                pinned_states = [_State(v, cost, cell_index(cells, v), False)]
+                if allow_j and j not in suppress_nan:
+                    nan_cost = _term_cost(
+                        x_j, math.nan, weight_j, sigma_j, lam, to_miss, from_miss
+                    )
+                    pinned_states.append(_State(math.nan, nan_cost, len(cells), True))
+                    pinned_states.sort(key=_sort_key)
+                domains.append(pinned_states)
                 continue
             # A NaN factual pinned to v: staying NaN is legal only when no
             # single-feature Linear forbids it here (missing_policy); moving to
@@ -377,3 +398,416 @@ def _validate(
             )
 
     return order_pairs
+
+
+@dataclass(frozen=True)
+class _PreparedTree:
+    """One tree flattened into parallel arrays plus static per-node summaries.
+
+    ``sub_min``/``sub_max`` bracket the leaf values reachable below each node.
+    ``mask`` has bit ``f`` set when feature ``f`` is split on anywhere in that
+    node's subtree, so a walk can stop at any node that no current assignment
+    can influence and read the static bracket instead.
+    """
+
+    feature: tuple[int, ...]  # -1 at leaves
+    threshold: tuple[float, ...]
+    is_lt: tuple[bool, ...]
+    missing_left: tuple[bool, ...]
+    left: tuple[int, ...]
+    right: tuple[int, ...]
+    sub_min: tuple[float, ...]
+    sub_max: tuple[float, ...]
+    mask: tuple[int, ...]
+
+
+def _prepare_tree(tree: Tree) -> _PreparedTree:
+    """Flatten one tree and fill in its static subtree brackets and feature masks."""
+    n = len(tree.nodes)
+    sub_min = [0.0] * n
+    sub_max = [0.0] * n
+    mask = [0] * n
+
+    def visit(idx: int) -> None:
+        node = tree.nodes[idx]
+        if node.feature is None:
+            assert node.value is not None
+            sub_min[idx] = node.value
+            sub_max[idx] = node.value
+            return
+        assert node.left is not None and node.right is not None
+        visit(node.left)
+        visit(node.right)
+        sub_min[idx] = min(sub_min[node.left], sub_min[node.right])
+        sub_max[idx] = max(sub_max[node.left], sub_max[node.right])
+        mask[idx] = (1 << node.feature) | mask[node.left] | mask[node.right]
+
+    visit(0)
+    return _PreparedTree(
+        feature=tuple(-1 if nd.feature is None else nd.feature for nd in tree.nodes),
+        threshold=tuple(0.0 if nd.threshold is None else nd.threshold for nd in tree.nodes),
+        is_lt=tuple(nd.op is SplitOp.LT for nd in tree.nodes),
+        # bool(None) -> route right, matching the vectorized evaluator's convention
+        missing_left=tuple(bool(nd.missing_left) for nd in tree.nodes),
+        left=tuple(0 if nd.left is None else nd.left for nd in tree.nodes),
+        right=tuple(0 if nd.right is None else nd.right for nd in tree.nodes),
+        sub_min=tuple(sub_min),
+        sub_max=tuple(sub_max),
+        mask=tuple(mask),
+    )
+
+
+class _EnsembleBounds:
+    """Score bracket of one ensemble under a partial assignment.
+
+    Holds a per-tree ``[min, max]`` over the leaves still reachable, and the
+    ensemble bracket ``[score_min, score_max]`` those trees sum to. Assigning
+    a feature recomputes only the trees that split on it, from their roots —
+    the per-tree numbers are always full walks, never patched. The ensemble
+    bracket is then re-summed in full over every tree in ascending index, the
+    same order and the same additions ``raw_score`` performs, which is what
+    keeps prune decisions identical between this implementation and its Rust
+    mirror.
+
+    ``assigned`` and ``values`` are the search's own arrays, shared by
+    reference so the model and plausibility ensembles read one assignment.
+    """
+
+    def __init__(self, ir: EnsembleIR, assigned: list[bool], values: list[float]) -> None:
+        self.base_score = ir.base_score
+        self.trees = tuple(_prepare_tree(tree) for tree in ir.trees)
+        self.assigned = assigned
+        self.values = values
+        on_feature: list[list[int]] = [[] for _ in range(ir.n_features)]
+        for t, tree in enumerate(self.trees):
+            for f in sorted(set(tree.feature)):
+                if f >= 0:
+                    on_feature[f].append(t)
+        self.trees_on_feature = tuple(tuple(ts) for ts in on_feature)
+        self.tree_min = [0.0] * len(self.trees)
+        self.tree_max = [0.0] * len(self.trees)
+        self.score_min = 0.0
+        self.score_max = 0.0
+        self.recompute(0)
+
+    def recompute(self, assigned_mask: int) -> None:
+        """Walk every tree from its root and re-sum — the from-scratch path."""
+        for t, tree in enumerate(self.trees):
+            low, high = self._walk(tree, 0, assigned_mask)
+            self.tree_min[t] = low
+            self.tree_max[t] = high
+        self._resum()
+
+    def apply(self, j: int, assigned_mask: int) -> tuple[tuple[int, float, float], ...]:
+        """Refresh the trees that split on feature ``j``; return their old brackets."""
+        frame: list[tuple[int, float, float]] = []
+        for t in self.trees_on_feature[j]:
+            frame.append((t, self.tree_min[t], self.tree_max[t]))
+            low, high = self._walk(self.trees[t], 0, assigned_mask)
+            self.tree_min[t] = low
+            self.tree_max[t] = high
+        self._resum()
+        return tuple(frame)
+
+    def restore(self, frame: tuple[tuple[int, float, float], ...]) -> None:
+        """Put back the brackets an ``apply`` replaced."""
+        for t, low, high in frame:
+            self.tree_min[t] = low
+            self.tree_max[t] = high
+        self._resum()
+
+    def _resum(self) -> None:
+        low = self.base_score
+        high = self.base_score
+        for t in range(len(self.trees)):
+            # written out rather than accumulated with += so that no reader
+            # mistakes this for an incremental update: it is a full re-sum
+            low = low + self.tree_min[t]
+            high = high + self.tree_max[t]
+        self.score_min = low
+        self.score_max = high
+
+    def _walk(self, tree: _PreparedTree, idx: int, assigned_mask: int) -> tuple[float, float]:
+        if tree.mask[idx] & assigned_mask == 0:
+            return tree.sub_min[idx], tree.sub_max[idx]
+        f = tree.feature[idx]  # a set mask bit means this node is a split
+        if self.assigned[f]:
+            value = self.values[f]
+            if math.isnan(value):
+                child = tree.left[idx] if tree.missing_left[idx] else tree.right[idx]
+            elif tree.is_lt[idx]:
+                child = tree.left[idx] if value < tree.threshold[idx] else tree.right[idx]
+            else:
+                child = tree.left[idx] if value <= tree.threshold[idx] else tree.right[idx]
+            return self._walk(tree, child, assigned_mask)
+        left_min, left_max = self._walk(tree, tree.left[idx], assigned_mask)
+        right_min, right_max = self._walk(tree, tree.right[idx], assigned_mask)
+        return min(left_min, right_min), max(left_max, right_max)
+
+
+# (feature index, model bracket frame, plausibility bracket frame, cost before the move)
+_Frame = tuple[
+    int,
+    tuple[tuple[int, float, float], ...],
+    tuple[tuple[int, float, float], ...],
+    float,
+]
+
+
+def solve_exact(
+    ir: EnsembleIR,
+    x: FloatArray,
+    interval: tuple[float, float],
+    compiled: CompiledConstraints,
+    sigma: FloatArray,
+    weights: FloatArray,
+    lam: float,
+    value_policies: Mapping[str, ValuePolicy] | None = None,
+    plausibility: tuple[EnsembleIR, float] | None = None,
+    node_budget: int = 2_000_000,
+    gap: float = 0.0,
+    time_budget_s: float = 10.0,
+    incumbent: tuple[float, FloatArray] | None = None,
+) -> ExactResult:
+    """Search the cell grid depth-first for the cheapest counterfactual.
+
+    Features are assigned one at a time in a fixed order, each from its own
+    list of candidate states. Two bounds cut the tree: the score bracket the
+    ensemble can still reach (a partial assignment whose whole bracket falls
+    outside the target can never be completed into the target), and the cost
+    already committed plus the cheapest possible remainder. A full assignment
+    is accepted only if the compiled constraints admit the row, its score
+    re-computed in float space lands in the target, and — when configured —
+    the isolation forest still calls it plausible.
+
+    Args:
+        ir: Model whose score must land in ``interval``.
+        x: The factual row.
+        interval: Closed target interval ``(lo, hi)`` on the raw score.
+        compiled: Compiled constraint set; its ``check_matrix`` is the arbiter
+            that decides every completed row.
+        sigma: Per-feature scale divisors of the objective.
+        weights: Per-feature weights of the objective.
+        lam: Per-changed-feature penalty of the objective.
+        value_policies: Optional per-feature snapping rules for values that move.
+        plausibility: Optional ``(isolation forest, minimum total path length)``
+            pair; its splits also widen the cell grid.
+        node_budget: Maximum number of state assignments to attempt.
+        gap: Relative optimality gap to settle for. Above zero the search may
+            discard branches that could only improve on the incumbent by less
+            than this fraction, and says so through the proof it reports.
+        time_budget_s: Wall-clock budget, checked once per assignment.
+        incumbent: Optional ``(cost, row)`` warm start from another backend,
+            already costed by the caller on the same objective.
+
+    Returns:
+        The best row found, the strength of the claim about it, the search
+        counters, which features were moved onto a policy grid, and the cost
+        of the returned row.
+    """
+    start = time.monotonic()
+    _validate(compiled, value_policies)
+    lo_t, hi_t = interval
+    if_ir = plausibility[0] if plausibility is not None else None
+    min_total_path = plausibility[1] if plausibility is not None else 0.0
+
+    def accepts(row: FloatArray) -> bool:
+        """The arbiter: constraints, then the float-space score, then plausibility."""
+        if not bool(compiled.check_matrix(row[np.newaxis, :], x)[0]):
+            return False
+        score = raw_score(ir, row)
+        if not (lo_t <= score <= hi_t):
+            return False
+        return if_ir is None or raw_score(if_ir, row) >= min_total_path
+
+    # (a) The factual itself: nothing is ever cheaper than not moving at all.
+    if accepts(x):
+        return ExactResult(
+            x_cf=x.copy(),
+            proof="optimal",
+            stats=_stats(0, 0, 0, 0.0, gap, True, False),
+            snapped={},
+            distance=0.0,
+        )
+
+    grids = feature_cells(ir) if if_ir is None else feature_cells(ir, if_ir)
+    domains = _build_domains(grids, x, compiled, sigma, weights, lam, value_policies)
+    order = _feature_order(grids, compiled)
+    if any(not domains[j] for j in order):
+        # Contradictory constraints left a feature with no legal value at all:
+        # nothing to search, and nothing can be feasible.
+        return ExactResult(
+            x_cf=None,
+            proof="optimal",
+            stats=_stats(0, 0, 0, math.inf, gap, True, False),
+            snapped={},
+            distance=None,
+        )
+    h_suffix = _h_suffix(order, domains)
+
+    assigned = [False] * len(x)
+    values = [0.0] * len(x)
+    assigned_mask = 0
+    model_bounds = _EnsembleBounds(ir, assigned, values)
+    if_bounds = _EnsembleBounds(if_ir, assigned, values) if if_ir is not None else None
+
+    incumbent_cost = math.inf
+    incumbent_row: FloatArray | None = None
+    incumbent_states: list[_State] | None = None
+    warm_start_used = False
+    if incumbent is not None:
+        # (b) A warm start from another backend. Its states are unknown, so a
+        # warm winner reports no snapping of its own -- the backend that
+        # produced the row already applied any value policy to it.
+        incumbent_cost = incumbent[0]
+        incumbent_row = np.array(incumbent[1], dtype=np.float64)
+        warm_start_used = True
+
+    nodes_expanded = 0
+    nodes_pruned_score = 0
+    nodes_pruned_cost = 0
+    gap_prune_fired = False
+    completed = True
+
+    stack: list[int] = []  # state index chosen at each assigned level
+    frames: list[_Frame] = []
+    g_stack = [0.0]  # cost committed before the level of the same index
+    g = 0.0
+    next_state = 0
+
+    def undo(frame: _Frame) -> None:
+        nonlocal g, assigned_mask
+        j, model_frame, if_frame, g_before = frame
+        model_bounds.restore(model_frame)
+        if if_bounds is not None:
+            if_bounds.restore(if_frame)
+        assigned[j] = False
+        assigned_mask &= ~(1 << j)
+        g = g_before
+
+    while order:
+        k = len(stack)
+        states = domains[order[k]]
+        if next_state >= len(states):
+            if not stack:
+                break  # the whole space has been enumerated
+            undo(frames.pop())
+            g_stack.pop()
+            next_state = stack.pop() + 1
+            continue
+        if nodes_expanded >= node_budget or time.monotonic() - start > time_budget_s:
+            completed = False
+            break
+
+        nodes_expanded += 1
+        state = states[next_state]
+        j = order[k]
+        assigned[j] = True
+        values[j] = state.value
+        assigned_mask |= 1 << j
+        # A propagation pass over one-hot groups and implications belongs here,
+        # between the assignment and the bounds it feeds.
+        frame: _Frame = (
+            j,
+            model_bounds.apply(j, assigned_mask),
+            if_bounds.apply(j, assigned_mask) if if_bounds is not None else (),
+            g,
+        )
+        g = g + state.cost
+
+        if model_bounds.score_max < lo_t or model_bounds.score_min > hi_t:
+            nodes_pruned_score += 1
+            undo(frame)
+            next_state += 1
+            continue
+        if if_bounds is not None and if_bounds.score_max < min_total_path:
+            nodes_pruned_score += 1
+            undo(frame)
+            next_state += 1
+            continue
+        floor = g + h_suffix[k + 1]
+        threshold = incumbent_cost if gap == 0.0 else incumbent_cost / (1.0 + gap)
+        if floor >= threshold:
+            nodes_pruned_cost += 1
+            if incumbent_cost > floor:
+                gap_prune_fired = True  # only the widened threshold cut this branch
+            undo(frame)
+            next_state += 1
+            continue
+
+        if k + 1 == len(order):
+            row = x.copy()
+            for level, chosen in enumerate(stack):
+                row[order[level]] = domains[order[level]][chosen].value
+            row[j] = state.value
+            if accepts(row):
+                cost = _cost_of_row(x, row, sigma, weights, lam, compiled.allow_missing)
+                if cost < incumbent_cost:
+                    incumbent_cost = cost
+                    incumbent_row = row
+                    incumbent_states = [
+                        domains[order[level]][chosen] for level, chosen in enumerate(stack)
+                    ]
+                    incumbent_states.append(state)
+            undo(frame)
+            next_state += 1
+            continue
+
+        stack.append(next_state)
+        frames.append(frame)
+        g_stack.append(g)
+        next_state = 0
+
+    if completed:
+        lower_bound = math.inf
+        if incumbent_row is not None:
+            lower_bound = incumbent_cost if gap == 0.0 else incumbent_cost / (1.0 + gap)
+        proof = "optimal_within_gap" if gap > 0.0 and gap_prune_fired else "optimal"
+    else:
+        open_view = math.inf
+        if order:
+            open_view = min(g_stack[level] + h_suffix[level] for level in range(len(g_stack)))
+        lower_bound = min(open_view, incumbent_cost)
+        proof = "heuristic"
+
+    snapped: dict[str, bool] = {}
+    for level, chosen_state in enumerate(incumbent_states or []):
+        if chosen_state.snapped and chosen_state.value != x[order[level]]:
+            snapped[compiled.feature_names[order[level]]] = True
+
+    return ExactResult(
+        x_cf=incumbent_row,
+        proof=proof,
+        stats=_stats(
+            nodes_expanded,
+            nodes_pruned_score,
+            nodes_pruned_cost,
+            lower_bound,
+            gap,
+            completed,
+            warm_start_used,
+        ),
+        snapped=snapped,
+        distance=None if incumbent_row is None else incumbent_cost,
+    )
+
+
+def _stats(
+    nodes_expanded: int,
+    nodes_pruned_score: int,
+    nodes_pruned_cost: int,
+    lower_bound: float,
+    gap: float,
+    completed: bool,
+    warm_start_used: bool,
+) -> dict[str, object]:
+    """The exact set of counters ``solve_exact`` reports."""
+    return {
+        "nodes_expanded": nodes_expanded,
+        "nodes_pruned_score": nodes_pruned_score,
+        "nodes_pruned_cost": nodes_pruned_cost,
+        "lower_bound": lower_bound,
+        "gap": gap,
+        "completed": completed,
+        "warm_start_used": warm_start_used,
+    }
