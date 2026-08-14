@@ -6,7 +6,7 @@
 that the model's raw output lands in a target interval?"* — for XGBoost, LightGBM, CatBoost
 and scikit-learn tree ensembles.
 
-> Status: v0.1.0 on [PyPI](https://pypi.org/project/treecf/). See the [documentation](https://wlazlod.github.io/treecf/) for concepts and tutorials.
+> On [PyPI](https://pypi.org/project/treecf/). See the [documentation](https://wlazlod.github.io/treecf/) for concepts and tutorials.
 
 ## Why another counterfactual package?
 
@@ -20,6 +20,12 @@ and scikit-learn tree ensembles.
   counterfactual in a median 0.24s versus 0.005s for the genetic heuristic, closing a
   median 14.33% cost gap the heuristic leaves on the table — measured on a 4-core dev
   machine (`scripts/bench_exact.py`).
+- **Certified "no".** A completed exact search returns `Infeasible(proof="certified")` —
+  "no recourse exists within these constraints" becomes a provable statement, not a shrug
+  after a timeout.
+- **Recourse regions.** Any verified counterfactual widens into a certified box — "reduce
+  utilization to ≤ 0.40", not "to 0.3972" — with every point in the box provably in-target
+  and constraint-feasible; works with every backend.
 - **Decision thresholds are first-class.** Targets are intervals on the raw model output —
   custom probability cutoffs, regression targets, and whole rating-grade ladders in one call.
 - **Real-world constraints.** Declarative layer for immutability, directionality, ranges,
@@ -52,6 +58,9 @@ exp = Explainer(
     ],
 )
 res = exp.explain(x, target=Target.probability(range=(0.0, 0.04)), seed=0)
+
+proved = exp.explain(x, target=t, backend="exact")       # proof="optimal" or a certified "no"
+boxed = exp.explain(x, target=t, region=True)            # res.region.describe() -> "utilization <= 0.4"
 ```
 
 ## License

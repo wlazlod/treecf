@@ -13,6 +13,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   4. Tag vX.Y.Z -> release.yml builds, smoke-tests, and publishes.
 -->
 
+## [Unreleased]
+
+### Changed
+
+- README and the package's one-line description refreshed to cover the exact backend,
+  certified infeasibility, and recourse regions (updates the PyPI project page on the next
+  release).
+
 ## [0.2.0] - 2026-08-14
 
 ### Added
