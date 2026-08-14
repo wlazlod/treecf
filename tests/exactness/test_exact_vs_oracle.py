@@ -28,13 +28,17 @@ counterfactual where the oracle found none. What still holds is the other
 direction: anything the oracle can build the exact backend can build too, so an
 oracle answer is an upper bound on the exact answer.
 
-A one-hot group or an implication makes its features binary, and the exact
-backend then offers each of them only 0 and 1 (plus its unchanged factual)
-while the oracle keeps offering every cell's nearest point. Neither set
-contains the other, so those draws are compared only where the disagreement
-cannot bite: when the oracle's own answer keeps every binary feature on 0 or 1,
-it is a row the exact backend could have built, and it has to do at least as
-well.
+A one-hot group restricts its members to 0 and 1, and the exact backend offers
+each of them only those two values (plus its unchanged factual) while the
+oracle keeps offering every cell's nearest point. Neither set contains the
+other, so those draws are compared only where the disagreement cannot bite:
+when the oracle's own answer keeps every one-hot member on 0 or 1, it is a row
+the exact backend could have built, and it has to do at least as well.
+
+An implication restricts nothing, so the exact backend offers its features
+every candidate the oracle does and one more — the value the implication could
+demand of the consequence. Those draws are compared like order pairs: the
+oracle's answer is an upper bound, and the exact backend may beat it.
 
 Whatever the exact backend returns is re-verified from scratch on every draw,
 against the score, the constraints and the plausibility bound, and draws
@@ -74,7 +78,7 @@ from .brute_force import solve_brute_force
 
 FloatArray = npt.NDArray[np.float64]
 
-SEEDS = tuple(range(25))
+SEEDS = tuple(range(40))
 
 
 @dataclass(frozen=True)
@@ -154,29 +158,53 @@ def _draw_constraints(
     return tuple(constraints)
 
 
+def _order_pair(rng: np.random.Generator, a: str, b: str) -> Linear:
+    policy = str(rng.choice(["satisfied", "violated", "forbid_missing"]))
+    return Linear({a: 1.0, b: -1.0}, op="<=", rhs=0.0, missing_policy=policy)
+
+
 def _draw_relational(
     rng: np.random.Generator, names: tuple[str, ...], x: FloatArray
 ) -> tuple[tuple[Constraint, ...], str]:
     """An occasional constraint tying two features together.
 
-    A one-hot group or an implication is only drawn over features whose factual
-    value is 0 or 1 — anything else would make the group unsatisfiable at the
-    factual for reasons that have nothing to do with the search. Writing those
-    values into ``x`` also clears any missing value drawn there.
+    A one-hot group is only drawn over features whose factual value is 0 or 1 —
+    anything else would leave the group unsatisfiable at the factual for
+    reasons that have nothing to do with the search. Writing those values into
+    ``x`` also clears any missing value drawn there.
+
+    Two of the kinds combine constraints on purpose. ``"onehot+order"`` puts an
+    order pair across a one-hot member and an outside feature, which is the
+    shape that used to have the search throw a repair away and call the result
+    a proof. ``"chain"`` draws two order pairs sharing a feature, the shape a
+    pair-at-a-time repair cannot always settle.
     """
-    kind = str(rng.choice(["", "", "", "order", "onehot", "implies"]))
+    kind = str(
+        rng.choice(
+            ["", "", "", "", "", "order", "onehot", "implies", "onehot+order", "chain"]
+        )
+    )
     if not kind:
         return (), ""
-    a, b = (int(i) for i in rng.choice(len(names), size=2, replace=False))
+    picks = [int(i) for i in rng.choice(len(names), size=min(3, len(names)), replace=False)]
+    a, b, c = (picks + picks)[:3]
     if kind == "order":
-        policy = str(rng.choice(["satisfied", "violated", "forbid_missing"]))
-        pair = Linear(
-            {names[a]: 1.0, names[b]: -1.0}, op="<=", rhs=0.0, missing_policy=policy
-        )
-        return (pair,), kind
+        return (_order_pair(rng, names[a], names[b]),), kind
+    if kind == "chain":
+        # a <= b and b <= c: repairing either pair can break the other
+        return (
+            _order_pair(rng, names[a], names[b]),
+            _order_pair(rng, names[b], names[c]),
+        ), kind
     if kind == "onehot":
         x[a], x[b] = 1.0, 0.0  # the group holds at the factual
         return (OneHot((names[a], names[b])),), kind
+    if kind == "onehot+order":
+        x[a], x[b] = 1.0, 0.0
+        return (
+            OneHot((names[a], names[b])),
+            _order_pair(rng, names[a], names[c]),
+        ), kind
     x[a] = float(rng.integers(0, 2))
     x[b] = float(rng.integers(0, 2))
     return (Implies(Equals(names[a], 1.0), Equals(names[b], 1.0)),), kind
@@ -273,19 +301,27 @@ def _verify(case: _Case, row: FloatArray) -> list[str]:
     return problems
 
 
-def _policy_on_an_order_pair(case: _Case) -> bool:
-    """True when a value policy governs one of the features an order pair ties
-    together. The repair cannot move such a feature — the value it would want
-    need not sit on the policy's grid — so the search leaves those completions
-    undecided and reports that it did not settle the whole space. Everything
-    the oracle can build was still enumerated, so the comparison itself holds.
+def _may_leave_the_space_unsettled(case: _Case) -> bool:
+    """True when the draw holds an order pair whose repair the search cannot
+    always settle, which is when a `completed` of False is the documented
+    answer rather than a regression. Three shapes do it: a pair whose feature
+    carries a value policy (the repair has nowhere on the grid to move it), a
+    pair sharing a feature with another pair (repairing one can break the
+    other), and a pair over a one-hot member (the group's sum decides
+    feasibility, and four candidate points cannot argue with it). Everything
+    the oracle can build was still enumerated in every case, so the
+    comparisons below hold either way.
     """
+    pairs = [lin.indices for lin in case.compiled.linears if len(lin.indices) == 2]
+    if len(pairs) > 1:
+        return True
     policies = case.value_policies or {}
     names = case.compiled.feature_names
+    members = {f for group in case.compiled.onehot_groups for f in group}
     return any(
-        len(lin.indices) == 2
-        and any(policies.get(names[j], "raw") != "raw" for j in lin.indices)
-        for lin in case.compiled.linears
+        policies.get(names[j], "raw") != "raw" or j in members
+        for pair in pairs
+        for j in pair
     )
 
 
@@ -328,15 +364,17 @@ class TestExactVersusOracle:
             )
             feasible += int(oracle.feasible)
 
-            if result.stats["completed"] is not True and not _policy_on_an_order_pair(case):
+            if result.stats["completed"] is not True and not _may_leave_the_space_unsettled(
+                case
+            ):
                 problems.append(f"seed {seed}: search did not complete")
                 continue
             if result.x_cf is not None:
                 problems.extend(_verify(case, result.x_cf))
             tolerance = 1e-12 * max(1.0, oracle.objective)
 
-            if case.relational in ("onehot", "implies"):
-                # Binary features: the two solvers offer different values for
+            if case.relational in ("onehot", "onehot+order"):
+                # One-hot members: the two solvers offer different values for
                 # them, so a like-for-like comparison is only possible where
                 # the oracle's own answer stays on 0/1 there. Every value in
                 # such a row is one the exact backend can build too, so it has
@@ -353,7 +391,7 @@ class TestExactVersusOracle:
                         f"oracle={oracle.objective!r} on a row it could have built"
                     )
                 continue
-            if case.relational == "order":
+            if case.relational in ("order", "chain", "implies"):
                 # the exact backend may beat the oracle here, never lose to it
                 if oracle.feasible and result.x_cf is None:
                     problems.append(f"seed {seed}: oracle found a row the exact search missed")
@@ -388,8 +426,9 @@ class TestExactVersusOracle:
 
 
 class TestSolverDeterminism:
-    # seeds 7, 12 draw an order pair, 11 a one-hot group, 22 an implication
-    @pytest.mark.parametrize("seed", [0, 3, 7, 11, 12, 17, 22])
+    # 12 draws an order pair, 22 a chain of two, 11 a one-hot group crossed by
+    # an order pair, 18 a plain one-hot group, 1 an implication
+    @pytest.mark.parametrize("seed", [0, 3, 1, 11, 12, 17, 18, 22])
     def test_same_inputs_twice_give_the_same_row_and_node_count(self, seed: int) -> None:
         case = _draw_case(seed)
         first = _solve(case)

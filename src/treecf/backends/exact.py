@@ -32,18 +32,23 @@ any pair is still broken afterwards. No wrong row can come out of that, since
 ``check_matrix`` still decides every row that is returned, but a dropped
 completion is one the search never really settled: it says so by reporting
 that it did not get through the whole space, so a search that comes back
-empty-handed there is not claiming that nothing exists. The repair is also
-skipped for a feature restricted to 0/1, which needs none — both its values
-are candidates already — and for a feature carrying a value policy, which has
-no room to move: only one point per cell is on the policy's grid to begin
-with, so a search over such a pair does not claim to have settled the space
-either.
+empty-handed there is not claiming that nothing exists. The one feature the
+repair leaves alone is one carrying a value policy: only one point per cell is
+on the policy's grid to begin with, so there is nowhere legal to move it, and
+a search over such a pair does not claim to have settled the space either.
 
 The other rule is propagation: assigning a feature can settle other features
 outright (the trigger side of an implication, or the last free member of a
 one-hot group), and a state that contradicts such a settlement is cut without
 being explored. Propagation is a shortcut, never an authority — every row is
 still checked in full at the end.
+
+Only one of those two constraint kinds narrows what a feature may hold in the
+first place. A one-hot member is restricted to 0 and 1, since nothing else can
+make its group sum to one. An implication restricts nothing: it fires on an
+exact value and says nothing at all about any other, so its features keep
+their ordinary candidates and gain one more — the exact value the implication
+could demand of them.
 """
 
 from __future__ import annotations
@@ -327,12 +332,26 @@ def _build_domains(
     Every other feature intersects each grid cell with its bounds first
     (dropping empty intersections, preserving open/closed edges), and each
     surviving cell contributes its nearest point to the factual value as a
-    candidate — except binary features, which instead keep whichever of
-    0.0/1.0 the intersected cell contains, forced to that exact value. A
-    value policy snaps every such movement candidate, dropping it on
-    failure; the factual's own unchanged value is always available and
+    candidate. A value policy snaps every such movement candidate, dropping
+    it on failure; the factual's own unchanged value is always available and
     exempt from snapping, so a value policy can never force a feature that
     did not need to move.
+
+    Two constraint kinds change that last rule.
+
+    A one-hot member holds nothing but 0 or 1 — every other value fails the
+    group's own sum — so each of its surviving cells contributes whichever of
+    0.0/1.0 that cell holds, at that exact value, instead of a nearest point.
+
+    An implication does *not* narrow its features that way. Its condition only
+    fires on an exact value, and any other value leaves the implication with
+    nothing to say, so the ordinary nearest-point candidates are all legal
+    there and are kept. What the consequence side does get is one extra
+    candidate: the exact value the implication would demand of it, in whatever
+    cell holds that value. Without it a triggered implication would have
+    nothing legal left to offer, and rows that meet it would be out of reach.
+    Like a pinned value, that candidate comes from a constraint and is exempt
+    from value-policy snapping.
     """
     lo, hi, frozen = compiled.instance_bounds(x)
     lo = np.where(np.isnan(lo), -math.inf, lo)
@@ -343,6 +362,10 @@ def _build_domains(
         if len(lin.indices) == 1 and lin.missing_policy in _SUPPRESSING_MISSING_POLICIES
     }
     policies: Mapping[str, ValuePolicy] = value_policies or {}
+    onehot_members = {f for group in compiled.onehot_groups for f in group}
+    demanded: dict[int, set[float]] = {}
+    for imp in compiled.implications:
+        demanded.setdefault(imp.cons_index, set()).add(imp.cons_value)
 
     domains: list[list[_State]] = []
     for j in range(len(x)):
@@ -409,7 +432,8 @@ def _build_domains(
         policy = None if raw_policy is None or raw_policy == "raw" else raw_policy
 
         anchor = 0.0 if x_nan else x_j
-        is_binary = j in compiled.binary_features
+        is_binary = j in onehot_members
+        demanded_here = sorted(demanded.get(j, ()))
 
         states: list[_State] = []
         keep_added = False
@@ -430,6 +454,16 @@ def _build_domains(
                     cost = _term_cost(x_j, val, weight_j, sigma_j, lam, to_miss, from_miss)
                     states.append(_State(val, cost, local_idx, False))
                 continue
+            added_here: list[float] = []
+            for val in demanded_here:
+                # a value some implication may demand of this feature: legal
+                # wherever it lands, and never snapped, since the constraint
+                # that asks for it outranks any value policy
+                if not iv.contains(val) or (keep_added and val == x_j):
+                    continue
+                cost = _term_cost(x_j, val, weight_j, sigma_j, lam, to_miss, from_miss)
+                states.append(_State(val, cost, local_idx, False))
+                added_here.append(val)
             r = iv.nearest_to(anchor)
             if keep_added and r == x_j:
                 continue
@@ -440,6 +474,8 @@ def _build_domains(
                     continue
                 r = snapped_r
                 snapped = True
+            if r in added_here:
+                continue  # the demanded value was this cell's nearest point too
             cost = _term_cost(x_j, r, weight_j, sigma_j, lam, to_miss, from_miss)
             states.append(_State(r, cost, local_idx, False, snapped))
 
@@ -947,27 +983,25 @@ def solve_exact(
         policy = policies_now.get(compiled.feature_names[f])
         return policy is not None and policy != "raw"
 
-    # A feature with a value policy has to land on the policy's grid, and a
-    # binary feature only ever holds 0 or 1; neither can be nudged to an
-    # arbitrary point inside its cell, so pairs touching one are never repaired.
+    # A feature with a value policy has to land on the policy's grid, so it
+    # cannot be nudged to an arbitrary point inside its cell and pairs touching
+    # one are never repaired. Nothing else is held back: a repair only ever
+    # proposes a row, and the arbiter turns down the ones that break something.
     repairable_pairs = frozenset(
-        (a, b)
-        for a, b in order_pairs
-        if not any(f in compiled.binary_features or policy_active(f) for f in (a, b))
+        (a, b) for a, b in order_pairs if not any(policy_active(f) for f in (a, b))
     )
-    # Of the pairs left unrepaired, the binary ones are no loss: a binary
-    # feature carries both 0 and 1 among its own candidates, so the search
-    # reaches every ordering of such a pair without any repair. A pair held
-    # back by a value policy is a different matter — the value the pair wants
-    # may be another point of the policy's grid inside the same cell, and each
-    # cell contributes only one candidate — so nothing about those problems
-    # can be certified at all.
-    policy_bound = any(
-        pair not in repairable_pairs and any(policy_active(f) for f in pair)
-        for pair in order_pairs
+    policy_bound = bool(order_pairs) and len(repairable_pairs) < len(order_pairs)
+    # A pair whose feature is a one-hot member has a repair the four candidates
+    # cannot argue about: the group's sum decides feasibility, so it can turn
+    # on and off along the boundary segment rather than staying put, and the
+    # cheapest legal point may sit between two candidates. A pair sharing a
+    # feature with another pair is in the same position for a different reason —
+    # a repair can break its neighbour. In both cases a repair that comes to
+    # nothing settles nothing, and the search says so afterwards.
+    onehot_members = {f for group in compiled.onehot_groups for f in group}
+    unbounded_drop_pairs = frozenset(
+        pair for pair in order_pairs if any(f in onehot_members for f in pair)
     )
-    # pairs sharing a feature with another pair: repairing one of them can
-    # break the other, so a repair that comes to nothing there proves nothing
     entangled_pairs = frozenset(
         pair
         for pair in order_pairs
@@ -1077,6 +1111,22 @@ def solve_exact(
             and float(row[a]) - float(row[b]) > _LINEAR_SLACK
         ]
 
+    def set_aside(pairs: list[tuple[int, int]]) -> None:
+        """Remember a completion the repair could not settle.
+
+        The committed cost is a floor on anything that completion could have
+        turned into, since every feature already sits on the point of its cell
+        nearest to the factual and a repair can only move it away. That floor
+        does not hold once a one-hot member is involved: its candidates are the
+        group's 0 and 1 rather than the cell's nearest point, so a repair can
+        land somewhere cheaper. Those completions leave no floor at all.
+        """
+        nonlocal dropped_floor
+        if any(pair in unbounded_drop_pairs for pair in pairs):
+            dropped_floor = -math.inf
+        else:
+            dropped_floor = min(dropped_floor, g)
+
     def finish(row: FloatArray) -> FloatArray | None:
         """The row to weigh against the incumbent, or ``None`` if there is none.
 
@@ -1088,18 +1138,16 @@ def solve_exact(
         on. Several broken pairs at once are repaired one after another, each
         on the cheapest shared value regardless of the arbiter, and the whole
         completion is dropped if any pair is left broken; that is the
-        conservative corner named in the module docstring. A completion set
-        aside that way was never really decided, so its committed cost is
-        remembered: a repair can only ever cost more than that, so once the
-        incumbent is at least as cheap, setting it aside cannot have changed
-        the answer, and the search is exhaustive after all.
+        conservative corner named in the module docstring. Whenever a repair
+        comes to nothing, ``set_aside`` records what that completion could
+        still have been worth, so the search can say afterwards whether
+        anything was left undecided.
         """
-        nonlocal dropped_floor
         violated = broken(row, order_pairs)
         if not violated:
             return row if accepts(row) else None
         if any(pair not in repairable_pairs for pair in violated):
-            return None  # a broken pair the arbiter is bound to reject anyway
+            return None  # a policy-bound pair; the arbiter rejects the row anyway
         if len(violated) == 1:
             a, b = violated[0]
             best_row: FloatArray | None = None
@@ -1112,9 +1160,12 @@ def solve_exact(
                 if cost < best_cost and accepts(variant):
                     best_cost = cost
                     best_row = variant
-            if best_row is None and violated[0] in entangled_pairs:
-                # the repair may have been turned down by a pair it disturbed
-                dropped_floor = min(dropped_floor, g)
+            if best_row is None and (
+                violated[0] in entangled_pairs or violated[0] in unbounded_drop_pairs
+            ):
+                # every candidate turned down, and for this pair the four of
+                # them are not the whole story
+                set_aside(violated)
             return best_row
         repaired = row.copy()
         for a, b in violated:
@@ -1129,12 +1180,12 @@ def solve_exact(
                     best_cost = cost
                     best_t = t
             if best_t is None:
-                dropped_floor = min(dropped_floor, g)
+                set_aside(violated)
                 return None
             repaired[a] = best_t
             repaired[b] = best_t
         if broken(repaired, order_pairs) or not accepts(repaired):
-            dropped_floor = min(dropped_floor, g)
+            set_aside(violated)
             return None
         return repaired
 
@@ -1229,7 +1280,11 @@ def solve_exact(
         open_view = math.inf
         if order:
             open_view = min(g_stack[level] + h_suffix[level] for level in range(len(g_stack)))
-        lower_bound = min(open_view, incumbent_cost)
+        # a completion the repair set aside is worth at least its committed
+        # cost, or — where even that does not hold — at least nothing, since
+        # the objective is a sum of non-negative terms
+        set_aside_view = 0.0 if dropped_floor == -math.inf else dropped_floor
+        lower_bound = min(open_view, incumbent_cost, set_aside_view)
         proof = "heuristic"
 
     snapped: dict[str, bool] = {}
