@@ -50,7 +50,7 @@ class BatchRecord:
     seed: int | None = None  # diversity="seeds": the seed that produced this plan
     blocked_lever: str | None = None  # diversity="lever-blocking": the frozen lever
     coalition: str | None = None  # diversity="coalitions": the group this plan may touch
-    region: RecourseRegion | None = None  # set by explain_batch(..., region=True); not persisted
+    region: RecourseRegion | None = None  # set by explain_batch(..., region=True)
 
 
 @dataclass(frozen=True)
@@ -94,6 +94,19 @@ class BatchResult:
                     "seed": record.seed,
                     "blocked_lever": record.blocked_lever,
                     "coalition": record.coalition,
+                    "region": (
+                        None
+                        if record.region is None
+                        else {
+                            "lo": encode_floats(record.region.lo),
+                            "hi": encode_floats(record.region.hi),
+                            "feature_intervals": {
+                                name: encode_floats(list(pair))
+                                for name, pair in record.region.feature_intervals.items()
+                            },
+                            "certified": record.region.certified,
+                        }
+                    ),
                 }
                 for record in self.records
             ],
@@ -103,10 +116,26 @@ class BatchResult:
 
     @classmethod
     def load(cls, path: str | os.PathLike[str]) -> BatchResult:
+        from treecf.regions import RecourseRegion
+
         with open(path, encoding="utf-8") as fh:
             data = json.load(fh)
         records = []
         for raw in data["records"]:
+            raw_region = raw.get("region")  # absent key (pre-region files) -> None
+            region = (
+                None
+                if raw_region is None
+                else RecourseRegion(
+                    lo=np.asarray(decode_floats(raw_region["lo"]), dtype=np.float64),
+                    hi=np.asarray(decode_floats(raw_region["hi"]), dtype=np.float64),
+                    feature_intervals={
+                        name: tuple(decode_floats(pair))
+                        for name, pair in raw_region["feature_intervals"].items()
+                    },
+                    certified=bool(raw_region["certified"]),
+                )
+            )
             records.append(
                 BatchRecord(
                     id=raw["id"],
@@ -128,6 +157,7 @@ class BatchResult:
                     seed=raw["seed"],
                     blocked_lever=raw["blocked_lever"],
                     coalition=raw.get("coalition"),  # absent in pre-coalition files
+                    region=region,
                 )
             )
         essential_ids = [decode_floats(k) for k in data.get("essential_lever_ids", [])]
@@ -205,7 +235,14 @@ def explain_batch(
     ``warm_start``/``node_budget``/``gap`` configure that solve; they are
     only valid together with ``backend="exact"`` (see ``Explainer.explain``).
     ``region=True`` attaches a certified ``RecourseRegion`` to every feasible
-    record's ``region`` field (not persisted by ``BatchResult.save``/``load``).
+    record's ``region`` field; ``BatchResult.save``/``load`` persist it
+    (``lo``/``hi``/``feature_intervals``/``certified``, all explicit -- a
+    file saved without ``region=True``, or by an older version, loads with
+    every record's ``region`` set to ``None``). Unlike the wave-parallel GA
+    search above, region growth runs one record at a time (each is one
+    ``Explainer._region_for`` call, rust-first when the extension is
+    importable, exactly as a single ``explain(..., region=True)`` call would
+    run it) -- there is no batched/parallel region path.
     """
     from treecf.api import _resolve_exact_kwargs
 

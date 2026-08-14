@@ -23,7 +23,11 @@ import numpy as np
 
 from tests.conftest import make_random_ir
 from tests.exactness import fixture_utils
+from tests.parity.harness import build_constraints
 from treecf.api import Grid
+from treecf.backends.exact import solve_exact
+from treecf.backends.genetic import solve_genetic
+from treecf.constraints.compile import compile_constraints
 from treecf.ir.evaluate import raw_score
 from treecf.ir.model import EnsembleIR, Link, Node, SplitOp, Tree
 
@@ -310,10 +314,99 @@ SCENARIO_BUILDERS = (
 )
 
 
+# --------------------------------------------------------------------------
+# Region fixtures (Task 2.10): a verified x_cf widened into a certified box.
+# --------------------------------------------------------------------------
+
+
+def _write_region(payload: dict[str, Any]) -> None:
+    lo, hi = fixture_utils.solve_region_payload(payload)
+    payload["golden"] = fixture_utils.region_golden_block(lo, hi)
+    out = fixture_utils.REGION_FIXTURES_DIR / f"{payload['name']}.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with open(out, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, sort_keys=True, separators=(",", ":"))
+    print(f"  {payload['name']}: lo={lo}, hi={hi}")
+
+
+def _scenario_region_01_genetic_widened() -> dict[str, Any]:
+    """A genetic-found x_cf (fixed seed, deterministic) widened into a region."""
+    rng = np.random.default_rng(4242)
+    ir = make_random_ir(rng, n_features=3, n_trees=4, depth=3)
+    x = rng.normal(scale=2.0, size=3)
+    interval = (raw_score(ir, x) + 0.2, float("inf"))
+    compiled = compile_constraints([], ir.feature_names)
+    result = solve_genetic(ir, x, interval, compiled, np.ones(3), np.ones(3), 0.0, seed=7)
+    assert result.x_cf is not None
+    return fixture_utils.build_region_fixture_payload(
+        "region-01-genetic-widened", ir, x, result.x_cf, interval, [],
+    )
+
+
+def _scenario_region_02_exact_found() -> dict[str, Any]:
+    """An exact-found x_cf on a small deterministic ensemble, widened into a region."""
+    ir = _warm_start_ir()
+    x = np.array([0.0, 0.0, 0.0])
+    interval = (3.0, float("inf"))
+    compiled = compile_constraints([], ir.feature_names)
+    result = solve_exact(ir, x, interval, compiled, np.ones(3), np.ones(3), 0.0)
+    assert result.x_cf is not None
+    return fixture_utils.build_region_fixture_payload(
+        "region-02-exact-found", ir, x, result.x_cf, interval, [],
+    )
+
+
+def _scenario_region_03_plausibility() -> dict[str, Any]:
+    """A plausibility-constrained exact-found x_cf, widened under the
+    isolation-forest bound -- exercises the `if_ir` bracket in the oracle."""
+    ir, if_ir, min_total_path = _plausibility_ir()
+    x = np.array([0.0, 0.0, 0.0])
+    interval = (5.0, float("inf"))
+    compiled = compile_constraints([], ir.feature_names)
+    result = solve_exact(
+        ir, x, interval, compiled, np.ones(3), np.ones(3), 0.0,
+        plausibility=(if_ir, min_total_path),
+    )
+    assert result.x_cf is not None
+    return fixture_utils.build_region_fixture_payload(
+        "region-03-plausibility", ir, x, result.x_cf, interval, [],
+        if_ir=if_ir, min_total_path=min_total_path,
+    )
+
+
+def _scenario_region_04_order_pair() -> dict[str, Any]:
+    """An order-pair-constrained exact-found x_cf; the canonical `a - b <= 0`
+    shape is never pinned by `_degenerate_features`, so growth must hold it
+    at its worst corner rather than only at the factual point."""
+    ir = _order_pair_ir()
+    x = np.array([0.0, 0.0])
+    constraints = [
+        {"type": "Linear", "coefficients": {"x0": 1.0, "x1": -1.0}, "op": "<=", "rhs": 0.0}
+    ]
+    interval = (5.0, float("inf"))
+    compiled = compile_constraints(build_constraints(constraints), ir.feature_names)
+    result = solve_exact(ir, x, interval, compiled, np.ones(2), np.ones(2), 0.0)
+    assert result.x_cf is not None
+    return fixture_utils.build_region_fixture_payload(
+        "region-04-order-pair", ir, x, result.x_cf, interval, constraints,
+    )
+
+
+REGION_SCENARIO_BUILDERS = (
+    _scenario_region_01_genetic_widened,
+    _scenario_region_02_exact_found,
+    _scenario_region_03_plausibility,
+    _scenario_region_04_order_pair,
+)
+
+
 def main() -> None:
     fixture_utils.FIXTURES_DIR.mkdir(parents=True, exist_ok=True)
     for build in SCENARIO_BUILDERS:
         _write(build())
+    fixture_utils.REGION_FIXTURES_DIR.mkdir(parents=True, exist_ok=True)
+    for build in REGION_SCENARIO_BUILDERS:
+        _write_region(build())
 
 
 if __name__ == "__main__":

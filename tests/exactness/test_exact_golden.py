@@ -76,3 +76,51 @@ def test_fixture_generation_is_deterministic() -> None:
 def test_scenario_builders_cover_the_expected_fixture_ids() -> None:
     names = {build()["name"] for build in gen_exact_fixtures.SCENARIO_BUILDERS}
     assert names == EXPECTED_FIXTURE_IDS
+
+
+# --------------------------------------------------------------------------
+# Region fixtures (Task 2.10): the pure-Python growth loop's own golden freeze.
+# --------------------------------------------------------------------------
+
+REGION_FIXTURES = fixture_utils.region_fixture_paths()
+
+EXPECTED_REGION_FIXTURE_IDS = frozenset(
+    {
+        "region-01-genetic-widened",
+        "region-02-exact-found",
+        "region-03-plausibility",
+        "region-04-order-pair",
+    }
+)
+
+
+@pytest.mark.parametrize("path", REGION_FIXTURES, ids=[p.stem for p in REGION_FIXTURES])
+def test_region_growth_matches_golden_fixture(path: Path) -> None:
+    """Pure-Python growth loop (bypasses the rust-first dispatch), pinned
+    directly -- ``tests/rust/test_region_parity.py`` covers rust-vs-python-
+    vs-golden three ways at once, the same split ``test_exact_golden.py`` /
+    ``test_exact_parity.py`` keep for the exact backend."""
+    fixture = fixture_utils.load_region_fixture(path)
+    lo, hi = fixture_utils.run_region_fixture(fixture)
+    problems = fixture_utils.diff_region_golden(fixture, lo, hi)
+    assert not problems, f"{fixture.name}:\n" + "\n".join(problems)
+
+
+def test_region_fixture_set_matches_expected_scenarios() -> None:
+    assert {p.stem for p in REGION_FIXTURES} == EXPECTED_REGION_FIXTURE_IDS
+
+
+def test_region_fixture_generation_is_deterministic() -> None:
+    """Each region scenario builder called twice produces byte-identical
+    payload dicts (pre-``golden``) -- the same double-generation determinism
+    check ``test_fixture_generation_is_deterministic`` runs for the exact
+    fixtures, extended to the region scenario builders."""
+    for build in gen_exact_fixtures.REGION_SCENARIO_BUILDERS:
+        first = build()
+        second = build()
+        assert first == second, f"{first.get('name', build.__name__)}: not deterministic"
+
+
+def test_region_scenario_builders_cover_the_expected_fixture_ids() -> None:
+    names = {build()["name"] for build in gen_exact_fixtures.REGION_SCENARIO_BUILDERS}
+    assert names == EXPECTED_REGION_FIXTURE_IDS

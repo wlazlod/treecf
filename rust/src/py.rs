@@ -644,6 +644,76 @@ fn debug_domains_raw<'py>(
     ))
 }
 
+/// Certified recourse-region growth — port of `treecf.regions._recourse_region`.
+/// Returns `(lo, hi)` per-feature arrays (degenerate coordinates equal
+/// `x_cf` there); `regions_rust.py` builds the `RecourseRegion` dataclass
+/// from them (`feature_intervals`/`certified` are presentation, not search
+/// state, so they stay on the Python side).
+///
+/// `missing_defined`/`if_missing_defined` carry the `node.missing_left is
+/// not None` bit that `RustEnsemble`'s own flat `missing_left: bool`
+/// encoding collapses into `false` for both an explicit "route right" and an
+/// undefined missing direction — this is the one caller that needs the
+/// distinction (see `crate::regions`'s module doc). `lo_b`/`hi_b` are the
+/// instance bounds and `open_set` the non-degenerate feature indices;
+/// `regions.py` already computes both to build `feature_intervals` either
+/// way, so this binding does not re-derive them.
+#[pyfunction]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+#[pyo3(signature = (ensemble, missing_defined, constraints, x_cf, lo_t, hi_t,
+                    lo_b, hi_b, open_set,
+                    if_ensemble=None, if_missing_defined=None, min_total_path=None))]
+fn compute_region_raw<'py>(
+    py: Python<'py>,
+    ensemble: &RustEnsemble,
+    missing_defined: PyReadonlyArray1<u8>,
+    constraints: &RustConstraints,
+    x_cf: PyReadonlyArray1<f64>,
+    lo_t: f64,
+    hi_t: f64,
+    lo_b: PyReadonlyArray1<f64>,
+    hi_b: PyReadonlyArray1<f64>,
+    open_set: PyReadonlyArray1<u32>,
+    if_ensemble: Option<&RustEnsemble>,
+    if_missing_defined: Option<PyReadonlyArray1<u8>>,
+    min_total_path: Option<f64>,
+) -> PyResult<(Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>)> {
+    let x_cf_own = x_cf.as_slice()?.to_vec();
+    let lo_b_own = lo_b.as_slice()?.to_vec();
+    let hi_b_own = hi_b.as_slice()?.to_vec();
+    let open_set_own: Vec<usize> = open_set.as_slice()?.iter().map(|&j| j as usize).collect();
+    let missing_defined_own: Vec<bool> = missing_defined
+        .as_slice()?
+        .iter()
+        .map(|&b| b != 0)
+        .collect();
+    let if_missing_defined_own: Option<Vec<bool>> = match &if_missing_defined {
+        Some(arr) => Some(arr.as_slice()?.iter().map(|&b| b != 0).collect()),
+        None => None,
+    };
+    let ens = &ensemble.inner;
+    let cons = &constraints.inner;
+    let if_pair = match (if_ensemble, &if_missing_defined_own) {
+        (Some(if_e), Some(md)) => Some((&if_e.inner, md.as_slice())),
+        _ => None,
+    };
+    let result = py.detach(|| {
+        crate::regions::recourse_region(
+            ens,
+            &missing_defined_own,
+            cons,
+            &x_cf_own,
+            (lo_t, hi_t),
+            &lo_b_own,
+            &hi_b_own,
+            &open_set_own,
+            if_pair,
+            min_total_path.unwrap_or(0.0),
+        )
+    });
+    Ok((result.lo.into_pyarray(py), result.hi.into_pyarray(py)))
+}
+
 #[pymodule]
 fn _treecf_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RustEnsemble>()?;
@@ -652,5 +722,6 @@ fn _treecf_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(solve_genetic_batch_raw, m)?)?;
     m.add_function(wrap_pyfunction!(solve_exact_raw, m)?)?;
     m.add_function(wrap_pyfunction!(debug_domains_raw, m)?)?;
+    m.add_function(wrap_pyfunction!(compute_region_raw, m)?)?;
     Ok(())
 }

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import numpy as np
 import pytest
 
@@ -210,6 +212,41 @@ class TestPersistence:
                 np.testing.assert_array_equal(restored.x_cf, original.x_cf)
                 assert restored.changes.keys() == original.changes.keys()
                 assert restored.distance == original.distance
+
+    def test_region_round_trips_and_old_files_load_with_none(
+        self, exp: Explainer, tmp_path: object
+    ) -> None:
+        from treecf import RecourseRegion
+
+        batch = exp.explain_batch(X[:2], TARGET, n_per_example=1, seed=0, region=True)
+        assert any(r.feasible and r.region is not None for r in batch)
+
+        path = f"{tmp_path}/batch_region.json"
+        batch.save(path)
+        loaded = BatchResult.load(path)
+        for original, restored in zip(batch, loaded, strict=True):
+            if not original.feasible:
+                assert restored.region is None
+                continue
+            assert isinstance(restored.region, RecourseRegion)
+            np.testing.assert_array_equal(restored.region.lo, original.region.lo)
+            np.testing.assert_array_equal(restored.region.hi, original.region.hi)
+            assert restored.region.feature_intervals == original.region.feature_intervals
+            assert restored.region.certified == original.region.certified
+
+        # a file saved without region=True (or by an older version) has no
+        # "region" key per record at all -- the loader must not choke on it.
+        batch_no_region = exp.explain_batch(X[:2], TARGET, n_per_example=1, seed=0)
+        old_path = f"{tmp_path}/batch_pre_region.json"
+        batch_no_region.save(old_path)
+        with open(old_path, encoding="utf-8") as fh:
+            raw = json.load(fh)
+        for record in raw["records"]:
+            del record["region"]
+        with open(old_path, "w", encoding="utf-8") as fh:
+            json.dump(raw, fh)
+        loaded_old = BatchResult.load(old_path)
+        assert all(r.region is None for r in loaded_old)
 
     def test_to_frame_wide_columns(self, exp: Explainer) -> None:
         pd = pytest.importorskip("pandas")

@@ -480,7 +480,7 @@ class Explainer:
         # constraints differ, so that cache entry is deliberately left out.
         clone._rust_cache = {
             key: self._rust_cache[key]
-            for key in ("ensemble", "if_ensemble")
+            for key in ("ensemble", "if_ensemble", "missing_defined", "if_missing_defined")
             if key in self._rust_cache
         }
         return clone
@@ -850,7 +850,17 @@ class Explainer:
                 "band's own interval via Target.raw/probability/calibrated"
             )
         interval = target.raw_interval(self.ir.link)
-        verification = self._verify(x, x_cf, interval)
+        try:
+            verification = self._verify(x, x_cf, interval)
+        except ValueError as exc:
+            # _verify's own raw_score re-check raises ValueError when x_cf's
+            # path hits a split with no missing routing defined (an unrouted
+            # NaN) -- surfaced here as the TreecfError this method's docstring
+            # promises, since _verify itself stays a float-space re-check that
+            # never wraps its own scoring call.
+            raise TreecfError(
+                f"cannot certify a region for an unverified counterfactual: {exc}"
+            ) from exc
         if verification is not None:
             raise TreecfError(
                 f"cannot certify a region for an unverified counterfactual: {verification}"
@@ -867,7 +877,10 @@ class Explainer:
         plaus = self._plausibility_bound()
         if plaus is not None:
             if_ir, min_total_path = plaus
-        return _recourse_region(self.ir, x, x_cf, interval, self.compiled, if_ir, min_total_path)
+        return _recourse_region(
+            self.ir, x, x_cf, interval, self.compiled, if_ir, min_total_path,
+            cache=self._rust_cache,
+        )
 
     def _apply_value_policies(
         self, x: FloatArray, x_cf: FloatArray, interval: tuple[float, float]

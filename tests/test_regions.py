@@ -139,6 +139,29 @@ class TestRecourseRegionMethod:
         assert region.contains(result.x_cf)
         assert region.feature_intervals["a"][0] == 1.0
 
+    def test_scoring_error_on_an_unrouted_missing_split_surfaces_as_treecf_error(self) -> None:
+        """Fold-in (Task 2.9 re-review): an adversarial ``x_cf`` whose own path
+        hits a split with no missing routing defined makes ``_verify``'s
+        ``raw_score`` re-check raise a raw ``ValueError`` -- ``recourse_region``
+        must surface that as the ``TreecfError`` its docstring promises, not
+        let the ``ValueError`` propagate uncaught."""
+        root = Node(0, 0, 1.0, SplitOp.LT, None, 1, 2, None)
+        left_leaf = _leaf(1, 0.0)
+        f_split = Node(2, 1, 0.5, SplitOp.LT, None, 3, 4, None)  # missing_left=None
+        f_leaf_lo = _leaf(3, 0.0)
+        f_leaf_hi = _leaf(4, 5.0)
+        tree = Tree(nodes=(root, left_leaf, f_split, f_leaf_lo, f_leaf_hi))
+        ir = EnsembleIR(
+            trees=(tree,), base_score=0.0, link=Link.IDENTITY, n_features=2,
+            feature_names=("g", "f"), meta={},
+        )
+        exp = Explainer(ir, normalizers=np.ones(2))
+        x = np.array([0.0, math.nan])
+        adversarial = np.array([2.0, math.nan])  # g=2.0 crosses into the unrouted f-split
+        target = Target.raw(range=(-1.0, 10.0))
+        with pytest.raises(TreecfError, match="no missing routing"):
+            exp.recourse_region(x, adversarial, target)
+
 
 # --------------------------------------------------------------------------
 # region=True end to end, every backend

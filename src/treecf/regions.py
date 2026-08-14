@@ -349,6 +349,7 @@ def _recourse_region(
     compiled: CompiledConstraints,
     if_ir: EnsembleIR | None,
     min_total_path: float,
+    cache: dict[str, object] | None = None,
 ) -> RecourseRegion:
     """Grow a certified box around the verified counterfactual ``x_cf``.
 
@@ -356,7 +357,8 @@ def _recourse_region(
     them -- anchor at it, the same as verification does); ``interval`` is the
     raw-score interval ``x_cf`` was solved against; ``if_ir``/``min_total_path``
     come from the explainer's plausibility configuration, or ``(None, 0.0)``
-    when none is configured.
+    when none is configured. ``cache`` is the Explainer's marshaled-Rust-object
+    cache, when one is available (see ``regions_rust.compute_region_rust``).
 
     Growth proceeds one joint-grid cell at a time, per non-degenerate
     feature in ascending index order, upper endpoint before lower, each
@@ -364,13 +366,57 @@ def _recourse_region(
     a feature closes once both directions fail in the same round, and the
     whole loop stops once a full round accepts nothing. No step reads from
     set or dict iteration order, so the result is bit-deterministic.
+
+    Dispatches rust-first: when the ``_treecf_core`` extension is importable,
+    the growth loop runs in ``regions_rust.compute_region_rust`` instead of
+    the pure-Python ``_grow_box`` below. The rust engine is a bit-parity
+    mirror, not a heuristic stand-in -- every fixture under
+    ``tests/fixtures/regions/`` proves the two produce byte-identical ``lo``/
+    ``hi`` arrays, so the fallback only ever changes which engine ran, never
+    what it found.
     """
-    p = len(x_cf)
+    from treecf.backends.regions_rust import _rust_available, compute_region_rust
+
     lo_b, hi_b, frozen = compiled.instance_bounds(x)
     lo_b = np.where(np.isnan(lo_b), -math.inf, lo_b)
     hi_b = np.where(np.isnan(hi_b), math.inf, hi_b)
-
     degenerate = _degenerate_features(compiled, frozen, lo_b, hi_b, x_cf)
+
+    if _rust_available():
+        box_lo, box_hi = compute_region_rust(
+            ir, x_cf, interval, compiled, lo_b, hi_b, degenerate, if_ir, min_total_path,
+            cache=cache,
+        )
+    else:
+        box_lo, box_hi = _grow_box(
+            ir, x_cf, interval, compiled, if_ir, min_total_path, degenerate, lo_b, hi_b,
+        )
+
+    feature_intervals = {
+        compiled.feature_names[j]: (float(box_lo[j]), float(box_hi[j]))
+        for j in range(len(x_cf))
+        if j not in degenerate
+    }
+    return RecourseRegion(
+        lo=box_lo, hi=box_hi, feature_intervals=feature_intervals, certified=True
+    )
+
+
+def _grow_box(
+    ir: EnsembleIR,
+    x_cf: FloatArray,
+    interval: tuple[float, float],
+    compiled: CompiledConstraints,
+    if_ir: EnsembleIR | None,
+    min_total_path: float,
+    degenerate: frozenset[int],
+    lo_b: FloatArray,
+    hi_b: FloatArray,
+) -> tuple[FloatArray, FloatArray]:
+    """Pure-Python growth loop -- the reference ``_recourse_region`` falls
+    back to when the Rust extension is unavailable, and the fixture-golden
+    freeze in ``tests/exactness/test_exact_golden.py`` pins directly."""
+    p = len(x_cf)
     grids = (
         _constraint_cells(compiled, ir)
         if if_ir is None
@@ -399,11 +445,4 @@ def _recourse_region(
                 still_open.add(j)
         open_set = still_open
 
-    feature_intervals = {
-        compiled.feature_names[j]: (float(box_lo[j]), float(box_hi[j]))
-        for j in range(p)
-        if j not in degenerate
-    }
-    return RecourseRegion(
-        lo=box_lo, hi=box_hi, feature_intervals=feature_intervals, certified=True
-    )
+    return box_lo, box_hi
