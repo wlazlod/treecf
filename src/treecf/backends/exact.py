@@ -440,6 +440,9 @@ def _prepare_tree(tree: Tree) -> _PreparedTree:
         visit(node.right)
         sub_min[idx] = min(sub_min[node.left], sub_min[node.right])
         sub_max[idx] = max(sub_max[node.left], sub_max[node.right])
+        # Rust mirror: Python ints are arbitrary-precision, so one int carries a
+        # bit per feature however wide the model is. A mirror needs a real
+        # bitset here (and for the search's assigned_mask) past 64 features.
         mask[idx] = (1 << node.feature) | mask[node.left] | mask[node.right]
 
     visit(0)
@@ -542,6 +545,10 @@ class _EnsembleBounds:
             return self._walk(tree, child, assigned_mask)
         left_min, left_max = self._walk(tree, tree.left[idx], assigned_mask)
         right_min, right_max = self._walk(tree, tree.right[idx], assigned_mask)
+        # Rust mirror: on a 0.0 / -0.0 tie Python's min/max return the first
+        # argument while f64::min/max return -0.0. The two compare equal, so no
+        # prune or sum can differ — but a harness comparing stored brackets by
+        # raw bits would see it.
         return min(left_min, right_min), max(left_max, right_max)
 
 
@@ -598,12 +605,23 @@ def solve_exact(
             than this fraction, and says so through the proof it reports.
         time_budget_s: Wall-clock budget, checked once per assignment.
         incumbent: Optional ``(cost, row)`` warm start from another backend,
-            already costed by the caller on the same objective.
+            already costed by the caller on the same objective. The caller must
+            also have verified the row: the search takes its feasibility on
+            trust, prunes against its cost, and may hand it straight back.
 
     Returns:
         The best row found, the strength of the claim about it, the search
         counters, which features were moved onto a policy grid, and the cost
         of the returned row.
+
+        There are two different ways to come back empty-handed, and callers
+        must tell them apart by ``stats["completed"]``, not by ``proof``. An
+        ``x_cf`` of None with ``completed`` True is a certificate: every
+        assignment the grid allows was tried and none was feasible, so no
+        counterfactual exists within the searched space — ``proof`` carries no
+        meaning in that case and should be ignored. An ``x_cf`` of None with
+        ``completed`` False only means the node or time budget ran out first;
+        the space was never exhausted and nothing is proven either way.
     """
     start = time.monotonic()
     _validate(compiled, value_policies)
