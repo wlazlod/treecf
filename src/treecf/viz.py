@@ -223,20 +223,24 @@ def plot_recourse_map(
     and as the raw score otherwise (``space="raw"``; ``space="auto"`` picks
     based on the model's link function).
 
-    Each plan is labeled with its changed features (largest-effort first,
-    truncated to ``max_changes_per_label``, formatted with ``fmt``) when
-    ``annotate`` is set; ``annotate`` also gates the ``show_factual_label``
-    block, an anchored corner box on the factual's screen side listing the
-    features any plan changed, at their original values. Infeasible entries
-    in ``results`` are drawn as grey markers above the plans, labeled by
-    name (``"infeasible"`` alone when unlabeled, with a ``(certified)``
-    suffix when the entry carries a certified proof) regardless of
-    ``annotate``. ``region_labels`` names the two sides of the boundary in
-    ``schematic`` mode.
+    In the default quantitative view, each plan is labeled with one line —
+    its name (or ``"plan {i}"``, ascending by distance, when unnamed) and its
+    cost — when ``annotate`` is set; the map's job here is the overview, not
+    a change list. Infeasible entries in ``results`` are drawn as grey
+    markers above the plans, labeled by name (``"infeasible"`` alone when
+    unlabeled, with a ``(certified)`` suffix when the entry carries a
+    certified proof) regardless of ``annotate``.
 
     ``schematic=True`` swaps the quantitative axes and target band for a
     slide-friendly rendering: a wavy decision-boundary line instead of a
-    band, no ticks or axis labels, and "If ..." phrased plan labels.
+    band, no ticks or axis labels, and "If ..." phrased plan labels (using
+    each plan's changed features, largest-effort first, truncated to
+    ``max_changes_per_label`` and formatted with ``fmt``). ``annotate`` also
+    gates ``show_factual_label`` there — an anchored corner box on the
+    factual's screen side listing the features any plan changed, at their
+    original values (schematic mode only; the quantitative view never draws
+    it). ``region_labels`` names the two sides of the boundary in
+    ``schematic`` mode.
 
     Args:
         explainer: Explainer wrapping the model; supplies the link function
@@ -251,17 +255,19 @@ def plot_recourse_map(
         ax: Existing axes to draw on; a new figure is created if omitted.
         space: ``"probability"``, ``"raw"``, or ``"auto"`` (default) to pick
             the model-output axis space from the model's link function.
-        annotate: Draw a text label at each plan's point; also gates whether
-            ``show_factual_label`` draws its block.
-        max_changes_per_label: Number of changed features shown per label
-            before truncating to "(+k more)".
-        fmt: Format string for changed feature values in labels.
+        annotate: Draw a text label at each plan's point; in ``schematic``
+            mode, also gates whether ``show_factual_label`` draws its block.
+        max_changes_per_label: Schematic mode only. Number of changed
+            features shown per label before truncating to "(+k more)".
+        fmt: Schematic mode only. Format string for changed feature values
+            in labels.
         schematic: Render the slide-friendly boundary view instead of the
             quantitative axes.
         region_labels: The (reject-side, accept-side) names drawn next to
             the boundary in schematic mode.
-        show_factual_label: Draw an anchored corner box, on the factual's
-            screen side, listing the features any plan changed.
+        show_factual_label: Schematic mode only. Draw an anchored corner
+            box, on the factual's screen side, listing the features any
+            plan changed.
 
     Returns:
         The axes the recourse map was drawn on.
@@ -344,10 +350,18 @@ def plot_recourse_map(
     }
 
     if annotate:
-        for label, plan, px, py in plan_points:
-            text = _format_plan(
-                label, plan, explainer, fmt, max_changes_per_label, schematic=schematic
-            )
+        for i, (label, plan, px, py) in enumerate(plan_points):
+            if schematic:
+                text = _format_plan(
+                    label, plan, explainer, fmt, max_changes_per_label, schematic=True
+                )
+                fontsize = 8
+            else:
+                # Minimal mode: the map's job is the overview, not the change list —
+                # one line naming the plan (or its ascending-distance ordinal) and its cost.
+                plan_name = label if label is not None else f"plan {i + 1}"
+                text = f"{plan_name} (J={plan.distance:.3g})"
+                fontsize = 9
             dx, ha = _grow_inward(ax, px)
             ax.annotate(
                 text,
@@ -356,12 +370,12 @@ def plot_recourse_map(
                 textcoords="offset points",
                 ha=ha,
                 va="bottom",
-                fontsize=8,
+                fontsize=fontsize,
                 bbox=label_bbox,
                 zorder=2,  # marker (zorder=3) stays on top of its own label box
             )
 
-    if annotate and show_factual_label:
+    if schematic and annotate and show_factual_label:
         touched: dict[str, float] = {}
         for _label, plan, _px, _py in plan_points:
             for name, (source, _dest) in plan.changes.items():
@@ -390,10 +404,8 @@ def plot_recourse_map(
     y_top = max((py for _, _, _, py in plan_points), default=0.0)
     step_y = 0.12 * (y_top or 1.0)
     fail_dx, fail_ha = _grow_inward(ax, x_fact)
-    top_data = y_top
     for i, (label, r) in enumerate(failures):
         y = y_top + (i + 1) * step_y
-        top_data = y
         ax.plot([x_fact], [y], "x", color="0.5", markersize=8, zorder=3)
         text = f"{label}: infeasible" if label is not None else "infeasible"
         if getattr(r, "proof", "") == "certified":
@@ -405,15 +417,22 @@ def plot_recourse_map(
             textcoords="offset points",
             ha=fail_ha,
             fontsize=8,
-            bbox=label_bbox,
-            zorder=2,  # marker (zorder=3) stays on top of its own label box
+            color="0.35",
+            zorder=2,  # marker (zorder=3) stays on top of its own label
         )
 
-    # Extra top headroom keeps multi-line plan labels and the topmost infeasible
-    # marker's label clear of the schematic region labels (y=0.95) and boundary
-    # caption (y=0.86), which both sit near the top of the axes.
-    top_ref = top_data or 1.0
-    ax.set_ylim(bottom=-0.05 * top_ref, top=1.5 * top_ref)
+    n_failures = len(failures)
+    if schematic:
+        # Extra top headroom keeps multi-line plan labels and the topmost infeasible
+        # marker's label clear of the schematic region labels (y=0.95) and boundary
+        # caption (y=0.86), which both sit near the top of the axes.
+        top_ref = (y_top + n_failures * step_y) or 1.0
+        ax.set_ylim(bottom=-0.05 * top_ref, top=1.5 * top_ref)
+    else:
+        # Minimal mode: inflate just enough to fit the infeasible stack above the
+        # highest plan (or a touch of breathing room when there's no stack at all).
+        top_ref = max(y_top + (n_failures + 1) * step_y, y_top * 1.1)
+        ax.set_ylim(bottom=-0.05 * top_ref, top=top_ref)
 
     if schematic:
         _schematic_dressing(ax, finite_edges, span, region_labels)

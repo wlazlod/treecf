@@ -565,6 +565,7 @@ def test_plot_recourse_map_annotate_false_alone_suppresses_factual_block() -> No
         np.array([1.0, 0.0, 0.0]),
         [plan],
         Target.probability(op=">=", value=0.6),
+        schematic=True,
         annotate=False,  # show_factual_label left at its default True
     )
     assert not any("a = 1" in t.get_text() for t in ax.texts)
@@ -641,7 +642,11 @@ def test_plot_recourse_map_labels_use_drop_and_provide_words() -> None:
     exp = _map_explainer(constraints=[AllowMissing("a", delta_miss=0.3)])
     plan = _cf({"a": (1.0, float("nan"))}, distance=0.5, score_prob=0.65)
     ax = plot_recourse_map(
-        exp, np.array([1.0, 0.0, 0.0]), [plan], Target.probability(op=">=", value=0.6)
+        exp,
+        np.array([1.0, 0.0, 0.0]),
+        [plan],
+        Target.probability(op=">=", value=0.6),
+        schematic=True,
     )
     texts = " ".join(t.get_text() for t in ax.texts)
     assert "drop a" in texts
@@ -660,9 +665,64 @@ def test_plot_recourse_map_max_changes_per_label_truncates() -> None:
         [plan],
         Target.probability(op=">=", value=0.6),
         max_changes_per_label=1,
+        schematic=True,
     )
     texts = " ".join(t.get_text() for t in ax.texts)
     assert "(+2 more)" in texts
+
+
+def test_plot_recourse_map_quantitative_labels_are_one_line_name_and_j() -> None:
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    plan = _cf({"a": (0.0, 2.0), "b": (0.0, 3.0)}, distance=1.5, score_prob=0.7)
+    ax = plot_recourse_map(
+        exp, np.zeros(3), {"debt": plan}, Target.probability(op=">=", value=0.6)
+    )
+    texts = [t.get_text() for t in ax.texts if t.get_text()]
+    assert "debt (J=1.5)" in texts
+    assert all("\n" not in t for t in texts)  # no change-list detail on the canvas
+
+
+def test_plot_recourse_map_quantitative_unnamed_plans_use_ordinal() -> None:
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    plans = [
+        _cf({"a": (0.0, 1.0)}, distance=1.0, score_prob=0.6),
+        _cf({"b": (0.0, 2.0)}, distance=2.0, score_prob=0.7),
+    ]
+    ax = plot_recourse_map(exp, np.zeros(3), plans, Target.probability(op=">=", value=0.6))
+    texts = {t.get_text() for t in ax.texts if t.get_text()}
+    assert "plan 1 (J=1)" in texts  # ascending-distance order, matching plot_alternatives
+    assert "plan 2 (J=2)" in texts
+
+
+def test_plot_recourse_map_quantitative_never_draws_factual_block() -> None:
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    plan = _cf({"a": (1.0, 2.0)}, distance=1.0, score_prob=0.65)
+    ax = plot_recourse_map(
+        exp,
+        np.array([1.0, 0.0, 0.0]),
+        [plan],
+        Target.probability(op=">=", value=0.6),
+        show_factual_label=True,  # still no block: quantitative mode drops it entirely
+    )
+    texts = [t.get_text() for t in ax.texts]
+    assert not any("factual:" in t for t in texts)
+    assert not any("a = 1" in t for t in texts)
+
+
+def test_plot_recourse_map_quantitative_ylim_top_stays_tight_without_failures() -> None:
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    plan = _cf({"a": (0.0, 2.0)}, distance=10.0, score_prob=0.7)
+    ax = plot_recourse_map(exp, np.zeros(3), [plan], Target.probability(op=">=", value=0.6))
+    _, top = ax.get_ylim()
+    assert top <= 1.15 * 10.0
 
 
 def test_plot_recourse_map_schematic_max_changes_zero_does_not_crash() -> None:
@@ -692,7 +752,11 @@ def test_plot_recourse_map_factual_label_present_and_absent() -> None:
     exp = _map_explainer()
     plan = _cf({"a": (1.0, 2.0)}, distance=1.0, score_prob=0.65)
     ax_on = plot_recourse_map(
-        exp, np.array([1.0, 0.0, 0.0]), [plan], Target.probability(op=">=", value=0.6)
+        exp,
+        np.array([1.0, 0.0, 0.0]),
+        [plan],
+        Target.probability(op=">=", value=0.6),
+        schematic=True,
     )
     assert any("a = 1" in t.get_text() for t in ax_on.texts)
     assert any("factual:" in t.get_text() for t in ax_on.texts)
@@ -702,6 +766,7 @@ def test_plot_recourse_map_factual_label_present_and_absent() -> None:
         np.array([1.0, 0.0, 0.0]),
         [plan],
         Target.probability(op=">=", value=0.6),
+        schematic=True,
         show_factual_label=False,
     )
     assert not any("a = 1" in t.get_text() for t in ax_off.texts)
@@ -721,7 +786,9 @@ def test_plot_recourse_map_region_phrase_end_to_end() -> None:
     plan = SimpleNamespace(
         changes={"a": (0.0, 1.0)}, distance=1.0, score_prob=0.65, region=_RegionStub()
     )
-    ax = plot_recourse_map(exp, np.zeros(3), [plan], Target.probability(op=">=", value=0.6))
+    ax = plot_recourse_map(
+        exp, np.zeros(3), [plan], Target.probability(op=">=", value=0.6), schematic=True
+    )
     texts = " ".join(t.get_text() for t in ax.texts)
     assert "keep a within [0, 5]" in texts
 
