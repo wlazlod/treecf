@@ -223,8 +223,9 @@ class TestCalibrated:
         )
         out = t.band_intervals(Link.SIGMOID)
         assert set(out) == {"A", "B"}
-        # Regression (spec §3.5): band_intervals must propagate calibrator and
-        # buffer; each band equals the calibrator's closed-form inverse.
+        # Regression: multi-band targets must apply the same calibrator inversion
+        # and buffer as a single-range target — each band equals the
+        # calibrator's closed-form inverse, not a shared/default one.
         for name, (lo_p, hi_p) in {"A": (0.001, 0.02), "B": (0.02, 0.10)}.items():
             expected = cal.interval_inverse(lo_p, hi_p, space="logit", buffer_logit=0.05)
             assert out[name] == pytest.approx(expected, abs=1e-12)

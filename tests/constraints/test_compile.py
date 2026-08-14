@@ -1,5 +1,6 @@
 """Compilation and validation of the full M2 constraint set."""
 
+import dataclasses
 import math
 
 import numpy as np
@@ -86,27 +87,33 @@ class TestStructuredAccess:
 
 
 class TestDerivedRanges:
+    # Derived bounds are widened by the check_matrix slack (1e-9) translated
+    # into feature space (1e-9 / |coef|), so they never exclude a candidate
+    # the slacked Linear check itself admits. See TestDerivedBoundSlack below
+    # for exact-float-equality coverage of the widening itself.
+
     def test_ge_derives_lower_bound(self) -> None:
         compiled = compile_constraints([constraint("a >= 100")], NAMES)
-        assert compiled.derived_ranges == (Range("a", 100.0, math.inf),)
+        assert compiled.derived_ranges == (Range("a", 100.0 - 1e-9, math.inf),)
         assert len(compiled.linears) == 1  # original Linear retained
 
     def test_le_derives_upper_bound(self) -> None:
         compiled = compile_constraints([constraint("2*a <= 10")], NAMES)
-        assert compiled.derived_ranges == (Range("a", -math.inf, 5.0),)
+        assert compiled.derived_ranges == (Range("a", -math.inf, 5.0 + 5e-10),)
 
     def test_negative_coef_flips_inequality(self) -> None:
         compiled = compile_constraints([Linear({"a": -2.0}, "<=", -10.0)], NAMES)
-        assert compiled.derived_ranges == (Range("a", 5.0, math.inf),)
+        assert compiled.derived_ranges == (Range("a", 5.0 - 5e-10, math.inf),)
 
     def test_negative_coef_ge_gives_upper_bound(self) -> None:
         compiled = compile_constraints([Linear({"a": -2.0}, ">=", -10.0)], NAMES)
-        assert compiled.derived_ranges == (Range("a", -math.inf, 5.0),)
+        assert compiled.derived_ranges == (Range("a", -math.inf, 5.0 + 5e-10),)
 
     def test_eq_derives_pin(self) -> None:
         compiled = compile_constraints([Linear({"a": 2.0}, "==", 7.0)], NAMES)
         (rng,) = compiled.derived_ranges
-        assert rng.lo == rng.hi == 3.5
+        assert rng.lo == 3.5 - 5e-10
+        assert rng.hi == 3.5 + 5e-10
 
     @pytest.mark.parametrize(("op", "rhs"), [("<=", 3.0), ("<=", 0.0), (">=", -1.0), ("==", 0.0)])
     def test_zero_coef_vacuous_is_dropped(self, op: str, rhs: float) -> None:
@@ -130,8 +137,63 @@ class TestDerivedRanges:
     def test_derived_bound_reaches_instance_bounds(self) -> None:
         compiled = compile_constraints([constraint("a >= 100")], NAMES)
         lo, hi, _ = compiled.instance_bounds(np.zeros(len(NAMES)))
-        assert lo[0] == 100.0
+        assert lo[0] == 100.0 - 1e-9
         assert hi[0] == math.inf
+
+
+class TestDerivedBoundSlack:
+    """Exact-float coverage of the check_matrix-slack widening in feature space."""
+
+    def test_subnormal_coef_derives_no_bound(self) -> None:
+        # 1e-9 / coef overflows to inf for a small enough subnormal coef: the
+        # widened Range would be vacuous, so no derived range is appended at
+        # all. The retained Linear (with its own 1e-9 slack) still governs
+        # feasibility.
+        coef = 5e-320
+        assert math.isinf(1e-9 / coef)  # sanity: this coef triggers the overflow branch
+        compiled = compile_constraints([Linear({"a": coef}, "<=", 0.0)], NAMES)
+        assert compiled.derived_ranges == ()
+        assert len(compiled.linears) == 1
+
+    def test_tiny_normal_coef_widens_bound_exactly(self) -> None:
+        coef = 1e-12
+        compiled = compile_constraints([Linear({"a": coef}, "<=", 0.0)], NAMES)
+        (rng,) = compiled.derived_ranges
+        assert rng.lo == -math.inf
+        assert rng.hi == 0.0 / coef + 1e-9 / coef
+
+    def test_normal_coef_widens_bound_by_half_slack(self) -> None:
+        compiled = compile_constraints([Linear({"a": 2.0}, "<=", 10.0)], NAMES)
+        (rng,) = compiled.derived_ranges
+        assert rng.lo == -math.inf
+        assert rng.hi == 5.0 + 5e-10
+
+    def test_large_coef_ulp_floor_admits_reviewer_counterexample(self) -> None:
+        # For large |coef|, 1e-9/|coef| underflows below the float rounding gap
+        # between rhs/coef (this bound) and coef*candidate (how check_matrix
+        # evaluates it). Without a ulp-scale floor on the widening, this exact
+        # candidate satisfies the Linear (coef*cand == rhs bit-for-bit) but the
+        # derived bound rejects it.
+        coef = 358050016645.61365
+        rhs = 9373711634.780518
+        bound = rhs / coef
+        cand = math.nextafter(bound, math.inf)
+        assert coef * cand == rhs  # exactly on the constraint, by construction
+
+        compiled = compile_constraints([Linear({"a": coef}, "<=", rhs)], NAMES)
+        (rng,) = compiled.derived_ranges
+        assert cand <= rng.hi  # the widened bound admits it
+
+        x = np.zeros(len(NAMES))
+        row = np.zeros(len(NAMES))
+        row[0] = cand
+        X = row.reshape(1, -1)
+        assert compiled.check_matrix(X, x)[0]  # with the derived bound in play
+
+        # Parity: stripping the derived bound must not change the verdict — the
+        # retained Linear constraint alone already admits this candidate.
+        stripped = dataclasses.replace(compiled, derived_ranges=())
+        assert stripped.check_matrix(X, x)[0]
 
 
 class TestFactualViolations:

@@ -37,9 +37,14 @@ pub struct Constraints {
     pub allow_missing: Vec<(u32, f64, f64)>, // (feature, delta_to, delta_from), index-sorted
 }
 
-/// Python `max(a, b)`: returns b only if b > a (NaN comparisons are false).
+/// Python `max(a, b)`: returns b only if b > a. Two consequences both mirrors
+/// depend on: a NaN argument leaves the accumulator alone (the bounds semantics
+/// documented above), and a `0.0`/`-0.0` tie keeps the *first* argument where
+/// `f64::max` would return `-0.0` — which the exact backend's stored brackets
+/// and spans would otherwise differ in. The one shared definition; `exact` uses
+/// it rather than keeping a copy.
 #[inline]
-fn py_max(a: f64, b: f64) -> f64 {
+pub(crate) fn py_max(a: f64, b: f64) -> f64 {
     if b > a {
         b
     } else {
@@ -47,8 +52,9 @@ fn py_max(a: f64, b: f64) -> f64 {
     }
 }
 
+/// Python `min(a, b)`; see [`py_max`] for the NaN and signed-zero consequences.
 #[inline]
-fn py_min(a: f64, b: f64) -> f64 {
+pub(crate) fn py_min(a: f64, b: f64) -> f64 {
     if b < a {
         b
     } else {

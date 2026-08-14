@@ -363,14 +363,23 @@ def compile_constraints(
                         f"0 {c.op} {c.rhs}"
                     )
                 # lower the constraint into an equivalent per-feature bound (the
-                # Linear itself is retained so missing_policy still governs NaN)
+                # Linear itself is retained so missing_policy still governs NaN).
+                # Widen by the check_matrix slack (1e-9) translated into feature
+                # space, so the derived bound never excludes a candidate that the
+                # slacked linear check itself admits. For large |coef| that slack
+                # can shrink below the float rounding gap between coef*candidate
+                # (how check_matrix evaluates it) and rhs/coef (this bound), so
+                # floor the widening at a few ulp of the bound too.
                 bound = c.rhs / coef
-                if c.op == "==":
-                    derived.append(Range(lin_name, bound, bound))
+                slack_feat = max(1e-9 / abs(coef), 4.0 * math.ulp(abs(bound)))
+                if math.isinf(slack_feat):
+                    pass  # subnormal coef: slack is unbounded; the retained Linear still governs
+                elif c.op == "==":
+                    derived.append(Range(lin_name, bound - slack_feat, bound + slack_feat))
                 elif (c.op == "<=") == (coef > 0.0):
-                    derived.append(Range(lin_name, -math.inf, bound))
+                    derived.append(Range(lin_name, -math.inf, bound + slack_feat))
                 else:
-                    derived.append(Range(lin_name, bound, math.inf))
+                    derived.append(Range(lin_name, bound - slack_feat, math.inf))
             linears.append(
                 ResolvedLinear(
                     coefficients=dict(c.coefficients),

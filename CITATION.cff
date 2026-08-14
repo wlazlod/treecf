@@ -6,8 +6,8 @@ authors:
   - family-names: "Wlazło"
     given-names: "Daniel"
     email: "wlazlo.daniel@gmail.com"
-version: 0.1.1
-date-released: 2026-08-08
+version: 0.2.0
+date-released: 2026-08-14
 license: MIT
 repository-code: "https://github.com/wlazlod/treecf"
 url: "https://wlazlod.github.io/treecf/"

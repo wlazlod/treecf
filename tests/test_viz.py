@@ -396,22 +396,42 @@ def test_format_plan_truncates_and_dresses_with_more_count() -> None:
     assert text == "c = 3\nb = 2\n(+1 more) (J=6)"
 
 
-def test_format_plan_uses_region_phrase_when_available() -> None:
+def test_format_plan_uses_real_region_describe() -> None:
+    from treecf import Counterfactual, RecourseRegion
+    from treecf.viz import _format_plan
+
+    exp = _map_explainer()
+    region = RecourseRegion(
+        lo=np.array([1.0, 0.0, 0.0]),
+        hi=np.array([1.0, 5.0, 0.0]),
+        feature_intervals={"a": (1.0, 5.0)},
+        certified=True,
+    )
+    plan = Counterfactual(
+        x_cf=np.zeros(3), changes={"a": (0.0, 1.0)}, distance=1.0, n_changed=1,
+        score_raw=0.5, score_prob=None, proof="heuristic", region=region,
+    )
+    text = _format_plan("bandA", plan, exp)
+    assert text == "bandA:\nin [1, 5] (J=1)"
+
+
+def test_format_plan_falls_back_when_describe_is_not_a_mapping() -> None:
+    """Guard coverage: ``describe()`` returning a non-``Mapping`` is treated as
+    no region at all (the object may duck-type ``describe`` without being a
+    real ``RecourseRegion``), never rendered or trusted as-is."""
     from types import SimpleNamespace
 
     from treecf.viz import _format_plan
 
     exp = _map_explainer()
 
-    class _RegionStub:
-        def describe(self) -> dict[str, str]:
-            return {"a": "keep a within the safe band"}
+    class _NotARegion:
+        def describe(self) -> list[str]:
+            return ["a should not be shown like this"]
 
-    plan = SimpleNamespace(
-        changes={"a": (0.0, 1.0)}, distance=1.0, region=_RegionStub()
-    )
+    plan = SimpleNamespace(changes={"a": (0.0, 1.0)}, distance=1.0, region=_NotARegion())
     text = _format_plan("bandA", plan, exp)
-    assert text == "bandA:\nkeep a within the safe band (J=1)"
+    assert text == "bandA:\na = 1 (J=1)"
 
 
 def test_format_plan_schematic_joins_with_if_and_and() -> None:
@@ -775,22 +795,24 @@ def test_plot_recourse_map_factual_label_present_and_absent() -> None:
 def test_plot_recourse_map_region_phrase_end_to_end() -> None:
     from types import SimpleNamespace
 
+    from treecf import RecourseRegion
     from treecf.viz import plot_recourse_map
 
     exp = _map_explainer()
-
-    class _RegionStub:
-        def describe(self) -> dict[str, str]:
-            return {"a": "keep a within [0, 5]"}
-
+    region = RecourseRegion(
+        lo=np.array([1.0, 0.0, 0.0]),
+        hi=np.array([1.0, 5.0, 0.0]),
+        feature_intervals={"a": (1.0, 5.0)},
+        certified=True,
+    )
     plan = SimpleNamespace(
-        changes={"a": (0.0, 1.0)}, distance=1.0, score_prob=0.65, region=_RegionStub()
+        changes={"a": (0.0, 1.0)}, distance=1.0, score_prob=0.65, region=region
     )
     ax = plot_recourse_map(
         exp, np.zeros(3), [plan], Target.probability(op=">=", value=0.6), schematic=True
     )
     texts = " ".join(t.get_text() for t in ax.texts)
-    assert "keep a within [0, 5]" in texts
+    assert "in [1, 5]" in texts
 
 
 def test_plot_recourse_map_schematic_hides_ticks_spines_and_band() -> None:

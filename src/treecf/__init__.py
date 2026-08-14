@@ -24,9 +24,10 @@ from treecf.constraints import (
 )
 from treecf.mining import DataQualityFinding, SuggestedConstraint, suggest_constraints
 from treecf.plausibility import Plausibility
+from treecf.regions import RecourseRegion
 from treecf.targets import Target
 
-__version__ = "0.1.1"
+__version__ = "0.2.0"
 
 __all__ = [
     "AllowMissing",
@@ -48,6 +49,7 @@ __all__ = [
     "OneHot",
     "Plausibility",
     "Range",
+    "RecourseRegion",
     "SuggestedConstraint",
     "Target",
     "TargetError",

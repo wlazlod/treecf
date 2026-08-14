@@ -238,13 +238,14 @@ The loop ends at whichever comes first: no improvement of the best feasible obje
 generations (the usual exit), 200 generations, or the per-solve `time_budget_s`. The best
 tier-0 individual wins.
 
-!!! info "Heuristic, but bracketed"
-    Results carry `proof="heuristic"` — the search does not prove optimality, and
+!!! info "Heuristic, but bracketed — and not the only option"
+    Results carry `proof="heuristic"` — the genetic search does not prove optimality, and
     `Infeasible` from it means "search exhausted", not "no solution exists". In treecf's
-    test suite a brute-force oracle brackets the GA on small models, and early development
-    versions carried an exact CP-SAT backend whose removal is documented in
-    [Backends — history](concepts/backends.md#history). If you need provable optimality,
-    pair the IR with a dedicated exact solver.
+    test suite a brute-force oracle brackets it on small models. When a proof matters more
+    than a millisecond solve, `backend="exact"` runs a branch-and-bound search over the same
+    cell grid instead, with no solver dependency — see [the exact search](#the-exact-search-cells-domains-and-branch-and-bound)
+    below and [Certification](concepts/certification.md) for exactly what that proof does and
+    does not cover.
 
 ## Nothing ships unverified
 
@@ -268,7 +269,7 @@ res.changes      # {"utilization": (0.71, 0.419…), "max_dpd_12m": (9.0, 3.0)}
 res.snapped      # which value policies actually applied
 ```
 
-## Two engines, one behavior; one row or ten thousand
+## The two genetic engines, one behavior; one row or ten thousand
 
 Both engines — the Rust default and the numpy reference — share the IR, the compiled
 constraints, and the algorithm above; they are seed-deterministic and held to statistical
@@ -284,6 +285,77 @@ its budget under contention may stop a generation earlier than it would alone. S
 max-generation stops, the common case, are deterministic. The
 [credit-risk walkthrough](notebooks/02-credit-risk-tutorial.ipynb) mass-produces a day of
 recourse plans this way and visualizes the batch.
+
+## The exact search: cells, domains, and branch-and-bound
+
+`backend="exact"` answers the same question the genetic search does — cheapest feasible $x'$ —
+but by depth-first branch-and-bound over the same cells the genetic search seeds its first
+generation with, instead of by evolution. It trades the millisecond solve for a proof.
+
+The cells are refined slightly first: `Implies` gets a cell of its own at the exact value it
+watches for, since a routing cell says every point of it behaves identically to the model but an
+implication can fire on one hair of a cell and stay silent everywhere else in it — a search
+reading one candidate per cell would never find that hair otherwise. A `OneHot` member's
+candidates are restricted to 0 and 1, since nothing else can make its group sum to one. From
+those refined cells, each feature gets an ordered list of candidate values (its **domain**) —
+the branching alphabet.
+
+The search then assigns features one at a time, in a fixed order, each from its own domain, and
+prunes a partial assignment two ways: by the score bracket the ensemble can still reach from
+where it stands (a bracket that misses the target entirely can never be completed into it), and
+by the cost already spent plus the cheapest possible remainder (never beats an incumbent already
+found). Implications and one-hot groups also **propagate**: assigning one feature can force
+another's value outright, and an assignment that contradicts an already-forced value is cut
+without being explored — a shortcut, never an authority, since every full assignment is still
+checked by the same arbiter the genetic search uses.
+
+One shape needs a repair pass afterward: two features tied by `constraint("a <= b")` each pick
+the candidate nearest the factual in their own cell, and those two candidates can land the wrong
+way round even though the cells overlap. The cheapest fix moves both onto one shared value inside
+the overlap; when that repair can settle every such pair, the completion goes to the arbiter as
+usual. When it cannot — several such pairs interact, or a value policy pins a feature to a grid
+too sparse to move — the completion is set aside and the search says so honestly afterward,
+through `proof`, rather than pretend it settled that corner of the space. What a full search
+does or does not prove — and the difference between a `proof="heuristic"` row and a `proof="optimal"`
+one — is worked out completely in [Certification](concepts/certification.md).
+
+Two more things carry over from the genetic search rather than reinvent it: a rust-first
+dispatch (the Rust engine is a bit-parity mirror of the Python one, not a heuristic stand-in —
+fixtures pin the two to identical results), and an optional **warm start**, where a short
+genetic pass seeds the exact search with an incumbent before branching begins, pruning harder
+from the first node without shrinking `time_budget_s`. Constraint shapes the exact search cannot
+yet reason about exactly — any multi-feature `Linear` other than the canonical `a <= b`
+order-pair — raise `ConstraintValidationError` naming `backend="genetic"` as the fallback,
+rather than silently searching a smaller problem than the one you declared.
+
+## Certified regions: grow and verify
+
+A single counterfactual is one point. `explain(..., region=True)` (or `Explainer.recourse_region`
+called on a counterfactual from *any* backend) widens it into a certified box: a per-feature
+interval such that every point inside — not just the counterfactual itself — is provably still
+in the target interval, still plausible when configured, and still constraint-feasible.
+
+The mechanism is **grow-and-verify**, not sampling. Starting from the verified counterfactual,
+the box expands one joint-grid cell at a time on each non-degenerate feature, upper edge and
+lower edge in turn, and keeps an expansion only when a sound oracle accepts the *whole* enlarged
+box. The oracle never trusts an assumption it has not checked itself: an interval-tree walk of
+every ensemble tree brackets the raw score the entire box can reach (the same kind of
+min/max-per-node bracketing the exact search's own pruning uses, just over a box of the feature
+space instead of a single partial assignment), the isolation forest gets the same treatment when
+plausibility is configured, and every linear constraint is checked at its worst corner. A feature
+closes once both directions fail in the same round; the whole loop stops once a full round grows
+nothing further.
+
+Some features never enter the loop at all: frozen or pinned features, a NaN coordinate, every
+`OneHot` member, every feature an `Implies` references, and every feature any unsupported
+multi-feature `Linear` touches stay pinned at the counterfactual's own value — conservative,
+because widening them soundly is not an argument this release has proven, not because widening
+them is known to be unsafe. Like the exact search, region growth dispatches rust-first with a
+byte-identical Python fallback.
+
+What the resulting box does and does not promise — it is certified but neither the largest
+possible sound box nor monotone in the target interval, and `describe()`'s one-sided phrasing has
+a specific meaning — is spelled out in [Certification — regions](concepts/certification.md#regions-certified-not-maximal-not-monotone).
 
 ## Grouped recourse: coalitions
 
@@ -329,7 +401,8 @@ reserved baseline name) and the comparison plots.
 - [Missing values](concepts/missing-values.md) — NaN as a first-class value.
 - [Plausibility](concepts/plausibility.md) — the isolation-forest bound.
 - [Coalitions](concepts/coalitions.md) — grouped recourse, one plan per feature group.
-- [Backends and proofs](concepts/backends.md) — engine contract and history.
+- [Backends and proofs](concepts/backends.md) — engine contract, the exact backend, benchmarks.
+- [Certification](concepts/certification.md) — what a proof or a region actually guarantees.
 - Tutorials: [Quickstart](notebooks/01-quickstart.ipynb), the
   [credit-risk walkthrough](notebooks/02-credit-risk-tutorial.ipynb), and
   [no-solver environments](notebooks/03-no-solver-environments.ipynb).

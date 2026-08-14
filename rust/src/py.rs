@@ -4,12 +4,47 @@ use numpy::{
     IntoPyArray, PyArray1, PyArray2, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray2,
     PyUntypedArrayMethods,
 };
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 
 use crate::constraints::{Constraints, LinearC};
+use crate::exact::{ExactParams, ValuePolicy};
 use crate::ga::GaParams;
 use crate::ir::{Ensemble, Link};
+
+/// Per-feature value-policy flat encoding: `0=raw` (`None`), `1=integer`,
+/// `2=grid` (reads `step`/`anchor`) — the marshaled form of
+/// `Explainer.value_policy` `exact_rust.py` builds from `ir.feature_names`.
+///
+/// Every failure here is a marshaling bug on the Python side of the
+/// boundary, never a user-facing constraint problem, so it raises
+/// `PyRuntimeError` — distinct from the `PyValueError`
+/// `solve_exact`'s own order-pair validation raises, so `exact_rust.py` can
+/// tell the two apart by exception *type* alone, with no text matching on
+/// either side.
+fn marshal_value_policies(
+    code: &[u8],
+    step: &[f64],
+    anchor: &[f64],
+) -> PyResult<Vec<Option<ValuePolicy>>> {
+    if code.len() != step.len() || code.len() != anchor.len() {
+        return Err(PyRuntimeError::new_err(
+            "value policy code/step/anchor arrays must have equal length",
+        ));
+    }
+    code.iter()
+        .zip(step)
+        .zip(anchor)
+        .map(|((&c, &s), &a)| match c {
+            0 => Ok(None),
+            1 => Ok(Some(ValuePolicy::Integer)),
+            2 => Ok(Some(ValuePolicy::Grid { step: s, anchor: a })),
+            other => Err(PyRuntimeError::new_err(format!(
+                "unknown value policy code {other}"
+            ))),
+        })
+        .collect()
+}
 
 #[pyclass(frozen)]
 pub struct RustEnsemble {
@@ -395,11 +430,298 @@ fn solve_genetic_batch_raw<'py>(
     ))
 }
 
+/// Full exact-backend solve — port of `treecf.backends.exact.solve_exact`.
+/// Returns `(x_cf | None, distance | None, proof, stats, snapped)`: `stats` is
+/// the 7-tuple `(nodes_expanded, nodes_pruned_score, nodes_pruned_cost,
+/// lower_bound, gap, completed, warm_start_used)`; `snapped` is the winning
+/// row's snapped feature indices, in search order — `exact_rust.py` maps them
+/// back to names to rebuild `ExactResult` losslessly. A `PyValueError`
+/// mirrors Python's `ConstraintValidationError` for a multi-feature Linear
+/// outside the canonical order-pair shape (from `solve_exact`'s own
+/// `validate`); `exact_rust.py` re-raises that type rather than comparing
+/// message text across languages. A `PyRuntimeError` (from the
+/// value-policy-array length check, or `marshal_value_policies` itself)
+/// means the caller marshaled malformed input — a bug, never a user-facing
+/// constraint problem — so it is deliberately a different exception type and
+/// propagates as a plain `RuntimeError` instead.
+#[pyfunction]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+#[pyo3(signature = (ensemble, constraints, x, lo_t, hi_t, sigma, weights, lam,
+                    policy_code, policy_step, policy_anchor,
+                    if_ensemble=None, min_total_path=None,
+                    node_budget=2_000_000, gap=0.0, time_budget_s=10.0,
+                    incumbent_cost=None, incumbent_row=None))]
+fn solve_exact_raw<'py>(
+    py: Python<'py>,
+    ensemble: &RustEnsemble,
+    constraints: &RustConstraints,
+    x: PyReadonlyArray1<f64>,
+    lo_t: f64,
+    hi_t: f64,
+    sigma: PyReadonlyArray1<f64>,
+    weights: PyReadonlyArray1<f64>,
+    lam: f64,
+    policy_code: PyReadonlyArray1<u8>,
+    policy_step: PyReadonlyArray1<f64>,
+    policy_anchor: PyReadonlyArray1<f64>,
+    if_ensemble: Option<&RustEnsemble>,
+    min_total_path: Option<f64>,
+    node_budget: u64,
+    gap: f64,
+    time_budget_s: f64,
+    incumbent_cost: Option<f64>,
+    incumbent_row: Option<PyReadonlyArray1<f64>>,
+) -> PyResult<(
+    Option<Bound<'py, PyArray1<f64>>>,
+    Option<f64>,
+    &'static str,
+    (u64, u64, u64, f64, f64, bool, bool),
+    Bound<'py, PyArray1<u64>>,
+)> {
+    let x_own = x.as_slice()?.to_vec();
+    let sigma_own = sigma.as_slice()?.to_vec();
+    let weights_own = weights.as_slice()?.to_vec();
+    let policies = marshal_value_policies(
+        policy_code.as_slice()?,
+        policy_step.as_slice()?,
+        policy_anchor.as_slice()?,
+    )?;
+    if policies.len() != x_own.len() {
+        // a length mismatch between the marshaled policy arrays and the
+        // feature count is a marshaling bug, not a user-facing constraint
+        // problem — see marshal_value_policies's own doc comment
+        return Err(PyRuntimeError::new_err(format!(
+            "expected {} value-policy entries, got {}",
+            x_own.len(),
+            policies.len()
+        )));
+    }
+    let incumbent_row_own: Option<Vec<f64>> = match &incumbent_row {
+        Some(r) => Some(r.as_slice()?.to_vec()),
+        None => None,
+    };
+    let incumbent = match (incumbent_cost, &incumbent_row_own) {
+        (Some(cost), Some(row)) => Some((cost, row.as_slice())),
+        _ => None,
+    };
+    let ens = &ensemble.inner;
+    let cons = &constraints.inner;
+    let plaus = match (if_ensemble, min_total_path) {
+        (Some(if_e), Some(bound)) => Some((&if_e.inner, bound)),
+        _ => None,
+    };
+    let params = ExactParams {
+        node_budget,
+        gap,
+        time_budget_s,
+    };
+    let result = py
+        .detach(|| {
+            crate::exact::solve_exact(
+                ens,
+                &x_own,
+                (lo_t, hi_t),
+                cons,
+                &sigma_own,
+                &weights_own,
+                lam,
+                &policies,
+                plaus,
+                &params,
+                incumbent,
+            )
+        })
+        .map_err(PyValueError::new_err)?;
+    let stats = result.stats;
+    let stats_tuple = (
+        stats.nodes_expanded,
+        stats.nodes_pruned_score,
+        stats.nodes_pruned_cost,
+        stats.lower_bound,
+        stats.gap,
+        stats.completed,
+        stats.warm_start_used,
+    );
+    let snapped: Vec<u64> = result.snapped.iter().map(|&i| i as u64).collect();
+    Ok((
+        result.x_cf.map(|v| v.into_pyarray(py)),
+        result.distance,
+        result.proof,
+        stats_tuple,
+        snapped.into_pyarray(py),
+    ))
+}
+
+/// Test-only: per-feature candidate states `_build_domains`/`build_domains`
+/// produce, flattened as `(offsets, value, cost, cell_idx, is_nan, snapped)` —
+/// `offsets` has `n_features + 1` entries, feature `f`'s states are
+/// `offsets[f]..offsets[f + 1]` in every other array. Exists so
+/// `test_exact_parity.py` can compare domain construction against the Python
+/// reference one feature at a time, independent of the search itself.
+#[pyfunction]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+#[pyo3(signature = (ensemble, constraints, x, sigma, weights, lam,
+                    policy_code, policy_step, policy_anchor, if_ensemble=None))]
+fn debug_domains_raw<'py>(
+    py: Python<'py>,
+    ensemble: &RustEnsemble,
+    constraints: &RustConstraints,
+    x: PyReadonlyArray1<f64>,
+    sigma: PyReadonlyArray1<f64>,
+    weights: PyReadonlyArray1<f64>,
+    lam: f64,
+    policy_code: PyReadonlyArray1<u8>,
+    policy_step: PyReadonlyArray1<f64>,
+    policy_anchor: PyReadonlyArray1<f64>,
+    if_ensemble: Option<&RustEnsemble>,
+) -> PyResult<(
+    Bound<'py, PyArray1<u32>>,
+    Bound<'py, PyArray1<f64>>,
+    Bound<'py, PyArray1<f64>>,
+    Bound<'py, PyArray1<u32>>,
+    Bound<'py, PyArray1<u8>>,
+    Bound<'py, PyArray1<u8>>,
+)> {
+    let x_own = x.as_slice()?.to_vec();
+    let sigma_own = sigma.as_slice()?.to_vec();
+    let weights_own = weights.as_slice()?.to_vec();
+    let policies = marshal_value_policies(
+        policy_code.as_slice()?,
+        policy_step.as_slice()?,
+        policy_anchor.as_slice()?,
+    )?;
+    if policies.len() != x_own.len() {
+        // a length mismatch between the marshaled policy arrays and the
+        // feature count is a marshaling bug, not a user-facing constraint
+        // problem — see marshal_value_policies's own doc comment
+        return Err(PyRuntimeError::new_err(format!(
+            "expected {} value-policy entries, got {}",
+            x_own.len(),
+            policies.len()
+        )));
+    }
+    let ens = &ensemble.inner;
+    let cons = &constraints.inner;
+    let ensembles: Vec<&Ensemble> = match if_ensemble {
+        None => vec![ens],
+        Some(if_e) => vec![ens, &if_e.inner],
+    };
+    let grids = crate::exact::domains::constraint_cells(cons, &ensembles);
+    let domains = crate::exact::domains::build_domains(
+        &grids,
+        &x_own,
+        cons,
+        &sigma_own,
+        &weights_own,
+        lam,
+        &policies,
+    );
+
+    let mut offsets: Vec<u32> = Vec::with_capacity(domains.len() + 1);
+    offsets.push(0);
+    let mut value: Vec<f64> = Vec::new();
+    let mut cost: Vec<f64> = Vec::new();
+    let mut cell_idx: Vec<u32> = Vec::new();
+    let mut is_nan: Vec<u8> = Vec::new();
+    let mut snapped: Vec<u8> = Vec::new();
+    for states in &domains {
+        for st in states {
+            value.push(st.value);
+            cost.push(st.cost);
+            cell_idx.push(st.cell_idx as u32);
+            is_nan.push(u8::from(st.is_nan));
+            snapped.push(u8::from(st.snapped));
+        }
+        offsets.push(value.len() as u32);
+    }
+    Ok((
+        offsets.into_pyarray(py),
+        value.into_pyarray(py),
+        cost.into_pyarray(py),
+        cell_idx.into_pyarray(py),
+        is_nan.into_pyarray(py),
+        snapped.into_pyarray(py),
+    ))
+}
+
+/// Certified recourse-region growth — port of `treecf.regions._recourse_region`.
+/// Returns `(lo, hi)` per-feature arrays (degenerate coordinates equal
+/// `x_cf` there); `regions_rust.py` builds the `RecourseRegion` dataclass
+/// from them (`feature_intervals`/`certified` are presentation, not search
+/// state, so they stay on the Python side).
+///
+/// `missing_defined`/`if_missing_defined` carry the `node.missing_left is
+/// not None` bit that `RustEnsemble`'s own flat `missing_left: bool`
+/// encoding collapses into `false` for both an explicit "route right" and an
+/// undefined missing direction — this is the one caller that needs the
+/// distinction (see `crate::regions`'s module doc). `lo_b`/`hi_b` are the
+/// instance bounds and `open_set` the non-degenerate feature indices;
+/// `regions.py` already computes both to build `feature_intervals` either
+/// way, so this binding does not re-derive them.
+#[pyfunction]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+#[pyo3(signature = (ensemble, missing_defined, constraints, x_cf, lo_t, hi_t,
+                    lo_b, hi_b, open_set,
+                    if_ensemble=None, if_missing_defined=None, min_total_path=None))]
+fn compute_region_raw<'py>(
+    py: Python<'py>,
+    ensemble: &RustEnsemble,
+    missing_defined: PyReadonlyArray1<u8>,
+    constraints: &RustConstraints,
+    x_cf: PyReadonlyArray1<f64>,
+    lo_t: f64,
+    hi_t: f64,
+    lo_b: PyReadonlyArray1<f64>,
+    hi_b: PyReadonlyArray1<f64>,
+    open_set: PyReadonlyArray1<u32>,
+    if_ensemble: Option<&RustEnsemble>,
+    if_missing_defined: Option<PyReadonlyArray1<u8>>,
+    min_total_path: Option<f64>,
+) -> PyResult<(Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>)> {
+    let x_cf_own = x_cf.as_slice()?.to_vec();
+    let lo_b_own = lo_b.as_slice()?.to_vec();
+    let hi_b_own = hi_b.as_slice()?.to_vec();
+    let open_set_own: Vec<usize> = open_set.as_slice()?.iter().map(|&j| j as usize).collect();
+    let missing_defined_own: Vec<bool> = missing_defined
+        .as_slice()?
+        .iter()
+        .map(|&b| b != 0)
+        .collect();
+    let if_missing_defined_own: Option<Vec<bool>> = match &if_missing_defined {
+        Some(arr) => Some(arr.as_slice()?.iter().map(|&b| b != 0).collect()),
+        None => None,
+    };
+    let ens = &ensemble.inner;
+    let cons = &constraints.inner;
+    let if_pair = match (if_ensemble, &if_missing_defined_own) {
+        (Some(if_e), Some(md)) => Some((&if_e.inner, md.as_slice())),
+        _ => None,
+    };
+    let result = py.detach(|| {
+        crate::regions::recourse_region(
+            ens,
+            &missing_defined_own,
+            cons,
+            &x_cf_own,
+            (lo_t, hi_t),
+            &lo_b_own,
+            &hi_b_own,
+            &open_set_own,
+            if_pair,
+            min_total_path.unwrap_or(0.0),
+        )
+    });
+    Ok((result.lo.into_pyarray(py), result.hi.into_pyarray(py)))
+}
+
 #[pymodule]
 fn _treecf_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RustEnsemble>()?;
     m.add_class::<RustConstraints>()?;
     m.add_function(wrap_pyfunction!(solve_genetic_raw, m)?)?;
     m.add_function(wrap_pyfunction!(solve_genetic_batch_raw, m)?)?;
+    m.add_function(wrap_pyfunction!(solve_exact_raw, m)?)?;
+    m.add_function(wrap_pyfunction!(debug_domains_raw, m)?)?;
+    m.add_function(wrap_pyfunction!(compute_region_raw, m)?)?;
     Ok(())
 }

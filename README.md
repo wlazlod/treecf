@@ -15,6 +15,11 @@ and scikit-learn tree ensembles.
   implementation (see the "Backends and proofs" docs page; the pure-Python engine remains
   available as `backend="python"`), and every result is float-verified against the IR
   before it is returned.
+- **Optional optimality proof.** `backend="exact"` branch-and-bounds the same candidate
+  grid; on the standard bench model (30-tree/8-feature XGBoost) it proves the cheapest
+  counterfactual in a median 0.24s versus 0.005s for the genetic heuristic, closing a
+  median 14.33% cost gap the heuristic leaves on the table — measured on a 4-core dev
+  machine (`scripts/bench_exact.py`).
 - **Decision thresholds are first-class.** Targets are intervals on the raw model output —
   custom probability cutoffs, regression targets, and whole rating-grade ladders in one call.
 - **Real-world constraints.** Declarative layer for immutability, directionality, ranges,

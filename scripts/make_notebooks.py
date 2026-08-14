@@ -354,6 +354,65 @@ def tutorial() -> nbf.NotebookNode:
             "    [\"id\", \"k\", \"coalition\", \"feasible\", \"distance\", \"n_changed\"]\n"
             "].head(8)"
         ),
+        nbf.v4.new_markdown_cell(
+            "## 7. Exact backend: proofs, certified infeasibility, and regions\n\n"
+            "Everything above is `backend=\"genetic\"` (the default): fast, feasibility-first, "
+            "and honest that it never claims optimality (`proof=\"heuristic\"`). "
+            "`backend=\"exact\"` runs a branch-and-bound search over the same cell grid instead "
+            "and proves what it finds — at the cost of a slower solve. Proof is not free: even "
+            "this small model can exhaust the search's default node budget when every feature is "
+            "free to move, so below we restrict the search to the levers that matter with "
+            "`Freeze`, the same constraint the genetic search already understands. *Certification* "
+            "in the docs has the full proof taxonomy and its honesty notes."
+        ),
+        nbf.v4.new_code_cell(
+            "from treecf import constraint\n\n"
+            "influential = {\"income_monthly\", \"utilization\",\n"
+            "               \"max_dpd_30d\", \"max_dpd_12m\"}\n"
+            "exact_exp = Explainer(\n"
+            "    model, background=X,\n"
+            "    constraints=[Freeze(f) for f in names if f not in influential]\n"
+            "                + [constraint(\"max_dpd_30d <= max_dpd_12m\")],\n"
+            ")\n"
+            "exact_res = exact_exp.explain(\n"
+            "    applicant, target=Target.probability(range=(0.0, cutoff)),\n"
+            "    backend=\"exact\", seed=0,\n"
+            ")\n"
+            "exact_res.proof, exact_res.solver_stats[\"nodes_expanded\"], exact_res.changes"
+        ),
+        nbf.v4.new_markdown_cell(
+            "`proof=\"optimal\"`: no cheaper feasible row exists among these four levers, not "
+            "just the one the search happened to find. Ask for the impossible and the same "
+            "backend proves *that* too — freeze every feature and there is nothing left to "
+            "move at all."
+        ),
+        nbf.v4.new_code_cell(
+            "frozen_exp = Explainer(model, background=X, constraints=[Freeze(f) for f in names])\n"
+            "impossible = frozen_exp.explain(\n"
+            "    applicant, target=Target.probability(range=(0.0, cutoff)),\n"
+            "    backend=\"exact\", seed=0,\n"
+            ")\n"
+            "impossible.proof, impossible.reason"
+        ),
+        nbf.v4.new_markdown_cell(
+            "### Certified regions\n\n"
+            "`region=True` widens a verified counterfactual into a box: every point inside it, "
+            "not just the returned row, is independently still a valid plan. `describe()` "
+            "phrases each covered feature — two-sided when both edges are finite, one-sided "
+            "only when the other side is genuinely unconstrained, not merely wide."
+        ),
+        nbf.v4.new_code_cell(
+            "region_res = exact_exp.explain(\n"
+            "    applicant, target=Target.probability(range=(0.0, cutoff)),\n"
+            "    backend=\"exact\", region=True, seed=0,\n"
+            ")\n"
+            "region_res.region.describe()"
+        ),
+        nbf.v4.new_code_cell(
+            "from treecf.viz import plot_recourse_map\n\n"
+            "plot_recourse_map(exact_exp, applicant, region_res,\n"
+            "                  target=Target.probability(range=(0.0, cutoff)), schematic=True);"
+        ),
     ]
     return nb
 

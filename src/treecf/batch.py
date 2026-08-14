@@ -26,6 +26,7 @@ from treecf.ir.evaluate import raw_score_batch_prepared
 if TYPE_CHECKING:
     from treecf.api import Counterfactual, Explainer, Infeasible
     from treecf.backends.genetic import GeneticResult
+    from treecf.regions import RecourseRegion
     from treecf.targets import Target
 
 FloatArray = npt.NDArray[np.float64]
@@ -49,6 +50,7 @@ class BatchRecord:
     seed: int | None = None  # diversity="seeds": the seed that produced this plan
     blocked_lever: str | None = None  # diversity="lever-blocking": the frozen lever
     coalition: str | None = None  # diversity="coalitions": the group this plan may touch
+    region: RecourseRegion | None = None  # set by explain_batch(..., region=True)
 
 
 @dataclass(frozen=True)
@@ -92,6 +94,19 @@ class BatchResult:
                     "seed": record.seed,
                     "blocked_lever": record.blocked_lever,
                     "coalition": record.coalition,
+                    "region": (
+                        None
+                        if record.region is None
+                        else {
+                            "lo": encode_floats(record.region.lo),
+                            "hi": encode_floats(record.region.hi),
+                            "feature_intervals": {
+                                name: encode_floats(list(pair))
+                                for name, pair in record.region.feature_intervals.items()
+                            },
+                            "certified": record.region.certified,
+                        }
+                    ),
                 }
                 for record in self.records
             ],
@@ -101,10 +116,26 @@ class BatchResult:
 
     @classmethod
     def load(cls, path: str | os.PathLike[str]) -> BatchResult:
+        from treecf.regions import RecourseRegion
+
         with open(path, encoding="utf-8") as fh:
             data = json.load(fh)
         records = []
         for raw in data["records"]:
+            raw_region = raw.get("region")  # absent key (pre-region files) -> None
+            region = (
+                None
+                if raw_region is None
+                else RecourseRegion(
+                    lo=np.asarray(decode_floats(raw_region["lo"]), dtype=np.float64),
+                    hi=np.asarray(decode_floats(raw_region["hi"]), dtype=np.float64),
+                    feature_intervals={
+                        name: tuple(decode_floats(pair))
+                        for name, pair in raw_region["feature_intervals"].items()
+                    },
+                    certified=bool(raw_region["certified"]),
+                )
+            )
             records.append(
                 BatchRecord(
                     id=raw["id"],
@@ -126,6 +157,7 @@ class BatchResult:
                     seed=raw["seed"],
                     blocked_lever=raw["blocked_lever"],
                     coalition=raw.get("coalition"),  # absent in pre-coalition files
+                    region=region,
                 )
             )
         essential_ids = [decode_floats(k) for k in data.get("essential_lever_ids", [])]
@@ -179,6 +211,10 @@ def explain_batch(
     seed: int = 0,
     coalitions: Mapping[str, Sequence[str]] | None = None,
     include_full: bool = False,
+    warm_start: bool | None = None,
+    node_budget: int | None = None,
+    gap: float | None = None,
+    region: bool = False,
 ) -> BatchResult:
     """See ``Explainer.explain_batch``.
 
@@ -192,7 +228,24 @@ def explain_batch(
     ``diversity="coalitions"`` produces one record per named coalition per
     row (``n_per_example`` is not used); ``coalitions``/``include_full`` are
     only valid in that mode.
+
+    ``backend="exact"`` has no vectorized population, so this loops the
+    single-instance exact solve per row (and per plan, for lever-blocking)
+    sequentially instead of running the Rust engine's parallel waves.
+    ``warm_start``/``node_budget``/``gap`` configure that solve; they are
+    only valid together with ``backend="exact"`` (see ``Explainer.explain``).
+    ``region=True`` attaches a certified ``RecourseRegion`` to every feasible
+    record's ``region`` field; ``BatchResult.save``/``load`` persist it
+    (``lo``/``hi``/``feature_intervals``/``certified``, all explicit -- a
+    file saved without ``region=True``, or by an older version, loads with
+    every record's ``region`` set to ``None``). Unlike the wave-parallel GA
+    search above, region growth runs one record at a time (each is one
+    ``Explainer._region_for`` call, rust-first when the extension is
+    importable, exactly as a single ``explain(..., region=True)`` call would
+    run it) -- there is no batched/parallel region path.
     """
+    from treecf.api import _resolve_exact_kwargs
+
     if target.bands_spec is not None:
         raise TreecfError("Target.bands is not supported in explain_batch; loop bands explicitly")
     if diversity not in ("seeds", "lever-blocking", "coalitions"):
@@ -201,6 +254,10 @@ def explain_batch(
         raise TreecfError("diversity='coalitions' requires a coalitions mapping")
     if diversity != "coalitions" and (coalitions is not None or include_full):
         raise TreecfError("coalitions/include_full are only valid with diversity='coalitions'")
+    # Validated here too (not only inside `_explain`) because the rust
+    # wave-parallel paths below (`_rows_by_seed_waves`, `_lever_primaries`)
+    # never call `_explain` and would otherwise silently ignore the kwargs.
+    _resolve_exact_kwargs(backend, warm_start, node_budget, gap)
     X = np.asarray(X, dtype=np.float64)
     row_ids: Sequence[object] = range(len(X)) if ids is None else list(ids)
     if len(row_ids) != len(X):
@@ -232,6 +289,7 @@ def explain_batch(
         records = _rows_by_coalitions(
             explainer, X, target, row_ids, coalitions, include_full,
             backend, time_budget_s, sparsity_weight, seed=seed,
+            warm_start=warm_start, node_budget=node_budget, gap=gap, region=region,
         )
     elif diversity == "seeds" and backend in ("genetic", "genetic-rust"):
         # Same attempts, dedup, and stopping rule as `_row_by_seeds`, but each
@@ -239,7 +297,7 @@ def explain_batch(
         # Rust call — the output is identical to the sequential loop.
         records = _rows_by_seed_waves(
             explainer, X, target, row_ids, n_per_example,
-            time_budget_s, sparsity_weight, seed=seed,
+            time_budget_s, sparsity_weight, seed=seed, region=region,
         )
     else:
         primaries: list[Counterfactual | Infeasible] | None = None
@@ -255,12 +313,14 @@ def explain_batch(
                     explainer, X[i], target, row_id, n_per_example,
                     backend, time_budget_s, sparsity_weight,
                     master_seed=seed * 1_000_003 + i * 1_009,
+                    warm_start=warm_start, node_budget=node_budget, gap=gap, region=region,
                 )
             else:
                 row_records, row_essential = _row_by_lever_blocking(
                     explainer, X[i], target, row_id, n_per_example,
                     backend, time_budget_s, sparsity_weight, seed=seed,
                     primary=None if primaries is None else primaries[i],
+                    warm_start=warm_start, node_budget=node_budget, gap=gap, region=region,
                 )
                 essential[row_id] = row_essential
             records.extend(row_records)
@@ -280,6 +340,7 @@ def _record_from(
     seed: int | None = None,
     blocked_lever: str | None = None,
     coalition: str | None = None,
+    region: RecourseRegion | None = None,
 ) -> BatchRecord:
     return BatchRecord(
         id=row_id,
@@ -294,6 +355,7 @@ def _record_from(
         seed=seed,
         blocked_lever=blocked_lever,
         coalition=coalition,
+        region=region,
     )
 
 
@@ -314,6 +376,7 @@ def _rows_by_seed_waves(
     time_budget_s: float,
     sparsity_weight: float,
     seed: int,
+    region: bool = False,
 ) -> list[BatchRecord]:
     """Wave-parallel `_row_by_seeds` over all rows (Rust backend only).
 
@@ -361,7 +424,11 @@ def _rows_by_seed_waves(
             continue
         ranked = sorted(found[i].values(), key=lambda pair: pair[0].distance)[:n]
         records.extend(
-            _record_from(row_id, k, cf, seed=cf_seed) for k, (cf, cf_seed) in enumerate(ranked)
+            _record_from(
+                row_id, k, cf, seed=cf_seed,
+                region=explainer._region_for(X[i], cf.x_cf, interval) if region else None,
+            )
+            for k, (cf, cf_seed) in enumerate(ranked)
         )
     return records
 
@@ -406,7 +473,12 @@ def _lever_primaries(
     outcomes: list[Counterfactual | Infeasible] = []
     for t, result in enumerate(results):
         if result.x_cf is None:
-            outcomes.append(Infeasible(reason="heuristic search exhausted (genetic backend)"))
+            outcomes.append(
+                Infeasible(
+                    reason="heuristic search exhausted (genetic backend)",
+                    proof="search_exhausted",
+                )
+            )
         else:
             outcomes.append(
                 explainer._finalize_candidate(
@@ -427,6 +499,10 @@ def _rows_by_coalitions(
     time_budget_s: float,
     sparsity_weight: float,
     seed: int,
+    warm_start: bool | None = None,
+    node_budget: int | None = None,
+    gap: float | None = None,
+    region: bool = False,
 ) -> list[BatchRecord]:
     """One record per named coalition per row (plus the optional baseline).
 
@@ -457,7 +533,10 @@ def _rows_by_coalitions(
             results = solver._solve_batch(X, tasks, interval, time_budget_s, sparsity_weight)
             scores = _wave_scores(solver, results)
             outcomes[name] = [
-                Infeasible(reason="heuristic search exhausted (genetic backend)")
+                Infeasible(
+                    reason="heuristic search exhausted (genetic backend)",
+                    proof="search_exhausted",
+                )
                 if result.x_cf is None
                 else solver._finalize_candidate(
                     X[i], result.x_cf, interval, result.stats, score=scores.get(i)
@@ -469,6 +548,7 @@ def _rows_by_coalitions(
                 solver._explain_one(
                     X[i], target, backend, time_budget_s, sparsity_weight, seed,
                     warn_factual=False,
+                    warm_start=warm_start, node_budget=node_budget, gap=gap,
                 )
                 for i in range(len(X))
             ]
@@ -483,7 +563,8 @@ def _rows_by_coalitions(
         feasible.sort(key=lambda pair: pair[1].distance)
         k = 0
         for name, cf in feasible:
-            records.append(_record_from(row_id, k, cf, coalition=name))
+            reg = solvers[name]._region_for(X[i], cf.x_cf, interval) if region else None
+            records.append(_record_from(row_id, k, cf, coalition=name, region=reg))
             k += 1
         for name in solvers:
             if not isinstance(outcomes[name][i], Counterfactual):
@@ -502,6 +583,10 @@ def _row_by_seeds(
     time_budget_s: float,
     sparsity_weight: float,
     master_seed: int,
+    warm_start: bool | None = None,
+    node_budget: int | None = None,
+    gap: float | None = None,
+    region: bool = False,
 ) -> list[BatchRecord]:
     from treecf.api import Counterfactual
 
@@ -511,6 +596,7 @@ def _row_by_seeds(
         result = explainer._explain(
             x, target, backend, time_budget_s, sparsity_weight, attempt_seed,
             warn_factual=False,  # explain_batch already warned in aggregate
+            warm_start=warm_start, node_budget=node_budget, gap=gap,
         )
         if isinstance(result, Counterfactual):
             key = frozenset(result.changes)
@@ -521,8 +607,12 @@ def _row_by_seeds(
     if not found:
         return [_infeasible_record(row_id)]
     ranked = sorted(found.values(), key=lambda pair: pair[0].distance)[:n_per_example]
+    interval = target.raw_interval(explainer.ir.link) if region else None
     return [
-        _record_from(row_id, k, cf, seed=cf_seed)
+        _record_from(
+            row_id, k, cf, seed=cf_seed,
+            region=explainer._region_for(x, cf.x_cf, interval) if interval is not None else None,
+        )
         for k, (cf, cf_seed) in enumerate(ranked)
     ]
 
@@ -538,6 +628,10 @@ def _row_by_lever_blocking(
     sparsity_weight: float,
     seed: int,
     primary: Counterfactual | Infeasible | None = None,
+    warm_start: bool | None = None,
+    node_budget: int | None = None,
+    gap: float | None = None,
+    region: bool = False,
 ) -> tuple[list[BatchRecord], list[str]]:
     from treecf.api import Counterfactual
 
@@ -545,13 +639,18 @@ def _row_by_lever_blocking(
         explained = explainer._explain(
             x, target, backend, time_budget_s, sparsity_weight, seed,
             warn_factual=False,  # explain_batch already warned in aggregate
+            warm_start=warm_start, node_budget=node_budget, gap=gap,
         )
         assert not isinstance(explained, dict)  # bands are rejected by explain_batch
         primary = explained
     if not isinstance(primary, Counterfactual):
         return [_infeasible_record(row_id)], []
 
-    records = [_record_from(row_id, 0, primary)]
+    interval = target.raw_interval(explainer.ir.link) if region else None
+    primary_region = (
+        explainer._region_for(x, primary.x_cf, interval) if interval is not None else None
+    )
+    records = [_record_from(row_id, 0, primary, region=primary_region)]
     seen = {frozenset(primary.changes)}
     essential: list[str] = []
     names = explainer.ir.feature_names
@@ -565,16 +664,25 @@ def _row_by_lever_blocking(
     for lever in levers:
         if len(records) >= n_per_example:
             break
-        alternative = explainer._with_extra_freezes([lever])._explain(
+        clone = explainer._with_extra_freezes([lever])
+        alternative = clone._explain(
             x, target, backend, time_budget_s, sparsity_weight, seed,
             warn_factual=False,  # explain_batch already warned in aggregate
+            warm_start=warm_start, node_budget=node_budget, gap=gap,
         )
         if isinstance(alternative, Counterfactual):
             key = frozenset(alternative.changes)
             if key not in seen:
                 seen.add(key)
+                alt_region = (
+                    clone._region_for(x, alternative.x_cf, interval)
+                    if interval is not None
+                    else None
+                )
                 records.append(
-                    _record_from(row_id, len(records), alternative, blocked_lever=lever)
+                    _record_from(
+                        row_id, len(records), alternative, blocked_lever=lever, region=alt_region
+                    )
                 )
         else:
             essential.append(lever)
