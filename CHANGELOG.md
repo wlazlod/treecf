@@ -13,13 +13,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   4. Tag vX.Y.Z -> release.yml builds, smoke-tests, and publishes.
 -->
 
-## [Unreleased]
+## [0.2.0] - 2026-08-14
 
 ### Added
 
+- **`backend="exact"`**: a branch-and-bound search over the same routing-atomic cell grid the
+  genetic backend shares, reporting `proof="optimal"` (no cheaper feasible row exists) or
+  `proof="optimal_within_gap"` (within a `gap > 0` relative fraction of the optimum) instead of
+  `"heuristic"`. Rust-first with a byte-identical pure-Python fallback when the extension is not
+  importable. `warm_start` (default `True`) seeds the search with a short genetic pass;
+  `node_budget` (default 2,000,000 assignments) and `gap` (default `0.0`) trade proof strength
+  against wall time. Supports single-feature `Linear` constraints and the canonical two-feature
+  order pair exactly; any other multi-feature `Linear` or a callable `value_policy` raises
+  `ConstraintValidationError` naming `backend="genetic"` as the fallback.
+- **Certified infeasibility**: `Infeasible.proof="certified"` from the exact backend means the
+  whole reachable grid was tried and every row rejected — not merely that a budget ran out. New
+  `Infeasible.proof` (`"search_exhausted"` | `"certified"`) and `Infeasible.solver_stats` fields;
+  both default so existing code is unaffected.
+- **Recourse regions**: `explain(..., region=True)` (also on `explain_coalitions`/
+  `explain_batch`) widens a verified counterfactual into a `RecourseRegion` — a per-feature box
+  where every point is independently re-verified as feasible, not sampled. Works with every
+  backend via `Explainer.recourse_region`; `Counterfactual.region` carries it, and
+  `BatchRecord.region` persists it through batch save/load.
 - `plot_recourse_map`: one-axes map of a single applicant's recourse options — model
   output on x, recourse cost J on y — with the accept band, an arrow per plan, infeasible
   coalitions marked, and a `schematic=True` slide-style mode.
+- Docs: new [Certification](docs/concepts/certification.md) concepts page covering the proof
+  taxonomy, what a certificate does and does not cover, and the region layer's guarantees.
 
 ### Changed
 
@@ -28,6 +48,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Seeded runs stay deterministic for a given treecf version, but the random
   stream may differ from builds against rand 0.9, so genetic-search results for
   the same seed can change across this upgrade.
+- The genetic backend itself is unchanged by this release: the full pre-existing test suite
+  passes without fixture regeneration.
 
 ### Fixed
 
