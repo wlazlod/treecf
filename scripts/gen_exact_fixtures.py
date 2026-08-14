@@ -291,21 +291,28 @@ def _scenario_11_value_policies() -> dict[str, Any]:
     )
 
 
+# One builder per fixture, in file order. Exposed as a module constant (not just
+# a literal inside main()) so tests can call each builder twice and diff the
+# payload dicts directly -- the double-generation determinism check without
+# round-tripping through the filesystem.
+SCENARIO_BUILDERS = (
+    _scenario_01_basic,
+    _scenario_02_nan_both_directions,
+    _scenario_03_order_pair_boundary,
+    _scenario_04_onehot_implies,
+    _scenario_05_pinned_features,
+    _scenario_06_plausibility_pruning,
+    _scenario_07_gap,
+    _scenario_08_warm_start_on,
+    _scenario_09_warm_start_off,
+    _scenario_10_certified_infeasible,
+    _scenario_11_value_policies,
+)
+
+
 def main() -> None:
     fixture_utils.FIXTURES_DIR.mkdir(parents=True, exist_ok=True)
-    for build in (
-        _scenario_01_basic,
-        _scenario_02_nan_both_directions,
-        _scenario_03_order_pair_boundary,
-        _scenario_04_onehot_implies,
-        _scenario_05_pinned_features,
-        _scenario_06_plausibility_pruning,
-        _scenario_07_gap,
-        _scenario_08_warm_start_on,
-        _scenario_09_warm_start_off,
-        _scenario_10_certified_infeasible,
-        _scenario_11_value_policies,
-    ):
+    for build in SCENARIO_BUILDERS:
         _write(build())
 
 

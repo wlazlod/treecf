@@ -176,15 +176,31 @@ def _constraint_cells(
 def _demanded_values(compiled: CompiledConstraints) -> dict[int, list[float]]:
     """Per feature, the exact values some constraint can come to demand of it.
 
-    Only implications do that: meeting a condition leaves its consequence one
-    legal value and nothing else. Both the candidate states a feature is given
-    and the values an order-pair repair may propose for it are built from this,
-    so they agree on what is worth offering. Ascending per feature, so the
-    order in which those values get tried is fixed.
+    Two constraint kinds do that. An implication's consequence is left with
+    one legal value and nothing else once its condition holds. A
+    single-feature ``Linear(op="==")`` is even more direct: it demands its own
+    algebraic solution ``rhs / coef`` of that one feature outright. Neither
+    demand is something a cell's own nearest-to-factual point can be trusted
+    to land on — the ``==`` case especially not: ``compile_constraints``
+    widens that constraint's derived range by the ``check_matrix`` slack (see
+    ``compile.py``) so the bound never *excludes* a candidate the slacked
+    check would admit, but that same widening means the range's own edges,
+    which is what a plain nearest-point search would reach for, can sit a
+    float-ulp *outside* what the check actually accepts. Demanding the exact
+    solution sidesteps the edge entirely.
+
+    The candidate states a feature is given, the values an order-pair repair
+    may propose for it, and the oracle's own candidate options (`brute_force
+    .solve_brute_force`) are all built from this, so all three agree on what
+    is worth offering. Ascending per feature, so the order in which those
+    values get tried is fixed.
     """
     demanded: dict[int, set[float]] = {}
     for imp in compiled.implications:
         demanded.setdefault(imp.cons_index, set()).add(imp.cons_value)
+    for lin in compiled.linears:
+        if len(lin.indices) == 1 and lin.op == "==":
+            demanded.setdefault(lin.indices[0], set()).add(lin.rhs / lin.coefs[0])
     return {f: sorted(values) for f, values in demanded.items()}
 
 
@@ -251,6 +267,14 @@ def _build_domains(
     nothing legal left to offer, and rows that meet it would be out of reach.
     Like a pinned value, that candidate comes from a constraint and is exempt
     from value-policy snapping.
+
+    A single-feature ``Linear(op="==")`` gets the same extra candidate, its
+    own algebraic solution (``_demanded_values``), for the same reason: the
+    derived range this constraint also contributes to ``lo``/``hi`` is
+    deliberately widened past the exact solution (never narrowed — it must
+    never exclude a candidate the arbiter's own slack admits), so the ordinary
+    nearest-point candidate for whichever cell holds that widened edge is not
+    guaranteed to still be inside the arbiter's own, unwidened, tolerance.
     """
     lo, hi, frozen = compiled.instance_bounds(x)
     lo = np.where(np.isnan(lo), -math.inf, lo)

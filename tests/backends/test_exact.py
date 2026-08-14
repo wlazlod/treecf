@@ -7,6 +7,7 @@ import math
 import numpy as np
 import pytest
 
+from treecf import Counterfactual, Explainer, Target, TreecfWarning
 from treecf._errors import ConstraintValidationError
 from treecf.aim.cells import Cell, feature_cells
 from treecf.api import Grid
@@ -381,6 +382,89 @@ class TestImpliesDomains:
             (cells, cells), x, compiled, np.ones(2), np.ones(2), 0.0, None
         )
         assert [s.value for s in domains[1]] == [1.0]
+
+
+class TestEqualityLinearDemandedValue:
+    """A single-feature ``Linear(op="==")`` demands its own algebraic solution
+    ``rhs / coef`` the same way an implication demands a value of its
+    consequence — same mechanism, same ``_demanded_values``.
+
+    Before this was wired in, the only candidate ``_build_domains`` offered
+    for such a feature was ``nearest_to(anchor)`` against the constraint's own
+    *derived* range, which ``compile_constraints`` deliberately widens past
+    the exact solution by the ``check_matrix`` slack (so the derived range
+    itself never excludes a candidate the slacked check would admit). That
+    widened edge is not guaranteed to sit inside ``check_matrix``'s own,
+    un-widened, 1e-9 tolerance — so the one candidate offered could be
+    rejected by the very arbiter that was supposed to decide it, and a
+    NaN-factual feature with nothing else in its domain (``AllowMissing`` plus
+    ``missing_policy="forbid_missing"`` suppressing the keep-NaN state) had
+    nothing left at all: a real counterfactual, certified infeasible.
+    """
+
+    def test_domain_carries_the_algebraic_solution(self) -> None:
+        cells = (Cell(-math.inf, math.inf, True, True),)
+        compiled = compile_constraints((Linear({"x": 2.0}, op="==", rhs=5.0),), ("x",))
+        x = np.array([0.0])
+        domains = _build_domains((cells,), x, compiled, np.ones(1), np.ones(1), 0.0, None)
+        assert 2.5 in [s.value for s in domains[0]]
+        demanded = next(s for s in domains[0] if s.value == 2.5)
+        assert not demanded.snapped  # constraint-authoritative, like an Implies demand
+
+    def test_demanded_value_exempt_from_value_policy_snapping(self) -> None:
+        cells = (Cell(-math.inf, math.inf, True, True),)
+        compiled = compile_constraints((Linear({"x": 2.0}, op="==", rhs=5.0),), ("x",))
+        x = np.array([0.0])
+        domains = _build_domains(
+            (cells,), x, compiled, np.ones(1), np.ones(1), 0.0, {"x": Grid(2.0, 0.0)}
+        )
+        assert 2.5 in [s.value for s in domains[0]]  # not pushed onto the 0/2/4 grid
+
+    def test_false_certificate_regression(self) -> None:
+        """NaN factual, ``AllowMissing``, and a ``Linear(op="==",
+        missing_policy="forbid_missing")`` that suppresses the keep-NaN state:
+        before the fix this feature's only candidate failed ``check_matrix``
+        and the search certified infeasible even though a real counterfactual
+        exists (and genetic finds it). The factual is NaN, which the
+        ``forbid_missing`` policy itself forbids, so both backends warn about
+        the factual violation on the way in — that warning is expected, not
+        incidental."""
+        tree = Tree(
+            nodes=(
+                Node(0, 0, -1.0, SplitOp.LT, True, 1, 2, None),  # NaN routes left
+                Node(1, None, None, None, None, None, None, 0.0),
+                Node(2, None, None, None, None, None, None, 5.0),
+            )
+        )
+        ir = EnsembleIR(
+            trees=(tree,), base_score=0.0, link=Link.IDENTITY,
+            n_features=1, feature_names=("x",), meta={},
+        )
+        x = np.array([math.nan])
+        coef, rhs = 2.0, -1.3561106092814947
+        demanded_v = rhs / coef  # the exact algebraic solution the fix must offer
+        constraints = [
+            Linear({"x": coef}, op="==", rhs=rhs, missing_policy="forbid_missing"),
+            AllowMissing("x", delta_miss=1.1657362307437933, delta_from_miss=1.6653138407635462),
+        ]
+        compiled = compile_constraints(constraints, ir.feature_names)
+        grids = _constraint_cells(compiled, ir)
+        domains = _build_domains(grids, x, compiled, np.ones(1), np.ones(1), 0.0, None)
+        assert any(
+            bool(compiled.check_matrix(np.array([[s.value]]), x)[0]) for s in domains[0]
+        ), "no domain candidate for x passes check_matrix — the false-certificate defect"
+
+        exp = Explainer(ir, normalizers=np.ones(1), constraints=constraints)
+        target = Target.raw(op=">=", value=4.0)
+        with pytest.warns(TreecfWarning):
+            genetic = exp.explain(x, target, backend="genetic", seed=0)
+        with pytest.warns(TreecfWarning):
+            exact = exp.explain(x, target, backend="exact", seed=0, warm_start=False)
+
+        assert isinstance(genetic, Counterfactual)
+        assert isinstance(exact, Counterfactual)
+        assert exact.x_cf[0] == pytest.approx(demanded_v)
+        assert exact.distance == pytest.approx(genetic.distance, abs=1e-9)
 
 
 class TestValuePolicySnap:

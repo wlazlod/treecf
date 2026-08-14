@@ -78,13 +78,7 @@ def _draw_single_feature_constraints(
             constraints.append(Monotone(name, "increase" if rng.random() < 0.5 else "decrease"))
         elif kind == "linear":
             coef = float(rng.choice([-2.0, -1.0, 1.0, 2.0]))
-            # "==" excluded on purpose: its derived bound is only a superset of
-            # what check_matrix's own 1e-9 slack actually accepts (see
-            # tests/property/test_derived_bounds.py), so a NaN-factual/AllowMissing
-            # candidate landing on that bound's own edge can be built by
-            # _build_domains and then rejected by the arbiter a float-ulp later —
-            # a known boundary case, not a genetic-vs-exact dominance failure.
-            op = str(rng.choice(["<=", ">="]))
+            op = str(rng.choice(["<=", ">=", "=="]))
             rhs = coef * (anchor + float(rng.uniform(-2.0, 2.0)))
             policy = str(rng.choice(["satisfied", "violated", "forbid_missing"]))
             constraints.append(Linear({name: coef}, op=op, rhs=rhs, missing_policy=policy))

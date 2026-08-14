@@ -20,6 +20,14 @@ that a value some constraint watches for is a cell of its own and its neighbours
 are reachable separately. One point per routing cell is enough to know a row's
 score but not whether it is allowed, and the exact backend has to be compared
 against an oracle that searches the same space, not a coarser one.
+
+Candidate options also draw on ``_demanded_values`` — the same function
+``_build_domains`` uses — so an implication's demanded consequence value and a
+single-feature ``Linear(op="==")``'s own algebraic solution are both offered
+here too, bounds-checked but never value-policy-snapped, exactly as the exact
+backend offers them. Without this the oracle would grade the exact backend
+against a strictly smaller candidate set than the exact backend actually
+searches, which is not ground truth.
 """
 
 from __future__ import annotations
@@ -34,7 +42,7 @@ import numpy.typing as npt
 
 from treecf.aim.cells import Cell
 from treecf.api import _snap
-from treecf.backends._exact_domains import _constraint_cells
+from treecf.backends._exact_domains import _constraint_cells, _demanded_values
 from treecf.constraints.compile import CompiledConstraints
 from treecf.ir.evaluate import raw_score
 from treecf.ir.model import EnsembleIR
@@ -76,6 +84,7 @@ def solve_brute_force(
         else _constraint_cells(compiled, ir)
     )
     p = ir.n_features
+    demanded = _demanded_values(compiled)
 
     # Candidate values per feature: nearest-in-(cell ∩ bounds) to x_j, plus the NaN
     # state when AllowMissing permits it; NaN factuals without AllowMissing stay NaN.
@@ -99,6 +108,14 @@ def solve_brute_force(
         keep = not math.isnan(x[j]) and lo_j <= x[j] <= hi_j
         if keep:
             values.append(x[j])
+        # A value some constraint demands outright (an implication's consequence,
+        # or a single-feature Linear(op="==")'s own algebraic solution): bounds-
+        # checked like any other candidate, but never value-policy-snapped —
+        # exactly what _build_domains offers, so the oracle searches the same
+        # space the exact backend does, not a coarser one missing exactly this.
+        for val in demanded.get(j, []):
+            if lo_j <= val <= hi_j and not (keep and val == x[j]):
+                values.append(val)
         for cell in per_feature[j]:
             v = _nearest_in_cell_and_bounds(cell, anchor, lo_b[j], hi_b[j])
             if v is None:
