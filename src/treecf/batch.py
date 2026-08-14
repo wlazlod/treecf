@@ -610,7 +610,9 @@ def _row_by_lever_blocking(
         return [_infeasible_record(row_id)], []
 
     interval = target.raw_interval(explainer.ir.link) if region else None
-    primary_region = explainer._region_for(x, primary.x_cf, interval) if interval else None
+    primary_region = (
+        explainer._region_for(x, primary.x_cf, interval) if interval is not None else None
+    )
     records = [_record_from(row_id, 0, primary, region=primary_region)]
     seen = {frozenset(primary.changes)}
     essential: list[str] = []
@@ -635,7 +637,11 @@ def _row_by_lever_blocking(
             key = frozenset(alternative.changes)
             if key not in seen:
                 seen.add(key)
-                alt_region = clone._region_for(x, alternative.x_cf, interval) if interval else None
+                alt_region = (
+                    clone._region_for(x, alternative.x_cf, interval)
+                    if interval is not None
+                    else None
+                )
                 records.append(
                     _record_from(
                         row_id, len(records), alternative, blocked_lever=lever, region=alt_region

@@ -59,7 +59,11 @@ class RecourseRegion:
 
     ``lo``/``hi`` cover every feature (degenerate coordinates included, as a
     single point); ``feature_intervals`` keys only the non-degenerate ones by
-    name, for display.
+    name, for display. Regions are certified but neither maximal (a larger
+    sound box may exist) nor monotone in the target interval (a strictly
+    narrower target can still produce a strictly wider region on some
+    feature: growth is greedy and order-dependent, so a feature that is
+    forced to stop early frees room a later feature grows into).
     """
 
     lo: FloatArray
@@ -144,16 +148,23 @@ def _degenerate_features(
 
 def _tree_interval_bracket(
     nodes: tuple[Node, ...], idx: int, lo: FloatArray, hi: FloatArray, is_nan: BoolArray
-) -> tuple[float, float]:
-    """``[min, max]`` leaf value reachable from ``nodes[idx]`` over the box.
+) -> tuple[float, float] | None:
+    """``[min, max]`` leaf value reachable from ``nodes[idx]`` over the box, or
+    ``None`` if the box cannot be soundly bracketed at all.
 
     At a split, the box's interval on that feature decides whether only the
     left child, only the right, or both are still reachable; a NaN-degenerate
     feature (fixed, never widened) instead routes by ``missing_left`` alone,
-    the same single-child routing ``raw_score`` itself takes. A node with no
-    missing routing defined treats a NaN coordinate as routing right, the
-    same convention the exact backend's own bound-computation uses -- the
-    strict raise belongs to scoring one concrete row, not bracketing a box.
+    the same single-child routing ``raw_score`` itself takes -- unless
+    ``missing_left`` is undefined at that node. The counterfactual's own
+    verified path never visits such a node (verification already re-scored it
+    without raising), but widening an ANCESTOR feature's interval can open a
+    subtree that does, for a point the region would otherwise certify though
+    ``raw_score`` refuses to score it. There is no per-point re-check after a
+    region ships, so guessing a side here (the exact backend's own bound
+    computation may, since every row it returns is re-verified individually)
+    would be an unsound shortcut; returning ``None`` instead makes the whole
+    box's bracket undefined, which the oracle reads as a flat rejection.
     """
     node = nodes[idx]
     if node.feature is None:
@@ -162,7 +173,9 @@ def _tree_interval_bracket(
     f = node.feature
     assert node.threshold is not None and node.left is not None and node.right is not None
     if is_nan[f]:
-        child = node.left if bool(node.missing_left) else node.right
+        if node.missing_left is None:
+            return None
+        child = node.left if node.missing_left else node.right
         return _tree_interval_bracket(nodes, child, lo, hi, is_nan)
     threshold = node.threshold
     lo_f, hi_f = float(lo[f]), float(hi[f])
@@ -174,22 +187,33 @@ def _tree_interval_bracket(
         return _tree_interval_bracket(nodes, node.left, lo, hi, is_nan)
     if all_right:
         return _tree_interval_bracket(nodes, node.right, lo, hi, is_nan)
-    lmin, lmax = _tree_interval_bracket(nodes, node.left, lo, hi, is_nan)
-    rmin, rmax = _tree_interval_bracket(nodes, node.right, lo, hi, is_nan)
+    left = _tree_interval_bracket(nodes, node.left, lo, hi, is_nan)
+    if left is None:
+        return None
+    right = _tree_interval_bracket(nodes, node.right, lo, hi, is_nan)
+    if right is None:
+        return None
+    lmin, lmax = left
+    rmin, rmax = right
     return min(lmin, rmin), max(lmax, rmax)
 
 
 def _ensemble_bracket(
     ir: EnsembleIR, lo: FloatArray, hi: FloatArray, is_nan: BoolArray
-) -> tuple[float, float]:
-    """``[min, max]`` raw score the ensemble can reach anywhere in the box.
+) -> tuple[float, float] | None:
+    """``[min, max]`` raw score the ensemble can reach anywhere in the box, or
+    ``None`` if any tree's bracket could not be soundly computed (see
+    ``_tree_interval_bracket``).
 
     Summed base + ascending tree index, the same order ``raw_score`` adds in.
     """
     total_min = ir.base_score
     total_max = ir.base_score
     for tree in ir.trees:
-        tree_min, tree_max = _tree_interval_bracket(tree.nodes, 0, lo, hi, is_nan)
+        bracket = _tree_interval_bracket(tree.nodes, 0, lo, hi, is_nan)
+        if bracket is None:
+            return None
+        tree_min, tree_max = bracket
         total_min = total_min + tree_min
         total_max = total_max + tree_max
     return total_min, total_max
@@ -231,12 +255,21 @@ def _box_feasible(
     is_nan: BoolArray,
 ) -> bool:
     """The soundness oracle: True only if EVERY point of the box is provably
-    still in-target, plausible, and Linear-feasible -- rejects on any doubt."""
-    score_min, score_max = _ensemble_bracket(ir, lo, hi, is_nan)
+    still in-target, plausible, and Linear-feasible -- rejects on any doubt,
+    including an ensemble bracket that could not be soundly computed at all
+    (``_ensemble_bracket`` returning ``None``: an unrouted missing split some
+    point of the box could reach)."""
+    bracket = _ensemble_bracket(ir, lo, hi, is_nan)
+    if bracket is None:
+        return False
+    score_min, score_max = bracket
     if score_min < interval[0] or score_max > interval[1]:
         return False
     if if_ir is not None:
-        if_min, _if_max = _ensemble_bracket(if_ir, lo, hi, is_nan)
+        if_bracket = _ensemble_bracket(if_ir, lo, hi, is_nan)
+        if if_bracket is None:
+            return False
+        if_min, _if_max = if_bracket
         if if_min < min_total_path:
             return False
     return all(_linear_holds(lin, x_cf, lo, hi) for lin in linears)

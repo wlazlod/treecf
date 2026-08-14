@@ -838,7 +838,9 @@ class Explainer:
         widen. Works for a counterfactual from any backend. Costs one oracle
         call — a full interval-tree walk of every ensemble tree — per
         attempted per-feature, per-direction expansion; see
-        ``treecf.regions.RecourseRegion``.
+        ``treecf.regions.RecourseRegion``. The returned region is certified
+        but neither maximal nor monotone in ``target``: a strictly narrower
+        target can still grow a strictly wider region on some feature.
         """
         x = np.asarray(x, dtype=np.float64)
         x_cf = np.asarray(x_cf, dtype=np.float64)

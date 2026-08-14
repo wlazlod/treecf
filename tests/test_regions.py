@@ -231,6 +231,70 @@ class TestDegenerateFeaturesArePinned:
 
 
 # --------------------------------------------------------------------------
+# Regression: an unrouted missing split must reject the box, not guess a side
+# --------------------------------------------------------------------------
+
+
+class TestUnroutedMissingSplitRejectsGrowth:
+    """Reviewer probe: a model whose root splits on ``g`` (routing feature),
+    whose right subtree splits on a NaN-degenerate feature ``f`` with
+    ``missing_left=None`` (as every split of an sklearn-parsed model has,
+    since sklearn defines no missing-value routing) -- the shape the
+    counterfactual's own verified path avoids by staying left of the root
+    split. Widening ``g`` past the root threshold opens that unrouted
+    subtree; the box oracle must reject rather than silently pick a side
+    (the exact backend's identical coercion is safe only because every row
+    it returns is re-verified individually -- a region has no such per-point
+    recheck, so the oracle itself must carry the strictness).
+    """
+
+    def _ir(self) -> EnsembleIR:
+        root = Node(0, 0, 1.0, SplitOp.LT, None, 1, 2, None)
+        left_leaf = _leaf(1, 0.0)
+        f_split = Node(2, 1, 0.5, SplitOp.LT, None, 3, 4, None)  # missing_left=None
+        f_leaf_lo = _leaf(3, 0.0)
+        f_leaf_hi = _leaf(4, 5.0)
+        tree = Tree(nodes=(root, left_leaf, f_split, f_leaf_lo, f_leaf_hi))
+        return EnsembleIR(
+            trees=(tree,), base_score=0.0, link=Link.IDENTITY, n_features=2,
+            feature_names=("g", "f"), meta={},
+        )
+
+    def test_growth_stops_before_the_unrouted_subtree_and_every_sample_verifies(self) -> None:
+        from treecf.ir.evaluate import raw_score
+
+        ir = self._ir()
+        exp = Explainer(ir, normalizers=np.ones(2))
+        x_cf = np.array([0.0, math.nan])
+        assert raw_score(ir, x_cf) == 0.0  # the factual's own path avoids the f-split
+
+        # Wide enough that the (unsound) old behavior -- treating the
+        # unrouted node as routing right, reaching leaf value 5.0 -- would
+        # have been accepted.
+        target = Target.raw(range=(-1.0, 10.0))
+        region = exp.recourse_region(x_cf, x_cf, target)
+
+        assert "g" in region.feature_intervals
+        assert region.feature_intervals["g"][1] < 1.0  # never crosses into the unrouted subtree
+
+        interval = target.raw_interval(ir.link)
+        rng = np.random.default_rng(0)
+        for _ in range(50):
+            z = x_cf.copy()
+            lo_j = max(region.lo[0], -1e6)
+            hi_j = min(region.hi[0], 1e6)
+            z[0] = float(rng.uniform(lo_j, hi_j))
+            raw_score(ir, z)  # must not raise
+            assert exp._verify(x_cf, z, interval) is None
+        # the box endpoints themselves, too
+        for edge in (region.lo[0], region.hi[0]):
+            z = x_cf.copy()
+            z[0] = edge if math.isfinite(edge) else math.copysign(1e6, edge)
+            raw_score(ir, z)
+            assert exp._verify(x_cf, z, interval) is None
+
+
+# --------------------------------------------------------------------------
 # Batch wiring (Python sequential path + the parallel/coalition paths)
 # --------------------------------------------------------------------------
 
