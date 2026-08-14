@@ -197,6 +197,306 @@ def plot_tradeoff(results: Any, target: Any = None, ax: Any = None) -> Any:
     return ax
 
 
+def plot_recourse_map(
+    explainer: Any,
+    x: Any,
+    results: Any,
+    target: Any,
+    *,
+    ax: Any = None,
+    space: str = "auto",
+    annotate: bool = True,
+    max_changes_per_label: int = 3,
+    fmt: str = "{:.3g}",
+    schematic: bool = False,
+    region_labels: tuple[str, str] = ("Reject", "Accept"),
+    show_factual_label: bool = True,
+) -> Any:
+    """Recourse diagram: what each plan costs and where it lands relative to the target.
+
+    Plots one point per feasible plan in ``results`` at (model output, recourse
+    cost ``J``), with the factual instance drawn as a red dot at cost 0 and an
+    arrow from the factual to each plan. A green band marks the target
+    interval on the model-output axis; the axis flips automatically so that
+    "improving" always reads as a move toward the band. Model output is shown
+    as a probability for sigmoid-link models (or when ``space="probability"``)
+    and as the raw score otherwise (``space="raw"``; ``space="auto"`` picks
+    based on the model's link function).
+
+    In the default quantitative view, each plan is labeled with one line —
+    its name (or ``"plan {i}"``, ascending by distance, when unnamed) and its
+    cost — when ``annotate`` is set; the map's job here is the overview, not
+    a change list. Infeasible entries in ``results`` are drawn as grey
+    markers above the plans, labeled by name (``"infeasible"`` alone when
+    unlabeled, with a ``(certified)`` suffix when the entry carries a
+    certified proof) regardless of ``annotate``.
+
+    ``schematic=True`` swaps the quantitative axes and target band for a
+    slide-friendly rendering: a wavy decision-boundary line instead of a
+    band, no ticks or axis labels, and "If ..." phrased plan labels (using
+    each plan's changed features, largest-effort first, truncated to
+    ``max_changes_per_label`` and formatted with ``fmt``). ``annotate`` also
+    gates ``show_factual_label`` there — an anchored corner box on the
+    factual's screen side listing the features any plan changed, at their
+    original values (schematic mode only; the quantitative view never draws
+    it). ``region_labels`` names the two sides of the boundary in
+    ``schematic`` mode.
+
+    Args:
+        explainer: Explainer wrapping the model; supplies the link function
+            and the counterfactual distance weights used to order each
+            plan's changes.
+        x: Factual feature vector.
+        results: Counterfactual outcomes for ``x`` — a single result, a
+            sequence, or a mapping (as returned by ``explain_coalitions``).
+            Feasible and infeasible entries are both accepted.
+        target: The target interval the plans were solved against; also
+            drawn as the band (or boundary, in schematic mode).
+        ax: Existing axes to draw on; a new figure is created if omitted.
+        space: ``"probability"``, ``"raw"``, or ``"auto"`` (default) to pick
+            the model-output axis space from the model's link function.
+        annotate: Draw a text label at each plan's point; in ``schematic``
+            mode, also gates whether ``show_factual_label`` draws its block.
+        max_changes_per_label: Schematic mode only. Number of changed
+            features shown per label before truncating to "(+k more)".
+        fmt: Schematic mode only. Format string for changed feature values
+            in labels.
+        schematic: Render the slide-friendly boundary view instead of the
+            quantitative axes.
+        region_labels: The (reject-side, accept-side) names drawn next to
+            the boundary in schematic mode.
+        show_factual_label: Schematic mode only. Draw an anchored corner
+            box, on the factual's screen side, listing the features any
+            plan changed.
+
+    Returns:
+        The axes the recourse map was drawn on.
+
+    Raises:
+        TreecfError: If ``results`` contains no plans at all, or more than
+            10 feasible plans.
+    """
+    from treecf.ir.evaluate import apply_link, raw_score
+    from treecf.ir.model import Link
+
+    plt = _import_pyplot()
+    plans, failures = _plans_and_failures(results)
+    if not plans and not failures:
+        raise TreecfError("no plans to plot")
+    if len(plans) > 10:
+        raise TreecfError("plot_recourse_map compares at most 10 plans")
+
+    link = explainer.ir.link
+    prob = space == "probability" or (space == "auto" and link is Link.SIGMOID)
+    s_raw = raw_score(explainer.ir, x)
+    x_fact = apply_link(Link.SIGMOID, s_raw) if prob else s_raw
+
+    def _plan_x(plan: Any) -> float:
+        if prob and plan.score_prob is not None:
+            return float(plan.score_prob)
+        if prob:
+            return apply_link(Link.SIGMOID, plan.score_raw)
+        return float(plan.score_raw)
+
+    ordered = sorted(plans, key=lambda pair: pair[1].distance)
+    plan_points = [(label, plan, _plan_x(plan), plan.distance) for label, plan in ordered]
+
+    if ax is None:
+        _, ax = plt.subplots(figsize=(7, 5))
+
+    lo, hi = _display_interval(target, link, space)
+    finite_edges = [b for b in (lo, hi) if math.isfinite(b)]
+    xs = [x_fact, *(px for _, _, px, _ in plan_points), *finite_edges]
+    span = max(xs) - min(xs)
+    pad = 0.08 * span
+
+    if not schematic:
+        lo_edge = lo if math.isfinite(lo) else min(xs)
+        hi_edge = hi if math.isfinite(hi) else max(xs)
+        ax.axvspan(lo_edge - pad, hi_edge + pad, color="tab:green", alpha=0.12)
+        for edge in finite_edges:
+            ax.axvline(edge, color="0.4", linestyle="--")
+
+    if math.isfinite(hi) and hi < x_fact:
+        ax.invert_xaxis()
+
+    ax.plot([x_fact], [0.0], "o", color="tab:red", markersize=9, zorder=3)
+    for i, (_label, _plan, px, py) in enumerate(plan_points):
+        ax.plot([px], [py], "o", color="tab:green", markersize=8, zorder=3)
+        sign = 1 if i % 2 else -1
+        r = 0.0 if i == 0 else sign * 0.12 * math.ceil(i / 2)
+        ax.annotate(
+            "",
+            xy=(px, py),
+            xytext=(x_fact, 0.0),
+            arrowprops={
+                "arrowstyle": "->",
+                "color": "0.15",
+                "lw": 1.2,
+                "connectionstyle": f"arc3,rad={r}",
+            },
+        )
+
+    if not schematic:
+        ax.set_xlabel("model output (probability)" if prob else "model output (raw score)")
+        ax.set_ylabel("recourse cost J")
+        ax.set_title(f"{len(plans)} recourse option(s)")
+
+    label_bbox = {
+        "boxstyle": "round,pad=0.25",
+        "facecolor": "white",
+        "edgecolor": "none",
+        "alpha": 0.75,
+    }
+
+    if annotate:
+        for i, (label, plan, px, py) in enumerate(plan_points):
+            if schematic:
+                text = _format_plan(
+                    label, plan, explainer, fmt, max_changes_per_label, schematic=True
+                )
+                fontsize = 8
+            else:
+                # Minimal mode: the map's job is the overview, not the change list —
+                # one line naming the plan (or its ascending-distance ordinal) and its cost.
+                plan_name = label if label is not None else f"plan {i + 1}"
+                text = f"{plan_name} (J={plan.distance:.3g})"
+                fontsize = 9
+            dx, ha = _grow_inward(ax, px)
+            ax.annotate(
+                text,
+                xy=(px, py),
+                xytext=(dx, 4),
+                textcoords="offset points",
+                ha=ha,
+                va="bottom",
+                fontsize=fontsize,
+                bbox=label_bbox,
+                zorder=2,  # marker (zorder=3) stays on top of its own label box
+            )
+
+    if schematic and annotate and show_factual_label:
+        touched: dict[str, float] = {}
+        for _label, plan, _px, _py in plan_points:
+            for name, (source, _dest) in plan.changes.items():
+                touched.setdefault(name, source)
+        if touched:
+            lines = ["factual:"] + [
+                f"{name} = NaN"
+                if math.isnan(touched[name])
+                else f"{name} = {fmt.format(touched[name])}"
+                for name in sorted(touched)
+            ]
+            _, side_ha = _grow_inward(ax, x_fact)
+            fx = 0.02 if side_ha == "left" else 0.98
+            ax.text(
+                fx,
+                0.03,
+                "\n".join(lines),
+                transform=ax.transAxes,
+                ha=side_ha,
+                va="bottom",
+                fontsize=8,
+                bbox={**label_bbox, "facecolor": "0.96"},
+                zorder=2,  # factual dot (zorder=3) stays on top of the box background
+            )
+
+    y_top = max((py for _, _, _, py in plan_points), default=0.0)
+    step_y = 0.12 * (y_top or 1.0)
+    fail_dx, fail_ha = _grow_inward(ax, x_fact)
+    for i, (label, r) in enumerate(failures):
+        y = y_top + (i + 1) * step_y
+        ax.plot([x_fact], [y], "x", color="0.5", markersize=8, zorder=3)
+        text = f"{label}: infeasible" if label is not None else "infeasible"
+        if getattr(r, "proof", "") == "certified":
+            text += " (certified)"
+        ax.annotate(
+            text,
+            xy=(x_fact, y),
+            xytext=(fail_dx, 0),
+            textcoords="offset points",
+            ha=fail_ha,
+            fontsize=8,
+            color="0.35",
+            zorder=2,  # marker (zorder=3) stays on top of its own label
+        )
+
+    n_failures = len(failures)
+    if schematic:
+        # Extra top headroom keeps multi-line plan labels and the topmost infeasible
+        # marker's label clear of the schematic region labels (y=0.95) and boundary
+        # caption (y=0.86), which both sit near the top of the axes.
+        top_ref = (y_top + n_failures * step_y) or 1.0
+        ax.set_ylim(bottom=-0.05 * top_ref, top=1.5 * top_ref)
+    else:
+        # Minimal mode: inflate just enough to fit the infeasible stack above the
+        # highest plan (or a touch of breathing room when there's no stack at all).
+        top_ref = max(y_top + (n_failures + 1) * step_y, y_top * 1.1)
+        ax.set_ylim(bottom=-0.05 * top_ref, top=top_ref)
+
+    if schematic:
+        _schematic_dressing(ax, finite_edges, span, region_labels)
+
+    return ax
+
+
+def _schematic_dressing(
+    ax: Any,
+    finite_edges: Sequence[float],
+    x_span: float,
+    region_labels: tuple[str, str],
+) -> None:
+    """Slide-style dressing: hide chrome, wavy boundary per edge, region labels.
+
+    Runs after the caller's final ``set_ylim`` so the wave spans the visible
+    y-range (``ax.get_ylim()``); ``x_span`` is the data-envelope x-range
+    already computed by the caller, used for the wave amplitude.
+    """
+    ax.set_xticks([])
+    ax.set_yticks([])
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    amplitude = 0.02 * x_span
+    y_lo, y_hi = ax.get_ylim()
+    t = [i / 199 for i in range(200)]
+    y = [y_lo + ti * (y_hi - y_lo) for ti in t]
+    caption_bbox = {
+        "boxstyle": "round,pad=0.25",
+        "facecolor": "white",
+        "edgecolor": "none",
+        "alpha": 0.75,
+    }
+    for edge in finite_edges:
+        wave_x = [edge + amplitude * math.sin(2 * math.pi * 1.5 * ti) for ti in t]
+        ax.plot(wave_x, y, linestyle="--", color="tab:blue")
+        dx, ha = _grow_inward(ax, edge)
+        ax.annotate(
+            "ML model decision boundary",
+            xy=(edge, 0.86),
+            xycoords=ax.get_xaxis_transform(),
+            xytext=(dx, 0),
+            textcoords="offset points",
+            ha=ha,
+            va="center",
+            fontsize=8,
+            bbox=caption_bbox,
+        )
+
+    # invert_xaxis() is only called when the band lies below the factual, which
+    # flips the data->screen mapping so the accept side is screen-right in both
+    # cases — the labels do not depend on ax.xaxis_inverted().
+    ax.text(0.18, 0.95, region_labels[0], transform=ax.transAxes, fontsize=14, ha="center")
+    ax.text(0.82, 0.95, region_labels[1], transform=ax.transAxes, fontsize=14, ha="center")
+
+
+def _grow_inward(ax: Any, x_data: float) -> tuple[int, str]:
+    """Offset/ha for a label anchored at ``x_data`` so its text grows toward plot center."""
+    lo_v, hi_v = ax.get_xlim()  # reflects inversion
+    frac = (x_data - lo_v) / (hi_v - lo_v) if hi_v != lo_v else 0.5
+    return (8, "left") if frac < 0.5 else (-8, "right")
+
+
 def _plans_with_labels(results: Any) -> list[tuple[str | None, Any]]:
     """Feasible plans paired with labels (mapping keys, `coalition` fields, or None)."""
     if isinstance(results, Mapping):
@@ -204,6 +504,33 @@ def _plans_with_labels(results: Any) -> list[tuple[str | None, Any]]:
     return [
         (getattr(r, "coalition", None), r) for r in results if getattr(r, "feasible", True)
     ]
+
+
+def _plans_and_failures(
+    results: Any,
+) -> tuple[list[tuple[str | None, Any]], list[tuple[str | None, Any]]]:
+    """Split any results shape into labeled (feasible, infeasible) lists.
+
+    Dispatches on shape: a ``Mapping`` keeps every value labeled by
+    ``str(key)``; a ``Sequence`` (excluding ``str``/``bytes``) labels each
+    entry by its ``coalition`` attribute; anything else is one bare result.
+    """
+    labeled: list[tuple[str | None, Any]]
+    if isinstance(results, Mapping):
+        labeled = [(str(k), v) for k, v in results.items()]
+    elif isinstance(results, Sequence) and not isinstance(results, (str, bytes)):
+        labeled = [(getattr(r, "coalition", None), r) for r in results]
+    else:
+        labeled = [(None, results)]
+
+    plans: list[tuple[str | None, Any]] = []
+    failures: list[tuple[str | None, Any]] = []
+    for label, r in labeled:
+        if isinstance(r, Infeasible) or getattr(r, "feasible", True) is False:
+            failures.append((label, r))
+        else:
+            plans.append((label, r))
+    return plans, failures
 
 
 def _target_bounds(target: Any, prob_space: bool) -> list[float]:
@@ -217,6 +544,19 @@ def _target_bounds(target: Any, prob_space: bool) -> list[float]:
     elif not prob_space and target.space == "probability":
         return []  # probability targets only exist for sigmoid models
     return [b for b in (lo, hi) if math.isfinite(b)]
+
+
+def _display_interval(target: Any, link: Any, space: str) -> tuple[float, float]:
+    """Target's raw interval, mapped to display space; infinite endpoints pass through."""
+    from treecf.ir.evaluate import apply_link
+    from treecf.ir.model import Link
+
+    resolved = ("probability" if link is Link.SIGMOID else "raw") if space == "auto" else space
+    lo, hi = target.raw_interval(link)
+    if resolved == "probability":
+        lo = apply_link(Link.SIGMOID, lo) if math.isfinite(lo) else lo
+        hi = apply_link(Link.SIGMOID, hi) if math.isfinite(hi) else hi
+    return lo, hi
 
 
 def plot_waterfall(explainer: Any, cf: Counterfactual, target: Any = None, ax: Any = None) -> Any:
@@ -334,6 +674,67 @@ def _change_effort(explainer: Any, changes: Mapping[str, tuple[float, float]]) -
             delta = abs(dest - source)
         efforts[name] = float(explainer.weights[j] * delta / explainer.sigma[j])
     return efforts
+
+
+def _format_plan(
+    name: str | None,
+    plan: Any,
+    explainer: Any,
+    fmt: str = "{:.3g}",
+    max_changes: int = 3,
+    *,
+    schematic: bool = False,
+) -> str:
+    """Arrow-label text for one plan: effort-ordered changes, one phrase per line.
+
+    NaN legs read as ``drop {feature}`` / ``provide {feature} = value``;
+    ``plan.region.describe()`` (when present) supplies a phrase for changes
+    it covers instead of ``feature = value``. Truncated to ``max_changes``
+    phrase lines with a trailing ``"(+k more)"`` line; ``schematic`` phrases
+    each line as an "If ..." / "and ..." clause instead of a bare value.
+    ``name``, when given, gets its own line in quantitative mode or prefixes
+    the "If" line in schematic mode. ``(J=...)`` is appended to the last line.
+    """
+    changes = plan.changes
+    efforts = _change_effort(explainer, changes)
+    region = getattr(plan, "region", None)
+    describe = getattr(region, "describe", None)
+    region_phrases: dict[str, str] = describe() if callable(describe) else {}
+    ordered = sorted(changes, key=lambda f: (-efforts[f], f))
+
+    parts = []
+    for f in ordered[:max_changes]:
+        source, dest = changes[f]
+        if math.isnan(dest):
+            parts.append(f"drop {f}")
+        elif math.isnan(source):
+            parts.append(f"provide {f} = {fmt.format(dest)}")
+        elif f in region_phrases:
+            parts.append(region_phrases[f])
+        else:
+            parts.append(f"{f} = {fmt.format(dest)}")
+
+    prefix = f"{name}: " if name is not None else ""
+    if schematic and parts:
+        lines = [f"{prefix}If {parts[0]}", *(f"and {p}" for p in parts[1:])]
+    else:
+        # No phrase lines to show (e.g. max_changes=0): fall back to the
+        # quantitative layout, which degrades gracefully to just the name
+        # line (if any) and the truncation/J line below.
+        lines = list(parts)
+        if name is not None:
+            lines.insert(0, f"{name}:")
+
+    remaining = len(ordered) - max_changes
+    if remaining > 0:
+        lines.append(f"(+{remaining} more)")
+
+    if not lines:
+        lines = [""]
+
+    j_suffix = f"(J={plan.distance:.3g})"
+    lines[-1] = f"{lines[-1]} {j_suffix}" if lines[-1] else j_suffix
+    return "\n".join(lines)
 
 
 def _import_pyplot() -> Any:

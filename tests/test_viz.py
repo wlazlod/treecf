@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pytest
 
@@ -205,6 +207,30 @@ def _waterfall_setup():
     return exp, res
 
 
+def _map_explainer(normalizers=None, constraints=()):
+    """Small inline-IR Explainer over features a/b/c, default sigmoid link."""
+    from treecf import Explainer
+    from treecf.ir.model import EnsembleIR, Link, Node, SplitOp, Tree
+
+    stump = Tree(
+        nodes=(
+            Node(0, 0, 1.0, SplitOp.LT, True, 1, 2, None),
+            Node(1, None, None, None, None, None, None, 0.0),
+            Node(2, None, None, None, None, None, None, 1.0),
+        )
+    )
+    ir = EnsembleIR(
+        trees=(stump,),
+        base_score=0.0,
+        link=Link.SIGMOID,
+        n_features=3,
+        feature_names=("a", "b", "c"),
+        meta={},
+    )
+    norm = np.ones(3) if normalizers is None else normalizers
+    return Explainer(ir, normalizers=norm, constraints=constraints)
+
+
 def test_plot_waterfall_bars_sum_to_score_move() -> None:
     from treecf.viz import plot_waterfall
 
@@ -254,3 +280,694 @@ def test_plot_effort_bars_sum_to_distance() -> None:
     assert sum(widths) == pytest.approx(res.distance)
     labels = [t.get_text() for t in ax.get_yticklabels()]
     assert set(labels) == {"big", "small"}
+
+
+def test_display_interval_raw_space_explicit_no_link_mapping() -> None:
+    from treecf.ir.model import Link
+    from treecf.viz import _display_interval
+
+    target = Target.raw(op=">=", value=0.5)
+    lo, hi = _display_interval(target, Link.SIGMOID, "raw")
+    assert lo == 0.5
+    assert hi == math.inf
+
+
+def test_display_interval_auto_identity_passthrough() -> None:
+    from treecf.ir.model import Link
+    from treecf.viz import _display_interval
+
+    target = Target.raw(op=">=", value=0.5)
+    lo, hi = _display_interval(target, Link.IDENTITY, "auto")
+    assert lo == 0.5
+    assert hi == math.inf
+
+
+def test_display_interval_auto_sigmoid_maps_finite_endpoint_only() -> None:
+    from treecf.ir.model import Link
+    from treecf.viz import _display_interval
+
+    target = Target.probability(range=(0.0, 0.05))
+    lo, hi = _display_interval(target, Link.SIGMOID, "auto")
+    assert lo == -math.inf
+    assert hi == pytest.approx(0.05)
+
+
+def test_plans_and_failures_bare_counterfactual() -> None:
+    from treecf.viz import _plans_and_failures
+
+    cf = _cf({"a": (0.0, 1.0)}, 1.0)
+    plans, failures = _plans_and_failures(cf)
+    assert plans == [(None, cf)]
+    assert failures == []
+
+
+def test_plans_and_failures_bare_infeasible() -> None:
+    from treecf.viz import _plans_and_failures
+
+    inf = Infeasible(reason="unreachable")
+    plans, failures = _plans_and_failures(inf)
+    assert plans == []
+    assert failures == [(None, inf)]
+
+
+def test_plans_and_failures_mapping_keeps_all_labeled_by_key_in_order() -> None:
+    from treecf.viz import _plans_and_failures
+
+    debt_cf = _cf({"a": (0.0, 1.0)}, 1.0)
+    income_inf = Infeasible(reason="unreachable")
+    behavior_cf = _cf({"b": (0.0, 2.0)}, 2.0)
+    outcomes = {"debt": debt_cf, "income": income_inf, "behavior": behavior_cf}
+    plans, failures = _plans_and_failures(outcomes)
+    assert plans == [("debt", debt_cf), ("behavior", behavior_cf)]
+    assert failures == [("income", income_inf)]
+
+
+def test_plans_and_failures_sequence_of_batch_records() -> None:
+    from treecf.batch import BatchRecord
+    from treecf.viz import _plans_and_failures
+
+    feasible = BatchRecord(
+        id=0, k=0, feasible=True, x_cf=np.zeros(3),
+        changes={"a": (0.0, 1.0)}, distance=1.0, n_changed=1,
+        score_raw=0.1, score_prob=None, coalition="grp1",
+    )
+    infeasible = BatchRecord(
+        id=0, k=0, feasible=False, x_cf=None, changes={},
+        distance=None, n_changed=None, score_raw=None, score_prob=None,
+        coalition="grp2",
+    )
+    plans, failures = _plans_and_failures([feasible, infeasible])
+    assert plans == [("grp1", feasible)]
+    assert failures == [("grp2", infeasible)]
+
+
+def test_format_plan_orders_changes_by_descending_effort() -> None:
+    from treecf.viz import _format_plan
+
+    exp = _map_explainer(normalizers=np.array([2.0, 1.0, 4.0]))
+    plan = _cf({"a": (0.0, 2.0), "b": (0.0, 3.0), "c": (0.0, 4.0)}, distance=5.0)
+    text = _format_plan(None, plan, exp)
+    assert text == "b = 3\na = 2\nc = 4 (J=5)"
+
+
+def test_format_plan_nan_legs_use_drop_and_provide_words() -> None:
+    from treecf import AllowMissing
+    from treecf.viz import _format_plan
+
+    exp = _map_explainer(
+        constraints=[
+            AllowMissing("a", delta_miss=0.3),
+            AllowMissing("b", delta_miss=0.3, delta_from_miss=0.5),
+        ]
+    )
+    plan = _cf(
+        {"a": (1.0, float("nan")), "b": (float("nan"), 2.0), "c": (0.0, 1.0)}, distance=1.8
+    )
+    text = _format_plan(None, plan, exp)
+    assert text == "c = 1\nprovide b = 2\ndrop a (J=1.8)"
+
+
+def test_format_plan_truncates_and_dresses_with_more_count() -> None:
+    from treecf.viz import _format_plan
+
+    exp = _map_explainer()
+    plan = _cf({"a": (0.0, 1.0), "b": (0.0, 2.0), "c": (0.0, 3.0)}, distance=6.0)
+    text = _format_plan(None, plan, exp, max_changes=2)
+    assert text == "c = 3\nb = 2\n(+1 more) (J=6)"
+
+
+def test_format_plan_uses_region_phrase_when_available() -> None:
+    from types import SimpleNamespace
+
+    from treecf.viz import _format_plan
+
+    exp = _map_explainer()
+
+    class _RegionStub:
+        def describe(self) -> dict[str, str]:
+            return {"a": "keep a within the safe band"}
+
+    plan = SimpleNamespace(
+        changes={"a": (0.0, 1.0)}, distance=1.0, region=_RegionStub()
+    )
+    text = _format_plan("bandA", plan, exp)
+    assert text == "bandA:\nkeep a within the safe band (J=1)"
+
+
+def test_format_plan_schematic_joins_with_if_and_and() -> None:
+    from treecf.viz import _format_plan
+
+    exp = _map_explainer()
+    plan = _cf({"a": (0.0, 1.0), "b": (0.0, 2.0)}, distance=3.0)
+    text = _format_plan("bandA", plan, exp, schematic=True)
+    assert text == "bandA: If b = 2\nand a = 1 (J=3)"
+
+
+def test_plot_recourse_map_smoke_single_cf() -> None:
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    plan = _cf({"a": (0.0, 2.0)}, distance=1.0, score_prob=0.7)
+    ax = plot_recourse_map(exp, np.zeros(3), [plan], Target.probability(op=">=", value=0.6))
+    assert ax.get_title() == "1 recourse option(s)"
+
+
+def test_plot_recourse_map_returns_given_ax() -> None:
+    import matplotlib.pyplot as plt
+
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    plan = _cf({"a": (0.0, 2.0)}, distance=1.0, score_prob=0.7)
+    _, ax0 = plt.subplots()
+    ax = plot_recourse_map(
+        exp, np.zeros(3), [plan], Target.probability(op=">=", value=0.6), ax=ax0
+    )
+    assert ax is ax0
+
+
+def test_plot_recourse_map_marker_and_arrow_counts() -> None:
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    plans = [
+        _cf({"a": (0.0, 2.0)}, distance=1.0, score_prob=0.6),
+        _cf({"b": (0.0, 3.0)}, distance=2.0, score_prob=0.7),
+    ]
+    ax = plot_recourse_map(
+        exp, np.zeros(3), plans, Target.probability(op=">=", value=0.6), annotate=False
+    )
+    dots = [ln for ln in ax.lines if ln.get_marker() == "o"]
+    assert len(dots) == 3  # factual + 2 plans
+    arrows = [t for t in ax.texts if t.get_text() == "" and t.arrow_patch is not None]
+    assert len(arrows) == 2
+
+
+def test_plot_recourse_map_draws_target_band() -> None:
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    plan = _cf({"a": (0.0, 2.0)}, distance=1.0, score_prob=0.7)
+    ax = plot_recourse_map(exp, np.zeros(3), [plan], Target.probability(op=">=", value=0.6))
+    assert len(ax.patches) == 1  # the axvspan band
+
+
+def test_plot_recourse_map_inverts_when_band_is_below_high_factual() -> None:
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    plan = _cf({"a": (2.0, 0.0)}, distance=1.0, score_prob=0.2)
+    ax = plot_recourse_map(
+        exp, np.array([2.0, 0.0, 0.0]), [plan], Target.probability(op="<=", value=0.3)
+    )
+    assert ax.xaxis_inverted()
+
+
+def test_plot_recourse_map_no_inversion_when_factual_inside_band() -> None:
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    plan = _cf({"b": (0.0, 1.0)}, distance=1.0, score_prob=0.6)
+    ax = plot_recourse_map(
+        exp, np.zeros(3), [plan], Target.probability(range=(0.3, 0.7))
+    )
+    assert not ax.xaxis_inverted()
+
+
+def test_plot_recourse_map_too_many_plans_raises() -> None:
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    plans = [_cf({"a": (0.0, float(i))}, distance=float(i + 1)) for i in range(11)]
+    with pytest.raises(TreecfError, match="at most 10 plans"):
+        plot_recourse_map(exp, np.zeros(3), plans, Target.probability(op=">=", value=0.5))
+
+
+def test_plot_recourse_map_empty_raises_no_plans_message() -> None:
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    with pytest.raises(TreecfError, match="no plans to plot"):
+        plot_recourse_map(exp, np.zeros(3), [], Target.probability(op=">=", value=0.5))
+
+
+def test_plot_recourse_map_identity_link_never_touches_score_prob() -> None:
+    from types import SimpleNamespace
+
+    from treecf import Explainer
+    from treecf.ir.model import EnsembleIR, Link, Node, SplitOp, Tree
+    from treecf.viz import plot_recourse_map
+
+    stump = Tree(
+        nodes=(
+            Node(0, 0, 1.0, SplitOp.LT, True, 1, 2, None),
+            Node(1, None, None, None, None, None, None, 0.0),
+            Node(2, None, None, None, None, None, None, 1.0),
+        )
+    )
+    ir = EnsembleIR(
+        trees=(stump,), base_score=0.0, link=Link.IDENTITY,
+        n_features=3, feature_names=("a", "b", "c"), meta={},
+    )
+    exp = Explainer(ir, normalizers=np.ones(3))
+    plan = SimpleNamespace(changes={"a": (0.0, 2.0)}, distance=1.0, score_raw=0.8)
+    ax = plot_recourse_map(exp, np.zeros(3), [plan], Target.raw(op=">=", value=0.5))
+    assert ax.get_xlabel() == "model output (raw score)"
+
+
+def test_plot_recourse_map_annotate_false_and_no_factual_label_has_no_text() -> None:
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    plans = [
+        _cf({"a": (0.0, 2.0)}, distance=1.0, score_prob=0.6),
+        _cf({"b": (0.0, 3.0)}, distance=2.0, score_prob=0.7),
+    ]
+    ax = plot_recourse_map(
+        exp,
+        np.zeros(3),
+        plans,
+        Target.probability(op=">=", value=0.6),
+        annotate=False,
+        show_factual_label=False,
+    )
+    labels = [t.get_text() for t in ax.texts if t.get_text()]
+    assert labels == []
+
+
+def test_plot_recourse_map_annotate_false_alone_suppresses_factual_block() -> None:
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    plan = _cf({"a": (1.0, 2.0)}, distance=1.0, score_prob=0.65)
+    ax = plot_recourse_map(
+        exp,
+        np.array([1.0, 0.0, 0.0]),
+        [plan],
+        Target.probability(op=">=", value=0.6),
+        schematic=True,
+        annotate=False,  # show_factual_label left at its default True
+    )
+    assert not any("a = 1" in t.get_text() for t in ax.texts)
+
+
+def test_plot_recourse_map_annotate_false_still_labels_infeasible_entries() -> None:
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    results = {
+        "debt": _cf({"a": (0.0, 1.0)}, distance=1.0, score_prob=0.65),
+        "income": Infeasible(reason="unreachable"),
+    }
+    ax = plot_recourse_map(
+        exp, np.zeros(3), results, Target.probability(op=">=", value=0.6), annotate=False
+    )
+    texts = [t.get_text() for t in ax.texts]
+    assert "income: infeasible" in texts
+
+
+def test_plot_recourse_map_infeasible_markers_and_labels() -> None:
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    results = {
+        "debt": _cf({"a": (0.0, 1.0)}, distance=1.0, score_prob=0.65),
+        "behavior": _cf({"b": (0.0, 2.0)}, distance=2.0, score_prob=0.7),
+        "income": Infeasible(reason="unreachable"),
+    }
+    ax = plot_recourse_map(exp, np.zeros(3), results, Target.probability(op=">=", value=0.6))
+    greens = [ln for ln in ax.lines if ln.get_marker() == "o" and ln.get_color() == "tab:green"]
+    greys = [ln for ln in ax.lines if ln.get_marker() == "x"]
+    assert len(greens) == 2
+    assert len(greys) == 1
+    texts = [t.get_text() for t in ax.texts]
+    assert "income: infeasible" in texts
+    assert not any("certified" in t for t in texts)
+
+
+def test_plot_recourse_map_all_infeasible_draws_only_markers() -> None:
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    failures = {
+        "income": Infeasible(reason="unreachable"),
+        "debt": Infeasible(reason="constraint violated"),
+    }
+    ax = plot_recourse_map(exp, np.zeros(3), failures, Target.probability(op=">=", value=0.6))
+    greens = [ln for ln in ax.lines if ln.get_marker() == "o" and ln.get_color() == "tab:green"]
+    greys = [ln for ln in ax.lines if ln.get_marker() == "x"]
+    assert len(greens) == 0
+    assert len(greys) == 2
+
+
+def test_plot_recourse_map_infeasible_certified_stub_appends_word() -> None:
+    from types import SimpleNamespace
+
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    plan = _cf({"a": (0.0, 1.0)}, distance=1.0, score_prob=0.65)
+    infeasible = SimpleNamespace(feasible=False, proof="certified")
+    ax = plot_recourse_map(
+        exp, np.zeros(3), [plan, infeasible], Target.probability(op=">=", value=0.6)
+    )
+    texts = [t.get_text() for t in ax.texts]
+    assert "infeasible (certified)" in texts
+
+
+def test_plot_recourse_map_labels_use_drop_and_provide_words() -> None:
+    from treecf import AllowMissing
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer(constraints=[AllowMissing("a", delta_miss=0.3)])
+    plan = _cf({"a": (1.0, float("nan"))}, distance=0.5, score_prob=0.65)
+    ax = plot_recourse_map(
+        exp,
+        np.array([1.0, 0.0, 0.0]),
+        [plan],
+        Target.probability(op=">=", value=0.6),
+        schematic=True,
+    )
+    texts = " ".join(t.get_text() for t in ax.texts)
+    assert "drop a" in texts
+
+
+def test_plot_recourse_map_max_changes_per_label_truncates() -> None:
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    plan = _cf(
+        {"a": (0.0, 1.0), "b": (0.0, 2.0), "c": (0.0, 3.0)}, distance=6.0, score_prob=0.65
+    )
+    ax = plot_recourse_map(
+        exp,
+        np.zeros(3),
+        [plan],
+        Target.probability(op=">=", value=0.6),
+        max_changes_per_label=1,
+        schematic=True,
+    )
+    texts = " ".join(t.get_text() for t in ax.texts)
+    assert "(+2 more)" in texts
+
+
+def test_plot_recourse_map_quantitative_labels_are_one_line_name_and_j() -> None:
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    plan = _cf({"a": (0.0, 2.0), "b": (0.0, 3.0)}, distance=1.5, score_prob=0.7)
+    ax = plot_recourse_map(
+        exp, np.zeros(3), {"debt": plan}, Target.probability(op=">=", value=0.6)
+    )
+    texts = [t.get_text() for t in ax.texts if t.get_text()]
+    assert "debt (J=1.5)" in texts
+    assert all("\n" not in t for t in texts)  # no change-list detail on the canvas
+
+
+def test_plot_recourse_map_quantitative_unnamed_plans_use_ordinal() -> None:
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    plans = [
+        _cf({"a": (0.0, 1.0)}, distance=1.0, score_prob=0.6),
+        _cf({"b": (0.0, 2.0)}, distance=2.0, score_prob=0.7),
+    ]
+    ax = plot_recourse_map(exp, np.zeros(3), plans, Target.probability(op=">=", value=0.6))
+    texts = {t.get_text() for t in ax.texts if t.get_text()}
+    assert "plan 1 (J=1)" in texts  # ascending-distance order, matching plot_alternatives
+    assert "plan 2 (J=2)" in texts
+
+
+def test_plot_recourse_map_quantitative_never_draws_factual_block() -> None:
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    plan = _cf({"a": (1.0, 2.0)}, distance=1.0, score_prob=0.65)
+    ax = plot_recourse_map(
+        exp,
+        np.array([1.0, 0.0, 0.0]),
+        [plan],
+        Target.probability(op=">=", value=0.6),
+        show_factual_label=True,  # still no block: quantitative mode drops it entirely
+    )
+    texts = [t.get_text() for t in ax.texts]
+    assert not any("factual:" in t for t in texts)
+    assert not any("a = 1" in t for t in texts)
+
+
+def test_plot_recourse_map_quantitative_ylim_top_stays_tight_without_failures() -> None:
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    plan = _cf({"a": (0.0, 2.0)}, distance=10.0, score_prob=0.7)
+    ax = plot_recourse_map(exp, np.zeros(3), [plan], Target.probability(op=">=", value=0.6))
+    _, top = ax.get_ylim()
+    assert top <= 1.15 * 10.0
+
+
+def test_plot_recourse_map_schematic_max_changes_zero_does_not_crash() -> None:
+    """Regression: schematic + max_changes_per_label=0 used to IndexError on parts[0]."""
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    plan = _cf(
+        {"a": (0.0, 1.0), "b": (0.0, 2.0), "c": (0.0, 3.0)}, distance=6.0, score_prob=0.65
+    )
+    ax = plot_recourse_map(
+        exp,
+        np.zeros(3),
+        [plan],
+        Target.probability(op=">=", value=0.6),
+        schematic=True,
+        max_changes_per_label=0,
+    )
+    texts = " ".join(t.get_text() for t in ax.texts)
+    assert "(+3 more)" in texts
+    assert "(J=6)" in texts
+
+
+def test_plot_recourse_map_factual_label_present_and_absent() -> None:
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    plan = _cf({"a": (1.0, 2.0)}, distance=1.0, score_prob=0.65)
+    ax_on = plot_recourse_map(
+        exp,
+        np.array([1.0, 0.0, 0.0]),
+        [plan],
+        Target.probability(op=">=", value=0.6),
+        schematic=True,
+    )
+    assert any("a = 1" in t.get_text() for t in ax_on.texts)
+    assert any("factual:" in t.get_text() for t in ax_on.texts)
+
+    ax_off = plot_recourse_map(
+        exp,
+        np.array([1.0, 0.0, 0.0]),
+        [plan],
+        Target.probability(op=">=", value=0.6),
+        schematic=True,
+        show_factual_label=False,
+    )
+    assert not any("a = 1" in t.get_text() for t in ax_off.texts)
+
+
+def test_plot_recourse_map_region_phrase_end_to_end() -> None:
+    from types import SimpleNamespace
+
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+
+    class _RegionStub:
+        def describe(self) -> dict[str, str]:
+            return {"a": "keep a within [0, 5]"}
+
+    plan = SimpleNamespace(
+        changes={"a": (0.0, 1.0)}, distance=1.0, score_prob=0.65, region=_RegionStub()
+    )
+    ax = plot_recourse_map(
+        exp, np.zeros(3), [plan], Target.probability(op=">=", value=0.6), schematic=True
+    )
+    texts = " ".join(t.get_text() for t in ax.texts)
+    assert "keep a within [0, 5]" in texts
+
+
+def test_plot_recourse_map_schematic_hides_ticks_spines_and_band() -> None:
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    plan = _cf({"a": (0.0, 2.0)}, distance=1.0, score_prob=0.7)
+    ax = plot_recourse_map(
+        exp, np.zeros(3), [plan], Target.probability(op=">=", value=0.6), schematic=True
+    )
+    assert len(ax.get_xticks()) == 0
+    assert len(ax.get_yticks()) == 0
+    assert not any(spine.get_visible() for spine in ax.spines.values())
+    assert len(ax.patches) == 0  # axvspan band dropped
+    assert ax.get_title() == ""
+    assert ax.get_xlabel() == ""
+    assert ax.get_ylabel() == ""
+
+
+def test_plot_recourse_map_schematic_wavy_boundary_has_200_samples_and_spans_ylim() -> None:
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    plan = _cf({"a": (0.0, 2.0)}, distance=1.0, score_prob=0.7)
+    ax = plot_recourse_map(
+        exp, np.zeros(3), [plan], Target.probability(op=">=", value=0.6), schematic=True
+    )
+    waves = [
+        ln for ln in ax.lines if ln.get_linestyle() == "--" and ln.get_color() == "tab:blue"
+    ]
+    assert len(waves) == 1  # one finite target edge
+    xdata, ydata = waves[0].get_data()
+    assert len(xdata) == 200
+    ylo, yhi = ax.get_ylim()
+    assert ydata[0] == pytest.approx(ylo)
+    assert ydata[-1] == pytest.approx(yhi)
+
+
+def test_plot_recourse_map_schematic_region_labels_and_boundary_annotation() -> None:
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    plan = _cf({"a": (0.0, 2.0)}, distance=1.0, score_prob=0.7)
+    ax = plot_recourse_map(
+        exp,
+        np.zeros(3),
+        [plan],
+        Target.probability(op=">=", value=0.6),
+        schematic=True,
+        annotate=False,  # region labels/boundary draw regardless of annotate
+    )
+    texts = [t.get_text() for t in ax.texts]
+    assert "Reject" in texts
+    assert "Accept" in texts
+    assert "ML model decision boundary" in texts
+
+
+def test_plot_recourse_map_schematic_custom_region_labels() -> None:
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    plan = _cf({"a": (0.0, 2.0)}, distance=1.0, score_prob=0.7)
+    ax = plot_recourse_map(
+        exp,
+        np.zeros(3),
+        [plan],
+        Target.probability(op=">=", value=0.6),
+        schematic=True,
+        region_labels=("No", "Yes"),
+    )
+    texts = [t.get_text() for t in ax.texts]
+    assert "No" in texts
+    assert "Yes" in texts
+    assert "Reject" not in texts
+    assert "Accept" not in texts
+
+
+def test_plot_recourse_map_schematic_plan_labels_start_with_if() -> None:
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    plan = _cf({"a": (0.0, 2.0)}, distance=1.0, score_prob=0.7)
+    ax = plot_recourse_map(
+        exp, np.zeros(3), [plan], Target.probability(op=">=", value=0.6), schematic=True
+    )
+    texts = [t.get_text() for t in ax.texts]
+    assert any(t.startswith("If ") for t in texts)
+
+
+def test_plot_recourse_map_inverted_labels_stay_inside_axes() -> None:
+    """Regression for PR #18 feedback: labels must not escape the axes.
+
+    Uses the low-side (inverted) fixture, where the old offset/ha flip put
+    plan and infeasible labels on the wrong side of the plot, spilling text
+    past the axes edge. Every rendered text's window extent must lie inside
+    the axes bbox (small pixel tolerance for anti-aliasing/rounding).
+    """
+    import matplotlib.pyplot as plt
+
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    results = {
+        "debt history": _cf(
+            {"a": (2.0, 0.0), "b": (1.0, 0.0)}, distance=1.0, score_prob=0.2
+        ),
+        "income": Infeasible(reason="unreachable"),
+    }
+    fig, ax = plt.subplots()
+    ax = plot_recourse_map(
+        exp, np.array([2.0, 0.0, 0.0]), results, Target.probability(op="<=", value=0.3), ax=ax
+    )
+    assert ax.xaxis_inverted()
+    fig.canvas.draw()
+    ax_bbox = ax.get_window_extent()
+    tol = 2.0  # px tolerance
+    checked_any = False
+    for t in ax.texts:
+        if not t.get_text():
+            continue
+        checked_any = True
+        text_bbox = t.get_window_extent()
+        assert text_bbox.x0 >= ax_bbox.x0 - tol
+        assert text_bbox.x1 <= ax_bbox.x1 + tol
+    assert checked_any
+
+
+def _axes_frac_x(ax, data_x):
+    """Data-space x, transformed to axes-fraction x (0=left edge, 1=right edge)."""
+    display = ax.transData.transform((data_x, 0.0))
+    return float(ax.transAxes.inverted().transform(display)[0])
+
+
+def test_plot_recourse_map_schematic_accept_label_matches_accept_screen_side() -> None:
+    """Accept/Reject label sides track real geometry, not the inversion flag directly.
+
+    ``invert_xaxis()`` fires exactly when the band lies below the factual, which
+    flips the data->screen mapping so the accept side is screen-right in both
+    orientations — checked here against the actual plotted dot positions rather
+    than hardcoded fx values, for both an increase-direction and a
+    decrease-direction target.
+    """
+    from treecf.viz import plot_recourse_map
+
+    exp = _map_explainer()
+    cases = [
+        (
+            Target.probability(op=">=", value=0.6),
+            _cf({"a": (0.0, 2.0)}, distance=1.0, score_prob=0.7),
+            np.zeros(3),
+            False,
+        ),
+        (
+            Target.probability(op="<=", value=0.3),
+            _cf({"a": (2.0, 0.0)}, distance=1.0, score_prob=0.2),
+            np.array([2.0, 0.0, 0.0]),
+            True,
+        ),
+    ]
+    for target, plan, x_factual, expect_inverted in cases:
+        ax = plot_recourse_map(exp, x_factual, [plan], target, schematic=True)
+        assert bool(ax.xaxis_inverted()) == expect_inverted
+
+        accept_fx = next(t for t in ax.texts if t.get_text() == "Accept").get_position()[0]
+        reject_fx = next(t for t in ax.texts if t.get_text() == "Reject").get_position()[0]
+        assert accept_fx > reject_fx
+
+        plan_dot = next(
+            ln for ln in ax.lines if ln.get_marker() == "o" and ln.get_color() == "tab:green"
+        )
+        factual_dot = next(
+            ln for ln in ax.lines if ln.get_marker() == "o" and ln.get_color() == "tab:red"
+        )
+        plan_fx = _axes_frac_x(ax, plan_dot.get_xdata()[0])
+        factual_fx = _axes_frac_x(ax, factual_dot.get_xdata()[0])
+
+        # Accept sits on the same screen side as the (accepted) plan's dot;
+        # Reject sits on the same screen side as the factual's dot.
+        assert (accept_fx > 0.5) == (plan_fx > 0.5)
+        assert (reject_fx > 0.5) == (factual_fx > 0.5)

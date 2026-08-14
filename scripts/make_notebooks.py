@@ -326,6 +326,21 @@ def tutorial() -> nbf.NotebookNode:
             "plot_tradeoff(grouped, target=Target.probability(range=(0.0, cutoff)));"
         ),
         nbf.v4.new_markdown_cell(
+            "The x-position above is the real model output, so the boundary in this "
+            "plot is the actual target band, not an illustration."
+        ),
+        nbf.v4.new_code_cell(
+            "import matplotlib.pyplot as plt\n\n"
+            "from treecf.viz import plot_recourse_map\n\n"
+            "fig, axes = plt.subplots(1, 2, figsize=(13, 4.5))\n"
+            "plot_recourse_map(exp, applicant, grouped,\n"
+            "                  target=Target.probability(range=(0.0, cutoff)), ax=axes[0])\n"
+            "plot_recourse_map(exp, applicant, grouped,\n"
+            "                  target=Target.probability(range=(0.0, cutoff)), ax=axes[1],\n"
+            "                  schematic=True)\n"
+            "fig.tight_layout();"
+        ),
+        nbf.v4.new_markdown_cell(
             "The same mode scales to the whole batch: one record per coalition per "
             "applicant, with the group name in the `coalition` column."
         ),
