@@ -1,13 +1,15 @@
 """Exact backend — domains, state costs, canonical orders, branch-and-bound search.
 
-This file is the Python reference implementation of the exact backend; a Rust
-mirror lands later and must match it bit-for-bit, so operation order in the
-cost arithmetic below is a compatibility contract, not a style choice — every
-multiply/divide/add mirrors ``treecf.backends.genetic``'s ``objective()``
-term-for-term. The same contract governs the score brackets the search prunes
-on: they are re-summed in full over the trees in ascending index after every
-assignment, never patched with an incremental delta, so the two
-implementations take the same prune decisions and expand the same nodes.
+This file, ``_exact_orderpairs`` and ``_exact_propagation`` are one
+implementation, split across three files for size alone. Together they are the
+Python reference for the exact backend; a Rust mirror lands later and must
+match all three bit-for-bit, so operation order in the cost arithmetic below is
+a compatibility contract, not a style choice — every multiply/divide/add
+mirrors ``treecf.backends.genetic``'s ``objective()`` term-for-term. The same
+contract governs the score brackets the search prunes on: they are re-summed in
+full over the trees in ascending index after every assignment, never patched
+with an incremental delta, so the two implementations take the same prune
+decisions and expand the same nodes.
 
 ``_build_domains`` turns a factual, the joint cell grid, and the compiled
 constraints into a per-feature list of candidate counterfactual states — the
@@ -64,6 +66,13 @@ import numpy.typing as npt
 from treecf._errors import ConstraintValidationError
 from treecf.aim.cells import Cell, cell_index, feature_cells
 from treecf.api import ValuePolicy, _snap
+from treecf.backends._exact_orderpairs import (
+    _achievable_bounds,
+    _boundary_candidates,
+    _domain_span,
+    _intersect_cell,
+)
+from treecf.backends._exact_propagation import _Propagation, _PropFrame
 from treecf.constraints.compile import CompiledConstraints
 from treecf.constraints.objects import (
     AllowMissing,
@@ -171,124 +180,6 @@ def _cost_of_row(
             float(x[j]), float(row[j]), float(weights[j]), float(sigma[j]), lam, to_miss, from_miss
         )
     return total
-
-
-def _intersect_cell(cell: Cell, lo: float, hi: float) -> Cell | None:
-    """``cell`` ∩ ``[lo, hi]``; ``lo``/``hi`` are always closed bounds. ``None``
-    if the intersection is empty (including a degenerate open singleton)."""
-    if cell.lo > lo:
-        new_lo, new_lo_open = cell.lo, cell.lo_open
-    elif lo > cell.lo:
-        new_lo, new_lo_open = lo, False
-    else:
-        new_lo, new_lo_open = cell.lo, cell.lo_open
-    if cell.hi < hi:
-        new_hi, new_hi_open = cell.hi, cell.hi_open
-    elif hi < cell.hi:
-        new_hi, new_hi_open = hi, False
-    else:
-        new_hi, new_hi_open = cell.hi, cell.hi_open
-    if new_lo > new_hi:
-        return None
-    if new_lo == new_hi and (new_lo_open or new_hi_open):
-        return None
-    return Cell(new_lo, new_hi, new_lo_open, new_hi_open)
-
-
-def _intersect_cells(first: Cell, second: Cell) -> Cell | None:
-    """``first`` ∩ ``second``, keeping the tighter edge on each side and the
-    open edge when both sides sit at the same value. ``None`` if the
-    intersection is empty (including a degenerate open singleton)."""
-    if first.lo > second.lo:
-        lo, lo_open = first.lo, first.lo_open
-    elif second.lo > first.lo:
-        lo, lo_open = second.lo, second.lo_open
-    else:
-        lo, lo_open = first.lo, first.lo_open or second.lo_open
-    if first.hi < second.hi:
-        hi, hi_open = first.hi, first.hi_open
-    elif second.hi < first.hi:
-        hi, hi_open = second.hi, second.hi_open
-    else:
-        hi, hi_open = first.hi, first.hi_open or second.hi_open
-    if lo > hi:
-        return None
-    if lo == hi and (lo_open or hi_open):
-        return None
-    return Cell(lo, hi, lo_open, hi_open)
-
-
-def _achievable_bounds(cell: Cell) -> tuple[float, float]:
-    """Lowest and highest value the cell can actually take.
-
-    A closed edge is its own bound; a finite open edge steps one f32 ulp
-    inside, the same step ``nearest_to`` takes, so the endpoints returned here
-    are values a counterfactual may really hold. An infinite open edge stays
-    infinite — no point of the cell is extreme in that direction.
-    """
-    lo = cell.lo
-    if cell.lo_open and lo != -math.inf:
-        lo = cell.nearest_to(cell.lo)
-    hi = cell.hi
-    if cell.hi_open and hi != math.inf:
-        hi = cell.nearest_to(cell.hi)
-    return lo, hi
-
-
-def _domain_span(
-    states: list[_State], cells: tuple[Cell, ...], lo_j: float, hi_j: float
-) -> tuple[float, float] | None:
-    """Lowest and highest value the feature can still end up holding.
-
-    The span covers the achievable ends of every cell the feature's states
-    come from, not the states' own values: a value inside one of those cells
-    is exactly what an order-pair repair may put there later, so a bound built
-    on the state values alone would cut off repairs that are still reachable.
-
-    ``None`` when the feature may go missing — a missing value has no place in
-    an order comparison, so no bound on it holds at all.
-    """
-    span_lo = math.inf
-    span_hi = -math.inf
-    for state in states:
-        if state.is_nan:
-            return None
-        iv = _intersect_cell(cells[state.cell_idx], lo_j, hi_j)
-        if iv is None:  # pragma: no cover - a state's own cell always survives
-            continue
-        cell_lo, cell_hi = _achievable_bounds(iv)
-        span_lo = min(span_lo, cell_lo)
-        span_hi = max(span_hi, cell_hi)
-    if span_lo > span_hi:
-        return None
-    return span_lo, span_hi
-
-
-def _boundary_candidates(cell_a: Cell, cell_b: Cell, x_a: float, x_b: float) -> list[float]:
-    """Values worth trying when a pair ``a <= b`` has to be pulled onto the
-    boundary ``a' == b' == t``.
-
-    ``cell_a`` and ``cell_b`` are the two features' cells already intersected
-    with their constraint bounds, so ``t`` has to lie in the intersection of
-    the two. Summed over the pair the cost is piecewise linear in ``t`` with
-    kinks only at the two factual values, so the cheapest ``t`` is one of
-    those two or one of the interval's own ends. They are returned in that
-    fixed order — factual of ``a``, factual of ``b``, low end, high end —
-    which is what makes the choice between equally cheap repairs
-    reproducible. Values outside the interval, missing values and infinite
-    ends drop out, and a repeat of an earlier candidate is not offered twice.
-    An empty list means the pair cannot be repaired inside these cells at all.
-    """
-    iv = _intersect_cells(cell_a, cell_b)
-    if iv is None:
-        return []
-    ach_lo, ach_hi = _achievable_bounds(iv)
-    out: list[float] = []
-    for t in (x_a, x_b, ach_lo, ach_hi):
-        if not math.isfinite(t) or not iv.contains(t) or t in out:
-            continue
-        out.append(t)
-    return out
 
 
 def _build_domains(
@@ -718,113 +609,6 @@ class _EnsembleBounds:
         # prune or sum can differ — but a harness comparing stored brackets by
         # raw bits would see it.
         return min(left_min, right_min), max(left_max, right_max)
-
-
-# what one assignment changed in the propagation state: the features it settled
-# (with their previous setting) and the one-hot counters it moved (with their
-# previous readings). Both are stored as old values rather than deltas, for the
-# same reason the cost is: putting a saved value back cannot drift.
-_PropFrame = tuple[
-    tuple[tuple[int, float | None], ...],
-    tuple[tuple[int, int, int], ...],
-]
-
-
-class _Propagation:
-    """What assigning one feature settles about the features that follow it.
-
-    Two constraint kinds reach past the feature they name. An implication
-    settles its consequence the moment its condition is met, and a one-hot
-    group settles its last free member once every other member is a zero. A
-    later state that disagrees with such a settlement cannot be completed into
-    anything the arbiter would accept, so the search cuts it unexplored.
-
-    ``apply`` reports what it changed so ``restore`` can put the previous
-    state back on the way out of a branch, and reports separately whether the
-    assignment contradicts something already settled — on a contradiction the
-    changes made up to that point are still reported, since the caller
-    restores the frame either way.
-
-    One-hot bookkeeping only runs for groups whose members can hold nothing
-    but 0 and 1. A member offering some other value — a factual that is not
-    binary, or a missing state — could still make its group sum to one in ways
-    these counters do not model, so such a group is left to the arbiter alone.
-
-    ``assigned`` and ``values`` are the search's own arrays, shared by
-    reference, so this reads the one assignment everything else reads.
-    """
-
-    def __init__(
-        self,
-        compiled: CompiledConstraints,
-        domains: list[list[_State]],
-        assigned: list[bool],
-        values: list[float],
-    ) -> None:
-        self.implications = compiled.implications
-        self.groups = compiled.onehot_groups
-        self.assigned = assigned
-        self.values = values
-        self.group_of: dict[int, int] = {}
-        for g_idx, group in enumerate(self.groups):
-            if all(s.value in (0.0, 1.0) for f in group for s in domains[f]):
-                for f in group:
-                    self.group_of[f] = g_idx
-        self.forced_value: list[float | None] = [None] * len(assigned)
-        self.ones = [0] * len(self.groups)
-        self.zeros = [0] * len(self.groups)
-
-    def apply(self, j: int, v: float) -> tuple[_PropFrame, bool]:
-        """Settle what follows from ``j`` taking ``v``; report any contradiction."""
-        settled: list[tuple[int, float | None]] = []
-        counters: list[tuple[int, int, int]] = []
-
-        def force(f: int, value: float) -> bool:
-            if self.assigned[f]:
-                return self.values[f] == value
-            current = self.forced_value[f]
-            if current is not None:
-                return current == value
-            settled.append((f, None))
-            self.forced_value[f] = value
-            return True
-
-        def done(conflict: bool) -> tuple[_PropFrame, bool]:
-            return (tuple(settled), tuple(counters)), conflict
-
-        if self.forced_value[j] is not None and v != self.forced_value[j]:
-            return done(True)
-        g_idx = self.group_of.get(j)
-        if g_idx is not None:
-            group = self.groups[g_idx]
-            counters.append((g_idx, self.ones[g_idx], self.zeros[g_idx]))
-            if v == 1.0:
-                self.ones[g_idx] += 1
-            else:
-                self.zeros[g_idx] += 1
-            # a second one, or nothing but zeros: the group can no longer sum
-            # to one. The all-zeros reading is a backstop -- settling the last
-            # free member normally catches that case one assignment earlier.
-            if self.ones[g_idx] > 1 or self.zeros[g_idx] == len(group):
-                return done(True)
-            if self.ones[g_idx] == 0 and self.zeros[g_idx] == len(group) - 1:
-                last = next(f for f in group if f != j and not self.assigned[f])
-                if not force(last, 1.0):
-                    return done(True)
-        for imp in self.implications:
-            triggered = imp.cond_index == j and v == imp.cond_value
-            if triggered and not force(imp.cons_index, imp.cons_value):
-                return done(True)
-        return done(False)
-
-    def restore(self, frame: _PropFrame) -> None:
-        """Put back everything one ``apply`` settled."""
-        settled, counters = frame
-        for f, previous in reversed(settled):
-            self.forced_value[f] = previous
-        for g_idx, ones, zeros in reversed(counters):
-            self.ones[g_idx] = ones
-            self.zeros[g_idx] = zeros
 
 
 # (feature index, model bracket frame, plausibility bracket frame, cost before
