@@ -5,10 +5,21 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from treecf import Counterfactual, Explainer, Freeze, Infeasible, Target
+from treecf import (
+    ConstraintValidationError,
+    Counterfactual,
+    Explainer,
+    Freeze,
+    Infeasible,
+    Linear,
+    Target,
+)
+from treecf.constraints.compile import compile_constraints
 from treecf.ir.model import EnsembleIR, Link, Node, SplitOp, Tree
 
 pytestmark = pytest.mark.rust
+
+_treecf_core = pytest.importorskip("treecf._treecf_core")
 
 
 def _stump() -> EnsembleIR:
@@ -142,3 +153,51 @@ def test_explain_coalitions_reuses_the_parent_marshaled_ensemble(monkeypatch) ->
     assert len(calls) == 1  # both coalition clones reused the parent's marshaled ensemble
     assert isinstance(results["a-only"], Counterfactual)
     assert isinstance(results["b-only"], Infeasible)  # b alone never moves the score
+
+
+def test_unsupported_linear_shape_raises_constraint_validation_error_via_rust() -> None:
+    """A multi-feature Linear outside the canonical order-pair shape
+    (coefficients other than exactly one +1 and one -1) is rejected by
+    `solve_exact`'s own `validate` on both engines. Through the rust path
+    that comes back as a `PyValueError`, which `exact_rust.py` re-raises as
+    `ConstraintValidationError` -- asserted by TYPE only, no message text."""
+    exp = Explainer(
+        _stump(),
+        normalizers=np.ones(2),
+        constraints=[Linear({"a": 1.0, "b": 1.0}, op="<=", rhs=1.0)],
+    )
+    with pytest.raises(ConstraintValidationError):
+        exp.explain(
+            np.array([0.0, 0.0]),
+            target=Target.raw(op=">=", value=0.5),
+            backend="exact",
+            warm_start=False,
+        )
+
+
+def test_marshaling_length_mismatch_surfaces_as_runtime_error_not_constraint_error() -> None:
+    """A wrong-length value-policy array is a marshaling bug on the python
+    side of the boundary, not a user-facing constraint problem: it must
+    surface as a plain `RuntimeError`, never `ConstraintValidationError`.
+    Exercised directly through the test-only `debug_domains_raw` binding
+    (`solve_exact_raw` shares the same `marshal_value_policies` helper)."""
+    from treecf.backends.genetic_rust import build_rust_constraints, build_rust_ensemble
+
+    ir = _stump()
+    compiled = compile_constraints([], ir.feature_names)
+    ens = build_rust_ensemble(ir)
+    cons = build_rust_constraints(compiled)
+
+    wrong_length_code = np.zeros(1, dtype=np.uint8)  # ir has 2 features, not 1
+    with pytest.raises(RuntimeError):
+        _treecf_core.debug_domains_raw(
+            ens,
+            cons,
+            np.array([0.0, 0.0]),
+            np.ones(2),
+            np.ones(2),
+            0.0,
+            wrong_length_code,
+            np.zeros(2),
+            np.zeros(2),
+        )

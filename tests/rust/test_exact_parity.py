@@ -64,8 +64,19 @@ def diff_exact_results(
         problems.append(f"proof: python={python_result.proof!r} rust={rust_result.proof!r}")
     if rust_result.snapped != python_result.snapped:
         problems.append(f"snapped: python={python_result.snapped!r} rust={rust_result.snapped!r}")
-    if rust_result.stats != python_result.stats:
-        problems.append(f"stats: python={python_result.stats!r} rust={rust_result.stats!r}")
+    # int/bool stats fields compare by plain equality; the two float fields
+    # (lower_bound, gap) go through _bits(), same as distance -- plain `==`
+    # would let a 0.0/-0.0 mismatch slip through unnoticed
+    for key in ("nodes_expanded", "nodes_pruned_score", "nodes_pruned_cost", "completed",
+                "warm_start_used"):
+        if rust_result.stats[key] != python_result.stats[key]:
+            problems.append(
+                f"stats.{key}: python={python_result.stats[key]!r} rust={rust_result.stats[key]!r}"
+            )
+    for key in ("lower_bound", "gap"):
+        rs_bits, py_bits = _bits(rust_result.stats[key]), _bits(python_result.stats[key])
+        if rs_bits != py_bits:
+            problems.append(f"stats.{key} bits: python={py_bits!r} rust={rs_bits!r}")
     return problems
 
 

@@ -144,10 +144,14 @@ def solve_exact_rust(
             incumbent_row=incumbent_row,
         )
     except ValueError as exc:
-        # the one fallible path inside solve_exact_raw is the same order-pair
-        # validation solve_exact's own _validate performs (an unsupported
-        # multi-feature Linear shape); re-raised as the same exception type
-        # the python backend uses, never compared by message text
+        # solve_exact_raw raises ValueError for exactly one thing: the same
+        # order-pair validation solve_exact's own _validate performs (an
+        # unsupported multi-feature Linear shape) -- re-raised as the same
+        # exception type the python backend uses, never compared by message
+        # text. A marshaling bug on this side of the boundary (mismatched
+        # array lengths, an unrecognized policy code) raises RuntimeError
+        # instead and is deliberately NOT caught here: that is a bug, not a
+        # user-facing constraint problem, and it should propagate as one.
         raise ConstraintValidationError(str(exc)) from exc
 
     (

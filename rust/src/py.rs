@@ -4,7 +4,7 @@ use numpy::{
     IntoPyArray, PyArray1, PyArray2, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray2,
     PyUntypedArrayMethods,
 };
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 
 use crate::constraints::{Constraints, LinearC};
@@ -15,13 +15,20 @@ use crate::ir::{Ensemble, Link};
 /// Per-feature value-policy flat encoding: `0=raw` (`None`), `1=integer`,
 /// `2=grid` (reads `step`/`anchor`) — the marshaled form of
 /// `Explainer.value_policy` `exact_rust.py` builds from `ir.feature_names`.
+///
+/// Every failure here is a marshaling bug on the Python side of the
+/// boundary, never a user-facing constraint problem, so it raises
+/// `PyRuntimeError` — distinct from the `PyValueError`
+/// `solve_exact`'s own order-pair validation raises, so `exact_rust.py` can
+/// tell the two apart by exception *type* alone, with no text matching on
+/// either side.
 fn marshal_value_policies(
     code: &[u8],
     step: &[f64],
     anchor: &[f64],
 ) -> PyResult<Vec<Option<ValuePolicy>>> {
     if code.len() != step.len() || code.len() != anchor.len() {
-        return Err(PyValueError::new_err(
+        return Err(PyRuntimeError::new_err(
             "value policy code/step/anchor arrays must have equal length",
         ));
     }
@@ -32,7 +39,7 @@ fn marshal_value_policies(
             0 => Ok(None),
             1 => Ok(Some(ValuePolicy::Integer)),
             2 => Ok(Some(ValuePolicy::Grid { step: s, anchor: a })),
-            other => Err(PyValueError::new_err(format!(
+            other => Err(PyRuntimeError::new_err(format!(
                 "unknown value policy code {other}"
             ))),
         })
@@ -428,10 +435,15 @@ fn solve_genetic_batch_raw<'py>(
 /// the 7-tuple `(nodes_expanded, nodes_pruned_score, nodes_pruned_cost,
 /// lower_bound, gap, completed, warm_start_used)`; `snapped` is the winning
 /// row's snapped feature indices, in search order — `exact_rust.py` maps them
-/// back to names to rebuild `ExactResult` losslessly. `Err` mirrors Python's
-/// `ConstraintValidationError` for a multi-feature Linear outside the
-/// canonical order-pair shape; `exact_rust.py` re-raises that type rather
-/// than comparing message text across languages.
+/// back to names to rebuild `ExactResult` losslessly. A `PyValueError`
+/// mirrors Python's `ConstraintValidationError` for a multi-feature Linear
+/// outside the canonical order-pair shape (from `solve_exact`'s own
+/// `validate`); `exact_rust.py` re-raises that type rather than comparing
+/// message text across languages. A `PyRuntimeError` (from the
+/// value-policy-array length check, or `marshal_value_policies` itself)
+/// means the caller marshaled malformed input — a bug, never a user-facing
+/// constraint problem — so it is deliberately a different exception type and
+/// propagates as a plain `RuntimeError` instead.
 #[pyfunction]
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 #[pyo3(signature = (ensemble, constraints, x, lo_t, hi_t, sigma, weights, lam,
@@ -475,7 +487,10 @@ fn solve_exact_raw<'py>(
         policy_anchor.as_slice()?,
     )?;
     if policies.len() != x_own.len() {
-        return Err(PyValueError::new_err(format!(
+        // a length mismatch between the marshaled policy arrays and the
+        // feature count is a marshaling bug, not a user-facing constraint
+        // problem — see marshal_value_policies's own doc comment
+        return Err(PyRuntimeError::new_err(format!(
             "expected {} value-policy entries, got {}",
             x_own.len(),
             policies.len()
@@ -576,7 +591,10 @@ fn debug_domains_raw<'py>(
         policy_anchor.as_slice()?,
     )?;
     if policies.len() != x_own.len() {
-        return Err(PyValueError::new_err(format!(
+        // a length mismatch between the marshaled policy arrays and the
+        // feature count is a marshaling bug, not a user-facing constraint
+        // problem — see marshal_value_policies's own doc comment
+        return Err(PyRuntimeError::new_err(format!(
             "expected {} value-policy entries, got {}",
             x_own.len(),
             policies.len()
