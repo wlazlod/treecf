@@ -1,23 +1,20 @@
 """Cell arithmetic the order-pair rules of the exact backend are built on.
 
-Split out of ``treecf.backends.exact`` for size only: ``exact``, this file and
-``_exact_propagation`` are one implementation, and the Rust mirror has to match
-all three bit-for-bit.
+Split out of ``treecf.backends.exact`` for size only: ``exact``, this file,
+``_exact_domains`` and ``_exact_propagation`` are one implementation, and the
+Rust mirror has to match all four bit-for-bit.
 
 Everything here answers one of two questions: which values a cell, or a pair of
 cells, can really hold, and which of those are worth trying when two features
-tied by ``a <= b`` end up the wrong way round.
+tied by ``a <= b`` end up the wrong way round. It is the leaf of the four — it
+imports nothing from the other three.
 """
 
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING
 
 from treecf.aim.cells import Cell
-
-if TYPE_CHECKING:  # imported for typing only; exact.py imports this module
-    from treecf.backends.exact import _State
 
 
 def _intersect_cell(cell: Cell, lo: float, hi: float) -> Cell | None:
@@ -80,35 +77,6 @@ def _achievable_bounds(cell: Cell) -> tuple[float, float]:
     if cell.hi_open and hi != math.inf:
         hi = cell.nearest_to(cell.hi)
     return lo, hi
-
-
-def _domain_span(
-    states: list[_State], cells: tuple[Cell, ...], lo_j: float, hi_j: float
-) -> tuple[float, float] | None:
-    """Lowest and highest value the feature can still end up holding.
-
-    The span covers the achievable ends of every cell the feature's states
-    come from, not the states' own values: a value inside one of those cells
-    is exactly what an order-pair repair may put there later, so a bound built
-    on the state values alone would cut off repairs that are still reachable.
-
-    ``None`` when the feature may go missing — a missing value has no place in
-    an order comparison, so no bound on it holds at all.
-    """
-    span_lo = math.inf
-    span_hi = -math.inf
-    for state in states:
-        if state.is_nan:
-            return None
-        iv = _intersect_cell(cells[state.cell_idx], lo_j, hi_j)
-        if iv is None:  # pragma: no cover - a state's own cell always survives
-            continue
-        cell_lo, cell_hi = _achievable_bounds(iv)
-        span_lo = min(span_lo, cell_lo)
-        span_hi = max(span_hi, cell_hi)
-    if span_lo > span_hi:
-        return None
-    return span_lo, span_hi
 
 
 def _boundary_candidates(cell_a: Cell, cell_b: Cell, x_a: float, x_b: float) -> list[float]:

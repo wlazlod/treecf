@@ -1,19 +1,14 @@
 """Domain settling for the exact backend: implications and one-hot groups.
 
-Split out of ``treecf.backends.exact`` for size only: ``exact``, this file and
-``_exact_orderpairs`` are one implementation, and the Rust mirror has to match
-all three bit-for-bit.
+Split out of ``treecf.backends.exact`` for size only: ``exact``, this file,
+``_exact_domains`` and ``_exact_orderpairs`` are one implementation, and the
+Rust mirror has to match all four bit-for-bit.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
+from treecf.backends._exact_domains import _State
 from treecf.constraints.compile import CompiledConstraints
-
-if TYPE_CHECKING:  # imported for typing only; exact.py imports this module
-    from treecf.backends.exact import _State
-
 
 # what one assignment changed in the propagation state: the features it settled
 # (with their previous setting) and the one-hot counters it moved (with their

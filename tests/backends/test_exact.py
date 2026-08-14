@@ -10,22 +10,19 @@ import pytest
 from treecf._errors import ConstraintValidationError
 from treecf.aim.cells import Cell, feature_cells
 from treecf.api import Grid
-from treecf.backends.exact import (
-    ExactResult,
-    _boundary_candidates,
+from treecf.backends._exact_domains import (
     _build_domains,
     _cost_of_row,
     _domain_span,
-    _EnsembleBounds,
     _feature_order,
     _h_suffix,
-    _Propagation,
-    _PropFrame,
     _State,
     _term_cost,
     _validate,
-    solve_exact,
 )
+from treecf.backends._exact_orderpairs import _boundary_candidates
+from treecf.backends._exact_propagation import _Propagation, _PropFrame
+from treecf.backends.exact import ExactResult, _EnsembleBounds, solve_exact
 from treecf.constraints import (
     AllowMissing,
     Equals,
