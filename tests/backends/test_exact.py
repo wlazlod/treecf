@@ -8,14 +8,18 @@ import numpy as np
 import pytest
 
 from treecf._errors import ConstraintValidationError
-from treecf.aim.cells import Cell
+from treecf.aim.cells import Cell, feature_cells
 from treecf.backends.exact import (
     ExactResult,
+    _boundary_candidates,
     _build_domains,
     _cost_of_row,
+    _domain_span,
     _EnsembleBounds,
     _feature_order,
     _h_suffix,
+    _Propagation,
+    _PropFrame,
     _State,
     _term_cost,
     _validate,
@@ -27,6 +31,7 @@ from treecf.constraints import (
     Freeze,
     Implies,
     Linear,
+    OneHot,
     Range,
     compile_constraints,
 )
@@ -34,6 +39,9 @@ from treecf.ir.evaluate import raw_score
 from treecf.ir.model import EnsembleIR, Link, Node, SplitOp, Tree
 
 from ..conftest import make_random_ir
+
+PropFrame = _PropFrame
+Snapshot = tuple[list[float | None], list[int], list[int]]
 
 
 def _reference_objective(
@@ -354,6 +362,36 @@ class TestNanState:
         domains = _build_domains(grids, x, compiled, np.ones(1), np.ones(1), 0.0, None)
         assert not any(s.is_nan for s in domains[0])
 
+    def test_unpinned_nan_factual_forced_and_forbidden_yields_empty_domain(self) -> None:
+        """The sibling of the pinned case: with no AllowMissing the factual has
+        to stay missing, and a Linear forbidding missing values there leaves the
+        feature nothing at all -- an empty domain, the certified-infeasible
+        signal, rather than a NaN state the arbiter would reject later."""
+        grids = ((Cell(-math.inf, math.inf, True, True),),)
+        compiled = compile_constraints(
+            (Linear({"x0": 1.0}, op="<=", rhs=100.0, missing_policy="forbid_missing"),),
+            ("x0",),
+        )
+        x = np.array([math.nan])
+        domains = _build_domains(grids, x, compiled, np.ones(1), np.ones(1), 0.0, None)
+        assert domains == [[]]
+
+    def test_unpinned_nan_factual_keep_state_carries_the_nan_sentinel_index(self) -> None:
+        """No cell holds a missing value, so the keep-NaN state gets the same
+        past-the-end sentinel every other NaN state uses, not a hardcoded 0."""
+        cells = (
+            Cell(-math.inf, 0.0, True, True),
+            Cell(0.0, 4.0, False, True),
+            Cell(4.0, math.inf, False, True),
+        )
+        compiled = compile_constraints((), ("x0",))
+        x = np.array([math.nan])
+        domains = _build_domains((cells,), x, compiled, np.ones(1), np.ones(1), 0.0, None)
+        assert len(domains[0]) == 1
+        state = domains[0][0]
+        assert state.is_nan and state.cost == 0.0
+        assert state.cell_idx == len(cells)
+
     def test_nan_state_ordered_last_among_cost_ties(self) -> None:
         cells = (Cell(-math.inf, 5.0, True, True), Cell(5.0, math.inf, False, True))
         grids = (cells,)
@@ -464,12 +502,29 @@ class TestValidate:
         compiled = compile_constraints((Linear({"x0": 1.0}, op="<=", rhs=5.0),), ("x0", "x1"))
         assert _validate(compiled, None) == []
 
-    def test_order_pair_recognized_but_temporarily_rejected(self) -> None:
+    def test_order_pair_is_returned_as_an_index_pair(self) -> None:
         compiled = compile_constraints(
             (Linear({"x0": 1.0, "x1": -1.0}, op="<=", rhs=0.0),), ("x0", "x1")
         )
-        with pytest.raises(ConstraintValidationError, match=r"later task|coming"):
-            _validate(compiled, None)
+        assert _validate(compiled, None) == [(0, 1)]
+
+    def test_order_pair_reads_the_sign_not_the_position(self) -> None:
+        """``x1 - x0 <= 0`` is the pair (x1, x0): the +1 coefficient names the
+        feature that has to stay below."""
+        compiled = compile_constraints(
+            (Linear({"x0": -1.0, "x1": 1.0}, op="<=", rhs=0.0),), ("x0", "x1")
+        )
+        assert _validate(compiled, None) == [(1, 0)]
+
+    def test_several_order_pairs_come_back_in_ascending_order(self) -> None:
+        compiled = compile_constraints(
+            (
+                Linear({"x1": 1.0, "x2": -1.0}, op="<=", rhs=0.0),
+                Linear({"x0": 1.0, "x1": -1.0}, op="<=", rhs=0.0),
+            ),
+            ("x0", "x1", "x2"),
+        )
+        assert _validate(compiled, None) == [(0, 1), (1, 2)]
 
     def test_general_multi_feature_linear_names_genetic_fallback(self) -> None:
         compiled = compile_constraints(
@@ -744,3 +799,511 @@ class TestCertifiedInfeasible:
         assert result.stats["completed"] is True
         assert result.stats["lower_bound"] == math.inf
         assert result.stats["nodes_pruned_score"] > 0
+
+
+def _binary_gate_ir(gains: tuple[float, ...]) -> EnsembleIR:
+    """One tree per feature: a value of 0.5 or more adds that feature's gain."""
+    trees = tuple(
+        Tree(
+            nodes=(
+                Node(0, j, 0.5, SplitOp.LT, True, 1, 2, None),
+                Node(1, None, None, None, None, None, None, 0.0),
+                Node(2, None, None, None, None, None, None, gain),
+            )
+        )
+        for j, gain in enumerate(gains)
+    )
+    return EnsembleIR(
+        trees=trees,
+        base_score=0.0,
+        link=Link.IDENTITY,
+        n_features=len(gains),
+        feature_names=tuple(f"x{j}" for j in range(len(gains))),
+        meta={"source": "test"},
+    )
+
+
+class TestOneHotPropagation:
+    """A one-hot group settles what the search may still try: no second one,
+    and once every member but one is a zero that last member has to carry it."""
+
+    def test_second_one_and_forced_last_member_are_cut_unexplored(self) -> None:
+        ir = _binary_gate_ir((1.0, 4.0))
+        x = np.array([1.0, 0.0])  # the group is satisfied at the factual
+        compiled = compile_constraints((OneHot(("x0", "x1")),), ir.feature_names)
+        result = solve_exact(
+            ir, x, (4.0, 4.0), compiled, np.ones(2), np.ones(2), 0.0, time_budget_s=1e9
+        )
+        assert result.x_cf is not None
+        np.testing.assert_array_equal(result.x_cf, np.array([0.0, 1.0]))
+        assert result.distance == 2.0
+        assert result.stats["nodes_expanded"] == 6
+        assert result.stats["nodes_pruned_score"] == 1
+        # x1 = 1 next to x0 = 1 (a second one), and x1 = 0 after x0 = 0 left x1
+        # as the only member that could still carry the one
+        assert result.stats["nodes_pruned_cost"] == 2
+
+    def test_three_member_group_forces_the_last_free_member(self) -> None:
+        ir = _binary_gate_ir((1.0, 4.0, 8.0))
+        x = np.array([1.0, 0.0, 0.0])
+        compiled = compile_constraints((OneHot(("x0", "x1", "x2")),), ir.feature_names)
+        result = solve_exact(
+            ir, x, (8.0, 8.0), compiled, np.ones(3), np.ones(3), 0.0, time_budget_s=1e9
+        )
+        assert result.x_cf is not None
+        np.testing.assert_array_equal(result.x_cf, np.array([0.0, 0.0, 1.0]))
+        assert result.distance == 2.0
+        assert result.stats["nodes_expanded"] == 10
+        assert result.stats["nodes_pruned_score"] == 1
+        assert result.stats["nodes_pruned_cost"] == 4
+
+    def test_a_group_with_a_non_binary_member_is_left_to_the_arbiter(self) -> None:
+        """x0 = 0.25 is a value the counters cannot reason about, so the group
+        stops steering the search — and the verdict is unchanged, because
+        ``check_matrix`` decides every row either way."""
+        ir = _binary_gate_ir((1.0, 4.0))
+        x = np.array([0.25, 0.0])
+        compiled = compile_constraints((OneHot(("x0", "x1")),), ir.feature_names)
+        result = solve_exact(
+            ir, x, (4.0, 4.0), compiled, np.ones(2), np.ones(2), 0.0, time_budget_s=1e9
+        )
+        assert result.x_cf is not None
+        np.testing.assert_array_equal(result.x_cf, np.array([0.0, 1.0]))
+        assert result.stats["nodes_pruned_cost"] == 0  # nothing propagated at all
+
+
+class TestImpliesPropagation:
+    def test_meeting_the_condition_settles_the_consequence(self) -> None:
+        ir = _binary_gate_ir((1.0, 4.0))
+        x = np.array([0.0, 0.0])
+        compiled = compile_constraints(
+            (Implies(Equals("x0", 1.0), Equals("x1", 1.0)),), ir.feature_names
+        )
+        result = solve_exact(
+            ir, x, (5.0, 5.0), compiled, np.ones(2), np.ones(2), 0.0, time_budget_s=1e9
+        )
+        assert result.x_cf is not None
+        np.testing.assert_array_equal(result.x_cf, np.array([1.0, 1.0]))
+        assert result.distance == 2.0
+        assert result.stats["nodes_expanded"] == 4
+        assert result.stats["nodes_pruned_score"] == 1
+        assert result.stats["nodes_pruned_cost"] == 1  # x1 = 0 underneath x0 = 1
+
+    def test_leaving_the_condition_unmet_leaves_the_consequence_free(self) -> None:
+        ir = _binary_gate_ir((1.0, 4.0))
+        x = np.array([0.0, 0.0])
+        compiled = compile_constraints(
+            (Implies(Equals("x0", 1.0), Equals("x1", 1.0)),), ir.feature_names
+        )
+        result = solve_exact(
+            ir, x, (4.0, 4.0), compiled, np.ones(2), np.ones(2), 0.0, time_budget_s=1e9
+        )
+        assert result.x_cf is not None
+        np.testing.assert_array_equal(result.x_cf, np.array([0.0, 1.0]))
+        assert result.distance == 1.0
+
+
+class TestPropagationUndo:
+    """Every settlement an assignment makes has to disappear again when the
+    search leaves that branch, or a later branch inherits a restriction that
+    was never true for it."""
+
+    def _setup(self) -> tuple[_Propagation, list[bool], list[float]]:
+        names = tuple(f"x{j}" for j in range(6))
+        compiled = compile_constraints(
+            (
+                OneHot(("x0", "x1", "x2")),
+                Implies(Equals("x3", 1.0), Equals("x4", 1.0)),
+                Implies(Equals("x4", 0.0), Equals("x5", 0.0)),
+                Implies(Equals("x0", 1.0), Equals("x5", 1.0)),
+            ),
+            names,
+        )
+        wide = (Cell(-math.inf, math.inf, True, True),)
+        domains = _build_domains(
+            (wide,) * 6, np.zeros(6), compiled, np.ones(6), np.ones(6), 0.0, None
+        )
+        assigned = [False] * 6
+        values = [0.0] * 6
+        return _Propagation(compiled, domains, assigned, values), assigned, values
+
+    @staticmethod
+    def _snapshot(prop: _Propagation) -> tuple[list[float | None], list[int], list[int]]:
+        return (list(prop.forced_value), list(prop.ones), list(prop.zeros))
+
+    @pytest.mark.parametrize("seed", [0, 1, 2, 3, 4, 5, 6, 7])
+    def test_random_apply_restore_walk_restores_every_earlier_state(self, seed: int) -> None:
+        rng = np.random.default_rng(seed)
+        prop, assigned, values = self._setup()
+        open_frames: list[tuple[int, PropFrame, Snapshot]] = []
+        conflicts = 0
+        for _ in range(400):
+            free = [j for j in range(6) if not assigned[j]]
+            if free and (not open_frames or rng.random() < 0.6):
+                j = int(rng.choice(free))
+                v = float(rng.integers(0, 2))
+                before = self._snapshot(prop)
+                frame, conflict = prop.apply(j, v)
+                conflicts += int(conflict)
+                if conflict:  # the search restores at once and tries the next state
+                    prop.restore(frame)
+                    assert self._snapshot(prop) == before
+                    continue
+                assigned[j] = True
+                values[j] = v
+                open_frames.append((j, frame, before))
+            else:
+                j, frame, before = open_frames.pop()
+                prop.restore(frame)
+                assigned[j] = False
+                assert self._snapshot(prop) == before
+        while open_frames:
+            j, frame, before = open_frames.pop()
+            prop.restore(frame)
+            assigned[j] = False
+        assert self._snapshot(prop) == ([None] * 6, [0], [0])
+        assert conflicts > 0, "the walk never ran into a contradiction"
+
+    def test_the_same_assignments_twice_settle_the_same_things(self) -> None:
+        """Replaying a branch after unwinding it reaches the identical state,
+        which is what lets the search revisit a subtree deterministically."""
+        prop, assigned, values = self._setup()
+        walk = [(3, 1.0), (0, 0.0), (1, 0.0)]
+        states = []
+        for _ in range(2):
+            frames: list[tuple[int, PropFrame]] = []
+            for j, v in walk:
+                frame, conflict = prop.apply(j, v)
+                assert not conflict
+                assigned[j] = True
+                values[j] = v
+                frames.append((j, frame))
+            states.append(self._snapshot(prop))
+            for j, frame in reversed(frames):
+                prop.restore(frame)
+                assigned[j] = False
+        assert states[0] == states[1]
+        assert states[0][0][4] == 1.0  # x3 = 1 settled x4
+        assert states[0][0][2] == 1.0  # two zeros left x2 to carry the one
+
+
+def _order_pair(a: str, b: str, missing_policy: str = "forbid_missing") -> Linear:
+    """The canonical ``a - b <= 0``: feature ``a`` must not exceed feature ``b``."""
+    return Linear({a: 1.0, b: -1.0}, op="<=", rhs=0.0, missing_policy=missing_policy)
+
+
+class TestBoundaryCandidates:
+    def test_returns_both_factuals_and_both_ends_in_the_documented_order(self) -> None:
+        cell = Cell(0.0, 10.0, False, True)
+        assert _boundary_candidates(cell, cell, 8.0, 2.0) == [
+            8.0,
+            2.0,
+            0.0,
+            cell.nearest_to(10.0),
+        ]
+
+    def test_drops_candidates_outside_the_shared_interval(self) -> None:
+        cell_a = Cell(0.0, 10.0, False, True)
+        cell_b = Cell(4.0, math.inf, False, True)
+        # the shared interval is [4, 10); neither factual value lies inside it
+        assert _boundary_candidates(cell_a, cell_b, 2.0, 12.0) == [4.0, cell_a.nearest_to(10.0)]
+
+    def test_disjoint_cells_leave_nothing_to_try(self) -> None:
+        assert (
+            _boundary_candidates(
+                Cell(5.0, 9.0, False, True), Cell(0.0, 5.0, False, True), 6.0, 2.0
+            )
+            == []
+        )
+
+    def test_missing_and_infinite_candidates_are_skipped(self) -> None:
+        wide = Cell(-math.inf, math.inf, True, True)
+        assert _boundary_candidates(wide, wide, math.nan, 3.0) == [3.0]
+
+    def test_a_repeated_candidate_is_offered_once(self) -> None:
+        cell = Cell(0.0, 10.0, False, True)
+        assert _boundary_candidates(cell, cell, 4.0, 4.0) == [4.0, 0.0, cell.nearest_to(10.0)]
+
+
+class TestDomainSpan:
+    def test_spans_the_cells_a_feature_may_be_put_in_not_its_state_values(self) -> None:
+        cells = (
+            Cell(-math.inf, 0.0, True, True),
+            Cell(0.0, 4.0, False, True),
+            Cell(4.0, math.inf, False, True),
+        )
+        compiled = compile_constraints((), ("x0",))
+        x = np.array([1.0])
+        domains = _build_domains((cells,), x, compiled, np.ones(1), np.ones(1), 0.0, None)
+        assert _domain_span(domains[0], cells, -math.inf, math.inf) == (-math.inf, math.inf)
+
+    def test_bounds_narrow_the_span(self) -> None:
+        cells = (Cell(-math.inf, 0.0, True, True), Cell(0.0, math.inf, False, True))
+        compiled = compile_constraints((Range("x0", -2.0, 3.0),), ("x0",))
+        x = np.array([1.0])
+        domains = _build_domains((cells,), x, compiled, np.ones(1), np.ones(1), 0.0, None)
+        assert _domain_span(domains[0], cells, -2.0, 3.0) == (-2.0, 3.0)
+
+    def test_a_feature_that_may_go_missing_has_no_span(self) -> None:
+        cells = (Cell(-math.inf, math.inf, True, True),)
+        compiled = compile_constraints((AllowMissing("x0", delta_miss=1.0),), ("x0",))
+        x = np.array([1.0])
+        domains = _build_domains((cells,), x, compiled, np.ones(1), np.ones(1), 0.0, None)
+        assert _domain_span(domains[0], cells, -math.inf, math.inf) is None
+
+
+class TestOrderPairBoundary:
+    """``x0`` must not exceed ``x1``, and the target needs both of them at or
+    above zero. Each feature's own candidate is the point of its cell nearest
+    to the factual — 1.0 for x0, 0.0 for x1 — which breaks the pair even though
+    both sit in the same cell. Reading those two points as the last word would
+    throw the branch away and report no counterfactual at all; the branch
+    survives because either feature can still move anywhere inside that shared
+    cell, and the repair puts both on one value there."""
+
+    def _solve(self) -> ExactResult:
+        ir = _two_switch_ir()
+        x = np.array([1.0, -1.0])
+        compiled = compile_constraints((_order_pair("x0", "x1"),), ir.feature_names)
+        return solve_exact(
+            ir, x, (2.0, 2.0), compiled, np.ones(2), np.ones(2), 0.0, time_budget_s=1e9
+        )
+
+    def test_the_two_candidate_points_really_do_break_the_pair(self) -> None:
+        ir = _two_switch_ir()
+        x = np.array([1.0, -1.0])
+        compiled = compile_constraints((_order_pair("x0", "x1"),), ir.feature_names)
+        domains = _build_domains(
+            feature_cells(ir), x, compiled, np.ones(2), np.ones(2), 0.0, None
+        )
+        in_target_x0 = next(s for s in domains[0] if s.value >= 0.0)
+        in_target_x1 = next(s for s in domains[1] if s.value >= 0.0)
+        assert in_target_x0.value == 1.0
+        assert in_target_x1.value == 0.0  # 1.0 > 0.0: the pair is broken
+
+    def test_the_repair_finds_the_counterfactual_the_points_alone_would_miss(self) -> None:
+        result = self._solve()
+        assert result.stats["completed"] is True
+        assert result.x_cf is not None
+        np.testing.assert_array_equal(result.x_cf, np.array([1.0, 1.0]))
+        assert result.distance == 2.0
+        assert result.proof == "optimal"
+
+    def test_equally_cheap_repairs_are_settled_by_the_candidate_order(self) -> None:
+        """Both x0 = x1 = 1.0 (x0 keeps its value, x1 moves by 2.0) and
+        x0 = x1 = 0.0 (each moves by 1.0) cost exactly 2.0. The factual value of
+        the first feature is tried first, so it is the one that wins."""
+        result = self._solve()
+        assert result.x_cf is not None
+        x = np.array([1.0, -1.0])
+        tied = _cost_of_row(x, np.array([0.0, 0.0]), np.ones(2), np.ones(2), 0.0, {})
+        assert tied == result.distance
+        np.testing.assert_array_equal(result.x_cf, np.array([1.0, 1.0]))
+
+    def test_the_same_run_twice_gives_the_same_row_and_node_count(self) -> None:
+        first, second = self._solve(), self._solve()
+        assert first.x_cf is not None and second.x_cf is not None
+        np.testing.assert_array_equal(first.x_cf, second.x_cf)
+        assert first.stats == second.stats
+
+    def test_an_unorderable_branch_is_cut_before_the_score_is_consulted(self) -> None:
+        result = self._solve()
+        # x0 at or above zero with x1 below it can never be ordered, whatever
+        # the trees have to say about it
+        assert result.stats["nodes_pruned_cost"] == 1
+        assert result.stats["nodes_expanded"] == 4
+
+
+class TestOrderPairWithMissing:
+    """A pair cannot be pulled onto a boundary when one side is missing, so the
+    linear check's own missing policy has the last word on those rows."""
+
+    def _ir(self) -> EnsembleIR:
+        """Like ``_two_switch_ir`` but a missing value routes right, so a
+        missing x0 reaches the target the same way a value at or above zero
+        does."""
+        trees = tuple(
+            Tree(
+                nodes=(
+                    Node(0, j, 0.0, SplitOp.LT, False, 1, 2, None),
+                    Node(1, None, None, None, None, None, None, 0.0),
+                    Node(2, None, None, None, None, None, None, 1.0),
+                )
+            )
+            for j in (0, 1)
+        )
+        return EnsembleIR(
+            trees=trees,
+            base_score=0.0,
+            link=Link.IDENTITY,
+            n_features=2,
+            feature_names=("x0", "x1"),
+            meta={"source": "test"},
+        )
+
+    def _solve(self, missing_policy: str) -> ExactResult:
+        ir = self._ir()
+        x = np.array([math.nan, -1.0])
+        compiled = compile_constraints(
+            (
+                AllowMissing("x0", delta_miss=1.0, delta_from_miss=5.0),
+                _order_pair("x0", "x1", missing_policy=missing_policy),
+            ),
+            ir.feature_names,
+        )
+        return solve_exact(
+            ir, x, (2.0, 2.0), compiled, np.ones(2), np.ones(2), 0.0, time_budget_s=1e9
+        )
+
+    def test_a_waived_pair_lets_the_missing_row_win(self) -> None:
+        result = self._solve("satisfied")
+        assert result.x_cf is not None
+        assert math.isnan(result.x_cf[0])
+        assert result.x_cf[1] == 0.0
+        assert result.distance == 1.0
+
+    def test_a_pair_that_forbids_missing_forces_a_real_value_instead(self) -> None:
+        result = self._solve("forbid_missing")
+        assert result.x_cf is not None
+        np.testing.assert_array_equal(result.x_cf, np.array([0.0, 0.0]))
+        assert result.distance == 6.0  # 5.0 to leave the missing state, 1.0 to move x1
+
+
+def _band_ir(gains: tuple[float, ...]) -> EnsembleIR:
+    """One tree per feature: a value inside [0, 10) adds that feature's gain."""
+    trees = tuple(
+        Tree(
+            nodes=(
+                Node(0, j, 0.0, SplitOp.LT, True, 1, 2, None),
+                Node(1, None, None, None, None, None, None, 0.0),
+                Node(2, j, 10.0, SplitOp.LT, True, 3, 4, None),
+                Node(3, None, None, None, None, None, None, gain),
+                Node(4, None, None, None, None, None, None, 0.0),
+            )
+        )
+        for j, gain in enumerate(gains)
+    )
+    return EnsembleIR(
+        trees=trees,
+        base_score=0.0,
+        link=Link.IDENTITY,
+        n_features=len(gains),
+        feature_names=tuple(f"x{j}" for j in range(len(gains))),
+        meta={"source": "test"},
+    )
+
+
+class TestChainedOrderPairs:
+    """``x0 <= x1 <= x2`` on a factual that runs the other way. Repairing one
+    pair at a time cannot settle a chain: pulling x0 and x1 together breaks the
+    pair below, and pulling those two together breaks the one above. The search
+    sets such a completion aside rather than guessing — and says so, by
+    reporting that it did not get through the whole space, so nobody reads its
+    empty hands as proof that no counterfactual exists."""
+
+    def _problem(self) -> tuple[EnsembleIR, np.ndarray, object]:
+        ir = _band_ir((1.0, 1.0, 1.0))
+        x = np.array([8.0, 5.0, 2.0])
+        compiled = compile_constraints(
+            (_order_pair("x0", "x1"), _order_pair("x1", "x2")), ir.feature_names
+        )
+        return ir, x, compiled
+
+    def test_a_completion_it_cannot_settle_is_not_reported_as_proof(self) -> None:
+        ir, x, compiled = self._problem()
+        result = solve_exact(
+            ir, x, (3.0, 3.0), compiled, np.ones(3), np.ones(3), 0.0, time_budget_s=1e9
+        )
+        assert result.x_cf is None
+        assert result.stats["completed"] is False
+
+    def test_the_row_it_gave_up_on_really_was_reachable(self) -> None:
+        """Making the point of the test above concrete: x0 = x1 = x2 = 5.0
+        satisfies both pairs, lands in the target and costs 6.0."""
+        ir, x, compiled = self._problem()
+        row = np.array([5.0, 5.0, 5.0])
+        assert bool(compiled.check_matrix(row[np.newaxis, :], x)[0])
+        assert raw_score(ir, row) == 3.0
+        assert _cost_of_row(x, row, np.ones(3), np.ones(3), 0.0, {}) == 6.0
+
+    def test_a_chain_the_pairs_do_settle_is_repaired_and_certified(self) -> None:
+        """The same two pairs, but only the upper one is broken at the chosen
+        points, so one repair is enough and the answer is a full one."""
+        ir = _band_ir((1.0, 1.0, 1.0))
+        x = np.array([2.0, 8.0, 5.0])
+        compiled = compile_constraints(
+            (_order_pair("x0", "x1"), _order_pair("x1", "x2")), ir.feature_names
+        )
+        result = solve_exact(
+            ir, x, (3.0, 3.0), compiled, np.ones(3), np.ones(3), 0.0, time_budget_s=1e9
+        )
+        assert result.x_cf is not None
+        np.testing.assert_array_equal(result.x_cf, np.array([2.0, 8.0, 8.0]))
+        assert result.distance == 3.0
+        assert result.stats["completed"] is True
+
+
+class TestOrderPairUnderAValuePolicy:
+    """A value policy pins a feature to its own grid, and the value a repair
+    would want need not be on it, so pairs touching such a feature are left
+    alone. The search then says it did not settle the whole space rather than
+    reporting an empty hand as proof."""
+
+    def test_a_policy_bound_pair_is_left_undecided_rather_than_certified(self) -> None:
+        ir = _band_ir((1.0, 1.0))
+        x = np.array([8.0, 2.0])
+        compiled = compile_constraints((_order_pair("x0", "x1"),), ir.feature_names)
+        result = solve_exact(
+            ir,
+            x,
+            (2.0, 2.0),
+            compiled,
+            np.ones(2),
+            np.array([1.0, 3.0]),
+            0.0,
+            value_policies={"x0": "integer"},
+            time_budget_s=1e9,
+        )
+        assert result.x_cf is None
+        assert result.stats["completed"] is False
+        # and the row it did not reach is a perfectly legal integer one
+        row = np.array([2.0, 2.0])
+        assert bool(compiled.check_matrix(row[np.newaxis, :], x)[0])
+        assert raw_score(ir, row) == 2.0
+
+
+class TestBoundaryAgainstADenseScan:
+    """The repair claims four candidate values are enough to find the cheapest
+    point of a whole boundary segment. This walks the segment at ten thousand
+    points and checks that claim directly."""
+
+    def test_no_point_of_the_segment_beats_the_value_the_search_picked(self) -> None:
+        ir = _band_ir((1.0, 1.0))
+        x = np.array([8.0, 2.0])
+        sigma, weights = np.ones(2), np.array([1.0, 3.0])
+        compiled = compile_constraints((_order_pair("x0", "x1"),), ir.feature_names)
+        result = solve_exact(
+            ir, x, (2.0, 2.0), compiled, sigma, weights, 0.0, time_budget_s=1e9
+        )
+        assert result.x_cf is not None and result.distance is not None
+        np.testing.assert_array_equal(result.x_cf, np.array([2.0, 2.0]))
+
+        cheapest_scanned = math.inf
+        scanned_feasible = 0
+        for t in np.linspace(0.0, 10.0, 10_001):
+            row = np.array([t, t])
+            if not bool(compiled.check_matrix(row[np.newaxis, :], x)[0]):
+                continue
+            if raw_score(ir, row) != 2.0:
+                continue  # outside the target band
+            scanned_feasible += 1
+            cost = _cost_of_row(x, row, sigma, weights, 0.0, {})
+            assert result.distance <= cost, (t, cost)
+            cheapest_scanned = min(cheapest_scanned, cost)
+        assert scanned_feasible > 9_000
+        # the scan lands exactly on the value the search picked, and agrees on
+        # what it costs
+        assert cheapest_scanned == result.distance
+        assert result.distance == _cost_of_row(
+            x, np.array([2.0, 2.0]), sigma, weights, 0.0, {}
+        )

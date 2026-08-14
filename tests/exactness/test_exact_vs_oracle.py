@@ -15,8 +15,30 @@ while the oracle snaps every non-keep candidate. That difference is settled
 policy (see ``tests/backends/test_exact.py``), not a bug for this suite to
 re-litigate.
 
-One-hot groups, implications and order pairs are absent by design — the exact
-backend does not search over them yet.
+Some cases also draw a constraint that ties two features together, and those
+cases are compared differently, because the two solvers no longer search the
+same set of rows.
+
+The oracle puts each feature on one point per cell — the point nearest to the
+factual — and nothing else. An order pair (``a <= b``) can need a value that is
+not any cell's nearest point: the exact backend may move both features onto a
+shared value inside their cells, which the oracle cannot express. So on those
+draws the exact backend may legitimately come back cheaper, and it may find a
+counterfactual where the oracle found none. What still holds is the other
+direction: anything the oracle can build the exact backend can build too, so an
+oracle answer is an upper bound on the exact answer.
+
+A one-hot group or an implication makes its features binary, and the exact
+backend then offers each of them only 0 and 1 (plus its unchanged factual)
+while the oracle keeps offering every cell's nearest point. Neither set
+contains the other, so those draws are compared only where the disagreement
+cannot bite: when the oracle's own answer keeps every binary feature on 0 or 1,
+it is a row the exact backend could have built, and it has to do at least as
+well.
+
+Whatever the exact backend returns is re-verified from scratch on every draw,
+against the score, the constraints and the plausibility bound, and draws
+without any cross-feature constraint keep the original strict agreement.
 """
 
 from __future__ import annotations
@@ -35,8 +57,10 @@ from treecf.constraints import (
     AllowMissing,
     Equals,
     Freeze,
+    Implies,
     Linear,
     Monotone,
+    OneHot,
     Range,
     compile_constraints,
 )
@@ -55,7 +79,13 @@ SEEDS = tuple(range(25))
 
 @dataclass(frozen=True)
 class _Case:
-    """One randomized problem, in the argument shape both solvers accept."""
+    """One randomized problem, in the argument shape both solvers accept.
+
+    ``relational`` says which cross-feature constraint the draw added, if any:
+    ``""`` for none, ``"order"`` for an order pair, ``"onehot"`` or
+    ``"implies"`` for a binary group. It selects how strictly the two solvers
+    may be compared, for the reasons in the module docstring.
+    """
 
     seed: int
     ir: EnsembleIR
@@ -67,6 +97,7 @@ class _Case:
     lam: float
     plausibility: tuple[EnsembleIR, float] | None
     value_policies: Mapping[str, ValuePolicy] | None
+    relational: str
 
 
 def _draw_interval(
@@ -123,6 +154,34 @@ def _draw_constraints(
     return tuple(constraints)
 
 
+def _draw_relational(
+    rng: np.random.Generator, names: tuple[str, ...], x: FloatArray
+) -> tuple[tuple[Constraint, ...], str]:
+    """An occasional constraint tying two features together.
+
+    A one-hot group or an implication is only drawn over features whose factual
+    value is 0 or 1 — anything else would make the group unsatisfiable at the
+    factual for reasons that have nothing to do with the search. Writing those
+    values into ``x`` also clears any missing value drawn there.
+    """
+    kind = str(rng.choice(["", "", "", "order", "onehot", "implies"]))
+    if not kind:
+        return (), ""
+    a, b = (int(i) for i in rng.choice(len(names), size=2, replace=False))
+    if kind == "order":
+        policy = str(rng.choice(["satisfied", "violated", "forbid_missing"]))
+        pair = Linear(
+            {names[a]: 1.0, names[b]: -1.0}, op="<=", rhs=0.0, missing_policy=policy
+        )
+        return (pair,), kind
+    if kind == "onehot":
+        x[a], x[b] = 1.0, 0.0  # the group holds at the factual
+        return (OneHot((names[a], names[b])),), kind
+    x[a] = float(rng.integers(0, 2))
+    x[b] = float(rng.integers(0, 2))
+    return (Implies(Equals(names[a], 1.0), Equals(names[b], 1.0)),), kind
+
+
 def _draw_value_policies(
     rng: np.random.Generator,
     names: tuple[str, ...],
@@ -165,7 +224,8 @@ def _draw_case(seed: int) -> _Case:
         # permissive: most of the space clears the bound, a minority does not
         plausibility = (if_ir, float(np.percentile(if_scores, 25.0)))
 
-    compiled = compile_constraints(_draw_constraints(rng, names, x), names)
+    relational, kind = _draw_relational(rng, names, x)
+    compiled = compile_constraints(_draw_constraints(rng, names, x) + relational, names)
     return _Case(
         seed=seed,
         ir=ir,
@@ -177,6 +237,7 @@ def _draw_case(seed: int) -> _Case:
         lam=float(rng.choice([0.0, 0.0, 0.25])),
         plausibility=plausibility,
         value_policies=_draw_value_policies(rng, names, compiled, x),
+        relational=kind,
     )
 
 
@@ -193,6 +254,47 @@ def _solve(case: _Case) -> ExactResult:
         plausibility=case.plausibility,
         time_budget_s=1e9,  # fixtures must never be decided by the wall clock
     )
+
+
+def _verify(case: _Case, row: FloatArray) -> list[str]:
+    """Re-check a returned row from scratch: the target, the constraints and
+    the plausibility bound, none of it taken from the solver's own word."""
+    problems: list[str] = []
+    lo_t, hi_t = case.interval
+    score = raw_score(case.ir, row)
+    if not lo_t <= score <= hi_t:
+        problems.append(f"seed {case.seed}: returned row scores {score!r}, outside the target")
+    if not bool(case.compiled.check_matrix(row[np.newaxis, :], case.x)[0]):
+        problems.append(f"seed {case.seed}: returned row violates the constraints")
+    if case.plausibility is not None:
+        if_ir, min_total_path = case.plausibility
+        if raw_score(if_ir, row) < min_total_path:
+            problems.append(f"seed {case.seed}: returned row is below the plausibility bound")
+    return problems
+
+
+def _policy_on_an_order_pair(case: _Case) -> bool:
+    """True when a value policy governs one of the features an order pair ties
+    together. The repair cannot move such a feature — the value it would want
+    need not sit on the policy's grid — so the search leaves those completions
+    undecided and reports that it did not settle the whole space. Everything
+    the oracle can build was still enumerated, so the comparison itself holds.
+    """
+    policies = case.value_policies or {}
+    names = case.compiled.feature_names
+    return any(
+        len(lin.indices) == 2
+        and any(policies.get(names[j], "raw") != "raw" for j in lin.indices)
+        for lin in case.compiled.linears
+    )
+
+
+def _binary_valued(case: _Case, row: FloatArray | None) -> bool:
+    """True when ``row`` puts every binary feature on 0 or 1 — the case where
+    the exact backend could have built the same row."""
+    if row is None:
+        return False
+    return all(row[f] in (0.0, 1.0) for f in case.compiled.binary_features)
 
 
 class TestExactVersusOracle:
@@ -226,9 +328,44 @@ class TestExactVersusOracle:
             )
             feasible += int(oracle.feasible)
 
-            if result.stats["completed"] is not True:
+            if result.stats["completed"] is not True and not _policy_on_an_order_pair(case):
                 problems.append(f"seed {seed}: search did not complete")
                 continue
+            if result.x_cf is not None:
+                problems.extend(_verify(case, result.x_cf))
+            tolerance = 1e-12 * max(1.0, oracle.objective)
+
+            if case.relational in ("onehot", "implies"):
+                # Binary features: the two solvers offer different values for
+                # them, so a like-for-like comparison is only possible where
+                # the oracle's own answer stays on 0/1 there. Every value in
+                # such a row is one the exact backend can build too, so it has
+                # to do at least as well.
+                if not oracle.feasible or not _binary_valued(case, oracle.x_cf):
+                    continue
+                if result.x_cf is None:
+                    problems.append(f"seed {seed}: oracle found a row the exact search missed")
+                    continue
+                assert result.distance is not None
+                if result.distance > oracle.objective + tolerance:
+                    problems.append(
+                        f"seed {seed}: exact={result.distance!r} is worse than "
+                        f"oracle={oracle.objective!r} on a row it could have built"
+                    )
+                continue
+            if case.relational == "order":
+                # the exact backend may beat the oracle here, never lose to it
+                if oracle.feasible and result.x_cf is None:
+                    problems.append(f"seed {seed}: oracle found a row the exact search missed")
+                elif oracle.feasible:
+                    assert result.distance is not None
+                    if result.distance > oracle.objective + tolerance:
+                        problems.append(
+                            f"seed {seed}: exact={result.distance!r} is worse than "
+                            f"oracle={oracle.objective!r}"
+                        )
+                continue
+
             if (result.x_cf is not None) != oracle.feasible:
                 problems.append(
                     f"seed {seed}: feasibility disagreement — "
@@ -238,25 +375,12 @@ class TestExactVersusOracle:
             if result.x_cf is None:
                 assert result.distance is None
                 continue
-
             assert result.distance is not None
-            tolerance = 1e-12 * max(1.0, oracle.objective)
             if abs(result.distance - oracle.objective) > tolerance:
                 problems.append(
                     f"seed {seed}: objective disagreement — "
                     f"exact={result.distance!r}, oracle={oracle.objective!r}"
                 )
-                continue
-            lo_t, hi_t = case.interval
-            score = raw_score(case.ir, result.x_cf)
-            if not lo_t <= score <= hi_t:
-                problems.append(f"seed {seed}: returned row scores {score!r}, outside the target")
-            if not bool(case.compiled.check_matrix(result.x_cf[np.newaxis, :], case.x)[0]):
-                problems.append(f"seed {seed}: returned row violates the constraints")
-            if case.plausibility is not None:
-                if_ir, min_total_path = case.plausibility
-                if raw_score(if_ir, result.x_cf) < min_total_path:
-                    problems.append(f"seed {seed}: returned row is below the plausibility bound")
 
         assert not problems, "\n".join(problems)
         # a suite that is all-feasible or all-infeasible would prove very little
@@ -264,7 +388,8 @@ class TestExactVersusOracle:
 
 
 class TestSolverDeterminism:
-    @pytest.mark.parametrize("seed", [0, 3, 7, 11, 17])
+    # seeds 7, 12 draw an order pair, 11 a one-hot group, 22 an implication
+    @pytest.mark.parametrize("seed", [0, 3, 7, 11, 12, 17, 22])
     def test_same_inputs_twice_give_the_same_row_and_node_count(self, seed: int) -> None:
         case = _draw_case(seed)
         first = _solve(case)

@@ -15,6 +15,35 @@ branching alphabet — already in the cost order that search wants them in.
 ``solve_exact`` then walks that alphabet depth-first with an explicit stack,
 bounding each partial assignment by the score interval the ensemble can still
 reach and by the cost already spent plus the cheapest possible remainder.
+
+Two rules go beyond that one-point-per-cell alphabet.
+
+A pair of features tied by ``a - b <= 0`` may need a value the alphabet does
+not offer: each feature's candidate is the point of its cell nearest to the
+factual, and those two points can sit the wrong way round even though the two
+cells overlap. The cheapest repair moves both features onto the same value
+``t`` somewhere in the overlap, and because the cost is piecewise linear in
+``t`` the best ``t`` is always one of four points: either factual value, or
+either end of the overlap. Every completed assignment therefore gets a
+boundary-repair pass before the arbiter sees it. Two features whose repaired
+values would still break some other pair are handled conservatively — the
+repairs are applied one pair at a time and the whole completion is dropped if
+any pair is still broken afterwards. No wrong row can come out of that, since
+``check_matrix`` still decides every row that is returned, but a dropped
+completion is one the search never really settled: it says so by reporting
+that it did not get through the whole space, so a search that comes back
+empty-handed there is not claiming that nothing exists. The repair is also
+skipped for a feature restricted to 0/1, which needs none — both its values
+are candidates already — and for a feature carrying a value policy, which has
+no room to move: only one point per cell is on the policy's grid to begin
+with, so a search over such a pair does not claim to have settled the space
+either.
+
+The other rule is propagation: assigning a feature can settle other features
+outright (the trigger side of an implication, or the last free member of a
+one-hot group), and a state that contradicts such a settlement is cut without
+being explored. Propagation is a shortcut, never an authority — every row is
+still checked in full at the end.
 """
 
 from __future__ import annotations
@@ -47,6 +76,9 @@ from treecf.ir.model import EnsembleIR, SplitOp, Tree
 FloatArray = npt.NDArray[np.float64]
 
 _SUPPRESSING_MISSING_POLICIES = ("forbid_missing", "violated")
+# the tolerance ``CompiledConstraints.check_matrix`` allows a linear constraint;
+# an order pair counts as broken here exactly when the arbiter would reject it
+_LINEAR_SLACK = 1e-9
 
 
 @dataclass(frozen=True)
@@ -158,6 +190,102 @@ def _intersect_cell(cell: Cell, lo: float, hi: float) -> Cell | None:
     return Cell(new_lo, new_hi, new_lo_open, new_hi_open)
 
 
+def _intersect_cells(first: Cell, second: Cell) -> Cell | None:
+    """``first`` ∩ ``second``, keeping the tighter edge on each side and the
+    open edge when both sides sit at the same value. ``None`` if the
+    intersection is empty (including a degenerate open singleton)."""
+    if first.lo > second.lo:
+        lo, lo_open = first.lo, first.lo_open
+    elif second.lo > first.lo:
+        lo, lo_open = second.lo, second.lo_open
+    else:
+        lo, lo_open = first.lo, first.lo_open or second.lo_open
+    if first.hi < second.hi:
+        hi, hi_open = first.hi, first.hi_open
+    elif second.hi < first.hi:
+        hi, hi_open = second.hi, second.hi_open
+    else:
+        hi, hi_open = first.hi, first.hi_open or second.hi_open
+    if lo > hi:
+        return None
+    if lo == hi and (lo_open or hi_open):
+        return None
+    return Cell(lo, hi, lo_open, hi_open)
+
+
+def _achievable_bounds(cell: Cell) -> tuple[float, float]:
+    """Lowest and highest value the cell can actually take.
+
+    A closed edge is its own bound; a finite open edge steps one f32 ulp
+    inside, the same step ``nearest_to`` takes, so the endpoints returned here
+    are values a counterfactual may really hold. An infinite open edge stays
+    infinite — no point of the cell is extreme in that direction.
+    """
+    lo = cell.lo
+    if cell.lo_open and lo != -math.inf:
+        lo = cell.nearest_to(cell.lo)
+    hi = cell.hi
+    if cell.hi_open and hi != math.inf:
+        hi = cell.nearest_to(cell.hi)
+    return lo, hi
+
+
+def _domain_span(
+    states: list[_State], cells: tuple[Cell, ...], lo_j: float, hi_j: float
+) -> tuple[float, float] | None:
+    """Lowest and highest value the feature can still end up holding.
+
+    The span covers the achievable ends of every cell the feature's states
+    come from, not the states' own values: a value inside one of those cells
+    is exactly what an order-pair repair may put there later, so a bound built
+    on the state values alone would cut off repairs that are still reachable.
+
+    ``None`` when the feature may go missing — a missing value has no place in
+    an order comparison, so no bound on it holds at all.
+    """
+    span_lo = math.inf
+    span_hi = -math.inf
+    for state in states:
+        if state.is_nan:
+            return None
+        iv = _intersect_cell(cells[state.cell_idx], lo_j, hi_j)
+        if iv is None:  # pragma: no cover - a state's own cell always survives
+            continue
+        cell_lo, cell_hi = _achievable_bounds(iv)
+        span_lo = min(span_lo, cell_lo)
+        span_hi = max(span_hi, cell_hi)
+    if span_lo > span_hi:
+        return None
+    return span_lo, span_hi
+
+
+def _boundary_candidates(cell_a: Cell, cell_b: Cell, x_a: float, x_b: float) -> list[float]:
+    """Values worth trying when a pair ``a <= b`` has to be pulled onto the
+    boundary ``a' == b' == t``.
+
+    ``cell_a`` and ``cell_b`` are the two features' cells already intersected
+    with their constraint bounds, so ``t`` has to lie in the intersection of
+    the two. Summed over the pair the cost is piecewise linear in ``t`` with
+    kinks only at the two factual values, so the cheapest ``t`` is one of
+    those two or one of the interval's own ends. They are returned in that
+    fixed order — factual of ``a``, factual of ``b``, low end, high end —
+    which is what makes the choice between equally cheap repairs
+    reproducible. Values outside the interval, missing values and infinite
+    ends drop out, and a repeat of an earlier candidate is not offered twice.
+    An empty list means the pair cannot be repaired inside these cells at all.
+    """
+    iv = _intersect_cells(cell_a, cell_b)
+    if iv is None:
+        return []
+    ach_lo, ach_hi = _achievable_bounds(iv)
+    out: list[float] = []
+    for t in (x_a, x_b, ach_lo, ach_hi):
+        if not math.isfinite(t) or not iv.contains(t) or t in out:
+            continue
+        out.append(t)
+    return out
+
+
 def _build_domains(
     grids: tuple[tuple[Cell, ...], ...],
     x: FloatArray,
@@ -186,7 +314,9 @@ def _build_domains(
     missing state next to it: a pin restricts which value the feature may
     take, not whether it may go missing, exactly as the bounds check reads
     it. A NaN factual without
-    ``AllowMissing`` gets a single keep-NaN state; with ``AllowMissing`` it
+    ``AllowMissing`` gets a single keep-NaN state, or none at all when a
+    single-feature Linear also forbids missing values there; with
+    ``AllowMissing`` it
     additionally offers moving to the pinned value ``v``, priced by
     ``delta_from_miss``; either NaN-involving state is dropped when a
     single-feature Linear's ``missing_policy`` forbids NaN there, and a NaN
@@ -263,7 +393,15 @@ def _build_domains(
             continue
 
         if x_nan and not allow_j:
-            domains.append([_State(x_j, 0.0, 0, True)])
+            # Nothing lets this feature become a value, so staying missing is
+            # the only state it has -- and even that one goes away when a
+            # single-feature Linear forbids missing values here, leaving an
+            # empty domain, the same certified-infeasible signal the pinned
+            # branch above produces for the same contradiction.
+            if j in suppress_nan:
+                domains.append([])
+            else:
+                domains.append([_State(x_j, 0.0, len(cells), True)])
             continue
 
         name = compiled.feature_names[j]
@@ -364,11 +502,10 @@ def _validate(
     Single-feature Linears are accepted silently — their bound already lives
     in ``compiled.derived_ranges``, and their ``missing_policy`` still governs
     the feature's NaN state in ``_build_domains``. Multi-feature Linears in
-    the canonical order-pair shape (``a - b <= 0``) are recognized and
-    returned, but still rejected below — a later task lifts this restriction
-    by deleting the ``if order_pairs`` block, nothing else changes. Any other
-    multi-feature Linear, and any callable value policy, name
-    ``backend="genetic"`` as the fallback.
+    the canonical order-pair shape (``a - b <= 0``) are returned as
+    ``(a, b)`` index pairs in ascending order, which is the order the search
+    repairs them in. Any other multi-feature Linear, and any callable value
+    policy, name ``backend="genetic"`` as the fallback.
     """
     order_pairs: list[tuple[int, int]] = []
     for lin in compiled.linears:
@@ -383,12 +520,7 @@ def _validate(
             f"Linear constraint over multiple features ({lin.coefficients}) is not "
             'supported by the exact backend yet; use backend="genetic".'
         )
-    if order_pairs:  # a later task lifts this: delete this block to enable order pairs.
-        raise ConstraintValidationError(
-            "order-pair Linear constraints (feature_a <= feature_b) are recognized "
-            "but the exact backend does not search over them yet; support is "
-            "coming in a later task."
-        )
+    order_pairs.sort()
 
     for name, policy in (value_policies or {}).items():
         if callable(policy):
@@ -552,12 +684,121 @@ class _EnsembleBounds:
         return min(left_min, right_min), max(left_max, right_max)
 
 
-# (feature index, model bracket frame, plausibility bracket frame, cost before the move)
+# what one assignment changed in the propagation state: the features it settled
+# (with their previous setting) and the one-hot counters it moved (with their
+# previous readings). Both are stored as old values rather than deltas, for the
+# same reason the cost is: putting a saved value back cannot drift.
+_PropFrame = tuple[
+    tuple[tuple[int, float | None], ...],
+    tuple[tuple[int, int, int], ...],
+]
+
+
+class _Propagation:
+    """What assigning one feature settles about the features that follow it.
+
+    Two constraint kinds reach past the feature they name. An implication
+    settles its consequence the moment its condition is met, and a one-hot
+    group settles its last free member once every other member is a zero. A
+    later state that disagrees with such a settlement cannot be completed into
+    anything the arbiter would accept, so the search cuts it unexplored.
+
+    ``apply`` reports what it changed so ``restore`` can put the previous
+    state back on the way out of a branch, and reports separately whether the
+    assignment contradicts something already settled — on a contradiction the
+    changes made up to that point are still reported, since the caller
+    restores the frame either way.
+
+    One-hot bookkeeping only runs for groups whose members can hold nothing
+    but 0 and 1. A member offering some other value — a factual that is not
+    binary, or a missing state — could still make its group sum to one in ways
+    these counters do not model, so such a group is left to the arbiter alone.
+
+    ``assigned`` and ``values`` are the search's own arrays, shared by
+    reference, so this reads the one assignment everything else reads.
+    """
+
+    def __init__(
+        self,
+        compiled: CompiledConstraints,
+        domains: list[list[_State]],
+        assigned: list[bool],
+        values: list[float],
+    ) -> None:
+        self.implications = compiled.implications
+        self.groups = compiled.onehot_groups
+        self.assigned = assigned
+        self.values = values
+        self.group_of: dict[int, int] = {}
+        for g_idx, group in enumerate(self.groups):
+            if all(s.value in (0.0, 1.0) for f in group for s in domains[f]):
+                for f in group:
+                    self.group_of[f] = g_idx
+        self.forced_value: list[float | None] = [None] * len(assigned)
+        self.ones = [0] * len(self.groups)
+        self.zeros = [0] * len(self.groups)
+
+    def apply(self, j: int, v: float) -> tuple[_PropFrame, bool]:
+        """Settle what follows from ``j`` taking ``v``; report any contradiction."""
+        settled: list[tuple[int, float | None]] = []
+        counters: list[tuple[int, int, int]] = []
+
+        def force(f: int, value: float) -> bool:
+            if self.assigned[f]:
+                return self.values[f] == value
+            current = self.forced_value[f]
+            if current is not None:
+                return current == value
+            settled.append((f, None))
+            self.forced_value[f] = value
+            return True
+
+        def done(conflict: bool) -> tuple[_PropFrame, bool]:
+            return (tuple(settled), tuple(counters)), conflict
+
+        if self.forced_value[j] is not None and v != self.forced_value[j]:
+            return done(True)
+        g_idx = self.group_of.get(j)
+        if g_idx is not None:
+            group = self.groups[g_idx]
+            counters.append((g_idx, self.ones[g_idx], self.zeros[g_idx]))
+            if v == 1.0:
+                self.ones[g_idx] += 1
+            else:
+                self.zeros[g_idx] += 1
+            # a second one, or nothing but zeros: the group can no longer sum
+            # to one. The all-zeros reading is a backstop -- settling the last
+            # free member normally catches that case one assignment earlier.
+            if self.ones[g_idx] > 1 or self.zeros[g_idx] == len(group):
+                return done(True)
+            if self.ones[g_idx] == 0 and self.zeros[g_idx] == len(group) - 1:
+                last = next(f for f in group if f != j and not self.assigned[f])
+                if not force(last, 1.0):
+                    return done(True)
+        for imp in self.implications:
+            triggered = imp.cond_index == j and v == imp.cond_value
+            if triggered and not force(imp.cons_index, imp.cons_value):
+                return done(True)
+        return done(False)
+
+    def restore(self, frame: _PropFrame) -> None:
+        """Put back everything one ``apply`` settled."""
+        settled, counters = frame
+        for f, previous in reversed(settled):
+            self.forced_value[f] = previous
+        for g_idx, ones, zeros in reversed(counters):
+            self.ones[g_idx] = ones
+            self.zeros[g_idx] = zeros
+
+
+# (feature index, model bracket frame, plausibility bracket frame, cost before
+# the move, propagation frame)
 _Frame = tuple[
     int,
     tuple[tuple[int, float, float], ...],
     tuple[tuple[int, float, float], ...],
     float,
+    _PropFrame,
 ]
 
 
@@ -586,6 +827,14 @@ def solve_exact(
     is accepted only if the compiled constraints admit the row, its score
     re-computed in float space lands in the target, and — when configured —
     the isolation forest still calls it plausible.
+
+    Implications and one-hot groups settle features ahead of the branching: a
+    state that contradicts something an earlier assignment already settled is
+    cut on the spot. A pair of features tied by ``a <= b`` cuts branches whose
+    remaining values can no longer be ordered that way, and a completed
+    assignment that breaks such a pair is first repaired by moving both
+    features onto one shared value inside their cells. All of that only
+    narrows or nudges what the arbiter is shown; the arbiter still decides.
 
     Args:
         ir: Model whose score must land in ``interval``.
@@ -620,11 +869,14 @@ def solve_exact(
         assignment the grid allows was tried and none was feasible, so no
         counterfactual exists within the searched space — ``proof`` carries no
         meaning in that case and should be ignored. An ``x_cf`` of None with
-        ``completed`` False only means the node or time budget ran out first;
-        the space was never exhausted and nothing is proven either way.
+        ``completed`` False only means the search never settled the whole
+        space, so nothing is proven either way: a budget ran out, or an order
+        pair was left undecided — several pairs sharing features that could
+        not be repaired one at a time, or a pair whose feature carries a value
+        policy.
     """
     start = time.monotonic()
-    _validate(compiled, value_policies)
+    order_pairs = _validate(compiled, value_policies)
     lo_t, hi_t = interval
     if_ir = plausibility[0] if plausibility is not None else None
     min_total_path = plausibility[1] if plausibility is not None else 0.0
@@ -663,9 +915,69 @@ def solve_exact(
         )
     h_suffix = _h_suffix(order, domains)
 
+    level_of = {f: level for level, f in enumerate(order)}
+    # Every feature an implication, a one-hot group or an order pair mentions is
+    # constraint-referenced, and _feature_order keeps all of those, so the search
+    # really does get to decide each of them.
+    related = {f for imp in compiled.implications for f in (imp.cond_index, imp.cons_index)}
+    related.update(f for group in compiled.onehot_groups for f in group)
+    related.update(f for pair in order_pairs for f in pair)
+    assert related <= set(order), "a related feature was left out of the search order"
+
+    bounds_lo, bounds_hi = compiled.instance_bounds(x)[:2]
+    bounds_lo = np.where(np.isnan(bounds_lo), -math.inf, bounds_lo)
+    bounds_hi = np.where(np.isnan(bounds_hi), math.inf, bounds_hi)
+    spans: dict[int, tuple[float, float]] = {}
+    for f in {f for pair in order_pairs for f in pair}:
+        span = _domain_span(domains[f], grids[f], float(bounds_lo[f]), float(bounds_hi[f]))
+        if span is not None:
+            spans[f] = span
+    bounded_pairs = [(a, b) for a, b in order_pairs if a in spans and b in spans]
+    state_spans: dict[int, list[tuple[float, float]]] = {}
+    for f in {f for pair in bounded_pairs for f in pair}:
+        per_state: list[tuple[float, float]] = []
+        for st in domains[f]:
+            iv = _intersect_cell(grids[f][st.cell_idx], float(bounds_lo[f]), float(bounds_hi[f]))
+            per_state.append((st.value, st.value) if iv is None else _achievable_bounds(iv))
+        state_spans[f] = per_state
+
+    policies_now: Mapping[str, ValuePolicy] = value_policies or {}
+
+    def policy_active(f: int) -> bool:
+        policy = policies_now.get(compiled.feature_names[f])
+        return policy is not None and policy != "raw"
+
+    # A feature with a value policy has to land on the policy's grid, and a
+    # binary feature only ever holds 0 or 1; neither can be nudged to an
+    # arbitrary point inside its cell, so pairs touching one are never repaired.
+    repairable_pairs = frozenset(
+        (a, b)
+        for a, b in order_pairs
+        if not any(f in compiled.binary_features or policy_active(f) for f in (a, b))
+    )
+    # Of the pairs left unrepaired, the binary ones are no loss: a binary
+    # feature carries both 0 and 1 among its own candidates, so the search
+    # reaches every ordering of such a pair without any repair. A pair held
+    # back by a value policy is a different matter — the value the pair wants
+    # may be another point of the policy's grid inside the same cell, and each
+    # cell contributes only one candidate — so nothing about those problems
+    # can be certified at all.
+    policy_bound = any(
+        pair not in repairable_pairs and any(policy_active(f) for f in pair)
+        for pair in order_pairs
+    )
+    # pairs sharing a feature with another pair: repairing one of them can
+    # break the other, so a repair that comes to nothing there proves nothing
+    entangled_pairs = frozenset(
+        pair
+        for pair in order_pairs
+        if any(other != pair and set(other) & set(pair) for other in order_pairs)
+    )
+
     assigned = [False] * len(x)
     values = [0.0] * len(x)
     assigned_mask = 0
+    propagation = _Propagation(compiled, domains, assigned, values)
     model_bounds = _EnsembleBounds(ir, assigned, values)
     if_bounds = _EnsembleBounds(if_ir, assigned, values) if if_ir is not None else None
 
@@ -686,6 +998,10 @@ def solve_exact(
     nodes_pruned_cost = 0
     gap_prune_fired = False
     completed = True
+    # cheapest committed cost among the completions the repair had to set aside;
+    # nothing derived from one of those can cost less than this, so once the
+    # incumbent is at least as cheap, setting them aside changed nothing
+    dropped_floor = -math.inf if policy_bound else math.inf
 
     stack: list[int] = []  # state index chosen at each assigned level
     frames: list[_Frame] = []
@@ -695,13 +1011,132 @@ def solve_exact(
 
     def undo(frame: _Frame) -> None:
         nonlocal g, assigned_mask
-        j, model_frame, if_frame, g_before = frame
+        j, model_frame, if_frame, g_before, prop_frame = frame
+        propagation.restore(prop_frame)
         model_bounds.restore(model_frame)
         if if_bounds is not None:
             if_bounds.restore(if_frame)
         assigned[j] = False
         assigned_mask &= ~(1 << j)
         g = g_before
+
+    def reach(f: int, movable: bool) -> tuple[float, float]:
+        """The values feature ``f`` can still end up holding.
+
+        Undecided, that is every cell it might yet be put in. Decided, it is
+        the cell it was put in and not the single value inside it, because a
+        boundary repair may still move it anywhere in that cell — unless the
+        pair cannot be repaired at all, and then the value it was given is the
+        only point left.
+        """
+        if not assigned[f]:
+            return spans[f]
+        if not movable:
+            return values[f], values[f]
+        level = level_of[f]
+        chosen = stack[level] if level < len(stack) else next_state
+        return state_spans[f][chosen]
+
+    def unorderable() -> bool:
+        """True when some pair ``a <= b`` is already out of reach: the lowest
+        value ``a`` can still hold is above the highest ``b`` can."""
+        for pair in bounded_pairs:
+            a, b = pair
+            movable = pair in repairable_pairs
+            if reach(a, movable)[0] > reach(b, movable)[1]:
+                return True
+        return False
+
+    def intersected_cell(f: int) -> Cell | None:
+        """The cell the current assignment puts ``f`` in, narrowed to its
+        constraint bounds; ``None`` when ``f`` is currently missing."""
+        level = level_of[f]
+        chosen = stack[level] if level < len(stack) else next_state
+        picked = domains[f][chosen]
+        if picked.is_nan:
+            return None
+        return _intersect_cell(grids[f][picked.cell_idx], float(bounds_lo[f]), float(bounds_hi[f]))
+
+    def candidates_for(a: int, b: int) -> list[float]:
+        cell_a = intersected_cell(a)
+        cell_b = intersected_cell(b)
+        if cell_a is None or cell_b is None:
+            return []
+        return _boundary_candidates(cell_a, cell_b, float(x[a]), float(x[b]))
+
+    def broken(row: FloatArray, pairs: list[tuple[int, int]]) -> list[tuple[int, int]]:
+        """The pairs this row orders the wrong way round, by the arbiter's own
+        reading. A pair with a missing value on either side is left out: a
+        missing value cannot be pulled onto a boundary, so the linear check and
+        its missing policy have the last word on it."""
+        return [
+            (a, b)
+            for a, b in pairs
+            if not math.isnan(row[a])
+            and not math.isnan(row[b])
+            and float(row[a]) - float(row[b]) > _LINEAR_SLACK
+        ]
+
+    def finish(row: FloatArray) -> FloatArray | None:
+        """The row to weigh against the incumbent, or ``None`` if there is none.
+
+        A completed assignment usually goes straight to the arbiter. When it
+        orders some pair the wrong way round, both features of that pair first
+        move onto one shared value inside their cells — the cheapest such value
+        that the arbiter still accepts. Moving inside a cell cannot change how
+        any tree routes the row, so the repair keeps the score it was pruned
+        on. Several broken pairs at once are repaired one after another, each
+        on the cheapest shared value regardless of the arbiter, and the whole
+        completion is dropped if any pair is left broken; that is the
+        conservative corner named in the module docstring. A completion set
+        aside that way was never really decided, so its committed cost is
+        remembered: a repair can only ever cost more than that, so once the
+        incumbent is at least as cheap, setting it aside cannot have changed
+        the answer, and the search is exhaustive after all.
+        """
+        nonlocal dropped_floor
+        violated = broken(row, order_pairs)
+        if not violated:
+            return row if accepts(row) else None
+        if any(pair not in repairable_pairs for pair in violated):
+            return None  # a broken pair the arbiter is bound to reject anyway
+        if len(violated) == 1:
+            a, b = violated[0]
+            best_row: FloatArray | None = None
+            best_cost = math.inf
+            for t in candidates_for(a, b):
+                variant = row.copy()
+                variant[a] = t
+                variant[b] = t
+                cost = _cost_of_row(x, variant, sigma, weights, lam, compiled.allow_missing)
+                if cost < best_cost and accepts(variant):
+                    best_cost = cost
+                    best_row = variant
+            if best_row is None and violated[0] in entangled_pairs:
+                # the repair may have been turned down by a pair it disturbed
+                dropped_floor = min(dropped_floor, g)
+            return best_row
+        repaired = row.copy()
+        for a, b in violated:
+            best_t: float | None = None
+            best_cost = math.inf
+            for t in candidates_for(a, b):
+                variant = repaired.copy()
+                variant[a] = t
+                variant[b] = t
+                cost = _cost_of_row(x, variant, sigma, weights, lam, compiled.allow_missing)
+                if cost < best_cost:
+                    best_cost = cost
+                    best_t = t
+            if best_t is None:
+                dropped_floor = min(dropped_floor, g)
+                return None
+            repaired[a] = best_t
+            repaired[b] = best_t
+        if broken(repaired, order_pairs) or not accepts(repaired):
+            dropped_floor = min(dropped_floor, g)
+            return None
+        return repaired
 
     while order:
         k = len(stack)
@@ -720,19 +1155,26 @@ def solve_exact(
         nodes_expanded += 1
         state = states[next_state]
         j = order[k]
+        prop_frame, conflict = propagation.apply(j, state.value)
         assigned[j] = True
         values[j] = state.value
         assigned_mask |= 1 << j
-        # A propagation pass over one-hot groups and implications belongs here,
-        # between the assignment and the bounds it feeds.
         frame: _Frame = (
             j,
             model_bounds.apply(j, assigned_mask),
             if_bounds.apply(j, assigned_mask) if if_bounds is not None else (),
             g,
+            prop_frame,
         )
         g = g + state.cost
 
+        if conflict or (bounded_pairs and unorderable()):
+            # No completion below this state can satisfy the constraints, so it
+            # is cut on feasibility, counted with the cost prunes (see _stats).
+            nodes_pruned_cost += 1
+            undo(frame)
+            next_state += 1
+            continue
         if model_bounds.score_max < lo_t or model_bounds.score_min > hi_t:
             nodes_pruned_score += 1
             undo(frame)
@@ -758,11 +1200,12 @@ def solve_exact(
             for level, chosen in enumerate(stack):
                 row[order[level]] = domains[order[level]][chosen].value
             row[j] = state.value
-            if accepts(row):
-                cost = _cost_of_row(x, row, sigma, weights, lam, compiled.allow_missing)
+            accepted = finish(row)
+            if accepted is not None:
+                cost = _cost_of_row(x, accepted, sigma, weights, lam, compiled.allow_missing)
                 if cost < incumbent_cost:
                     incumbent_cost = cost
-                    incumbent_row = row
+                    incumbent_row = accepted
                     incumbent_states = [
                         domains[order[level]][chosen] for level, chosen in enumerate(stack)
                     ]
@@ -776,6 +1219,7 @@ def solve_exact(
         g_stack.append(g)
         next_state = 0
 
+    completed = completed and dropped_floor >= incumbent_cost
     if completed:
         lower_bound = math.inf
         if incumbent_row is not None:
@@ -790,8 +1234,13 @@ def solve_exact(
 
     snapped: dict[str, bool] = {}
     for level, chosen_state in enumerate(incumbent_states or []):
-        if chosen_state.snapped and chosen_state.value != x[order[level]]:
-            snapped[compiled.feature_names[order[level]]] = True
+        f = order[level]
+        # a feature an order-pair repair moved no longer holds the value the
+        # policy produced, so it is not reported as snapped either
+        if incumbent_row is not None and incumbent_row[f] != chosen_state.value:
+            continue
+        if chosen_state.snapped and chosen_state.value != x[f]:
+            snapped[compiled.feature_names[f]] = True
 
     return ExactResult(
         x_cf=incumbent_row,
@@ -819,7 +1268,17 @@ def _stats(
     completed: bool,
     warm_start_used: bool,
 ) -> dict[str, object]:
-    """The exact set of counters ``solve_exact`` reports."""
+    """The exact set of counters ``solve_exact`` reports.
+
+    ``nodes_pruned_score`` counts branches the ensemble can no longer bring
+    into the target (the plausibility bound counts here too, being the same
+    kind of reachability test). ``nodes_pruned_cost`` counts every other cut:
+    branches too expensive to beat the incumbent, and branches no constraint
+    can be satisfied in — a state contradicting an implication or a one-hot
+    group, or an order pair whose two features can no longer be ordered. A
+    mirror of this search has to file those feasibility cuts the same way,
+    since the counter set itself is fixed.
+    """
     return {
         "nodes_expanded": nodes_expanded,
         "nodes_pruned_score": nodes_pruned_score,
