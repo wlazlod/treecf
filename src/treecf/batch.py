@@ -26,6 +26,7 @@ from treecf.ir.evaluate import raw_score_batch_prepared
 if TYPE_CHECKING:
     from treecf.api import Counterfactual, Explainer, Infeasible
     from treecf.backends.genetic import GeneticResult
+    from treecf.regions import RecourseRegion
     from treecf.targets import Target
 
 FloatArray = npt.NDArray[np.float64]
@@ -49,6 +50,7 @@ class BatchRecord:
     seed: int | None = None  # diversity="seeds": the seed that produced this plan
     blocked_lever: str | None = None  # diversity="lever-blocking": the frozen lever
     coalition: str | None = None  # diversity="coalitions": the group this plan may touch
+    region: RecourseRegion | None = None  # set by explain_batch(..., region=True); not persisted
 
 
 @dataclass(frozen=True)
@@ -182,6 +184,7 @@ def explain_batch(
     warm_start: bool | None = None,
     node_budget: int | None = None,
     gap: float | None = None,
+    region: bool = False,
 ) -> BatchResult:
     """See ``Explainer.explain_batch``.
 
@@ -201,6 +204,8 @@ def explain_batch(
     sequentially instead of running the Rust engine's parallel waves.
     ``warm_start``/``node_budget``/``gap`` configure that solve; they are
     only valid together with ``backend="exact"`` (see ``Explainer.explain``).
+    ``region=True`` attaches a certified ``RecourseRegion`` to every feasible
+    record's ``region`` field (not persisted by ``BatchResult.save``/``load``).
     """
     from treecf.api import _resolve_exact_kwargs
 
@@ -247,7 +252,7 @@ def explain_batch(
         records = _rows_by_coalitions(
             explainer, X, target, row_ids, coalitions, include_full,
             backend, time_budget_s, sparsity_weight, seed=seed,
-            warm_start=warm_start, node_budget=node_budget, gap=gap,
+            warm_start=warm_start, node_budget=node_budget, gap=gap, region=region,
         )
     elif diversity == "seeds" and backend in ("genetic", "genetic-rust"):
         # Same attempts, dedup, and stopping rule as `_row_by_seeds`, but each
@@ -255,7 +260,7 @@ def explain_batch(
         # Rust call — the output is identical to the sequential loop.
         records = _rows_by_seed_waves(
             explainer, X, target, row_ids, n_per_example,
-            time_budget_s, sparsity_weight, seed=seed,
+            time_budget_s, sparsity_weight, seed=seed, region=region,
         )
     else:
         primaries: list[Counterfactual | Infeasible] | None = None
@@ -271,14 +276,14 @@ def explain_batch(
                     explainer, X[i], target, row_id, n_per_example,
                     backend, time_budget_s, sparsity_weight,
                     master_seed=seed * 1_000_003 + i * 1_009,
-                    warm_start=warm_start, node_budget=node_budget, gap=gap,
+                    warm_start=warm_start, node_budget=node_budget, gap=gap, region=region,
                 )
             else:
                 row_records, row_essential = _row_by_lever_blocking(
                     explainer, X[i], target, row_id, n_per_example,
                     backend, time_budget_s, sparsity_weight, seed=seed,
                     primary=None if primaries is None else primaries[i],
-                    warm_start=warm_start, node_budget=node_budget, gap=gap,
+                    warm_start=warm_start, node_budget=node_budget, gap=gap, region=region,
                 )
                 essential[row_id] = row_essential
             records.extend(row_records)
@@ -298,6 +303,7 @@ def _record_from(
     seed: int | None = None,
     blocked_lever: str | None = None,
     coalition: str | None = None,
+    region: RecourseRegion | None = None,
 ) -> BatchRecord:
     return BatchRecord(
         id=row_id,
@@ -312,6 +318,7 @@ def _record_from(
         seed=seed,
         blocked_lever=blocked_lever,
         coalition=coalition,
+        region=region,
     )
 
 
@@ -332,6 +339,7 @@ def _rows_by_seed_waves(
     time_budget_s: float,
     sparsity_weight: float,
     seed: int,
+    region: bool = False,
 ) -> list[BatchRecord]:
     """Wave-parallel `_row_by_seeds` over all rows (Rust backend only).
 
@@ -379,7 +387,11 @@ def _rows_by_seed_waves(
             continue
         ranked = sorted(found[i].values(), key=lambda pair: pair[0].distance)[:n]
         records.extend(
-            _record_from(row_id, k, cf, seed=cf_seed) for k, (cf, cf_seed) in enumerate(ranked)
+            _record_from(
+                row_id, k, cf, seed=cf_seed,
+                region=explainer._region_for(X[i], cf.x_cf, interval) if region else None,
+            )
+            for k, (cf, cf_seed) in enumerate(ranked)
         )
     return records
 
@@ -453,6 +465,7 @@ def _rows_by_coalitions(
     warm_start: bool | None = None,
     node_budget: int | None = None,
     gap: float | None = None,
+    region: bool = False,
 ) -> list[BatchRecord]:
     """One record per named coalition per row (plus the optional baseline).
 
@@ -513,7 +526,8 @@ def _rows_by_coalitions(
         feasible.sort(key=lambda pair: pair[1].distance)
         k = 0
         for name, cf in feasible:
-            records.append(_record_from(row_id, k, cf, coalition=name))
+            reg = solvers[name]._region_for(X[i], cf.x_cf, interval) if region else None
+            records.append(_record_from(row_id, k, cf, coalition=name, region=reg))
             k += 1
         for name in solvers:
             if not isinstance(outcomes[name][i], Counterfactual):
@@ -535,6 +549,7 @@ def _row_by_seeds(
     warm_start: bool | None = None,
     node_budget: int | None = None,
     gap: float | None = None,
+    region: bool = False,
 ) -> list[BatchRecord]:
     from treecf.api import Counterfactual
 
@@ -555,8 +570,12 @@ def _row_by_seeds(
     if not found:
         return [_infeasible_record(row_id)]
     ranked = sorted(found.values(), key=lambda pair: pair[0].distance)[:n_per_example]
+    interval = target.raw_interval(explainer.ir.link) if region else None
     return [
-        _record_from(row_id, k, cf, seed=cf_seed)
+        _record_from(
+            row_id, k, cf, seed=cf_seed,
+            region=explainer._region_for(x, cf.x_cf, interval) if interval is not None else None,
+        )
         for k, (cf, cf_seed) in enumerate(ranked)
     ]
 
@@ -575,6 +594,7 @@ def _row_by_lever_blocking(
     warm_start: bool | None = None,
     node_budget: int | None = None,
     gap: float | None = None,
+    region: bool = False,
 ) -> tuple[list[BatchRecord], list[str]]:
     from treecf.api import Counterfactual
 
@@ -589,7 +609,9 @@ def _row_by_lever_blocking(
     if not isinstance(primary, Counterfactual):
         return [_infeasible_record(row_id)], []
 
-    records = [_record_from(row_id, 0, primary)]
+    interval = target.raw_interval(explainer.ir.link) if region else None
+    primary_region = explainer._region_for(x, primary.x_cf, interval) if interval else None
+    records = [_record_from(row_id, 0, primary, region=primary_region)]
     seen = {frozenset(primary.changes)}
     essential: list[str] = []
     names = explainer.ir.feature_names
@@ -603,7 +625,8 @@ def _row_by_lever_blocking(
     for lever in levers:
         if len(records) >= n_per_example:
             break
-        alternative = explainer._with_extra_freezes([lever])._explain(
+        clone = explainer._with_extra_freezes([lever])
+        alternative = clone._explain(
             x, target, backend, time_budget_s, sparsity_weight, seed,
             warn_factual=False,  # explain_batch already warned in aggregate
             warm_start=warm_start, node_budget=node_budget, gap=gap,
@@ -612,8 +635,11 @@ def _row_by_lever_blocking(
             key = frozenset(alternative.changes)
             if key not in seen:
                 seen.add(key)
+                alt_region = clone._region_for(x, alternative.x_cf, interval) if interval else None
                 records.append(
-                    _record_from(row_id, len(records), alternative, blocked_lever=lever)
+                    _record_from(
+                        row_id, len(records), alternative, blocked_lever=lever, region=alt_region
+                    )
                 )
         else:
             essential.append(lever)

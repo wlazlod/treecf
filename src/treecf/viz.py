@@ -514,6 +514,10 @@ def _plans_and_failures(
     Dispatches on shape: a ``Mapping`` keeps every value labeled by
     ``str(key)``; a ``Sequence`` (excluding ``str``/``bytes``) labels each
     entry by its ``coalition`` attribute; anything else is one bare result.
+    A ``BatchResult`` itself is iterable but not a ``Sequence`` (no
+    ``__getitem__``), so pass ``list(batch_result)`` (every row's records,
+    ``coalition``-labeled when set) or a single row's records
+    (``batch_result.for_id(row_id)``), not the ``BatchResult`` itself.
     """
     labeled: list[tuple[str | None, Any]]
     if isinstance(results, Mapping):
@@ -688,8 +692,10 @@ def _format_plan(
     """Arrow-label text for one plan: effort-ordered changes, one phrase per line.
 
     NaN legs read as ``drop {feature}`` / ``provide {feature} = value``;
-    ``plan.region.describe()`` (when present) supplies a phrase for changes
-    it covers instead of ``feature = value``. Truncated to ``max_changes``
+    ``plan.region.describe()`` (when present and returning a ``Mapping``)
+    supplies a phrase for changes it covers instead of ``feature = value`` —
+    anything else ``describe()`` returns falls back to the plain phrasing, the
+    same as no region at all. Truncated to ``max_changes``
     phrase lines with a trailing ``"(+k more)"`` line; ``schematic`` phrases
     each line as an "If ..." / "and ..." clause instead of a bare value.
     ``name``, when given, gets its own line in quantitative mode or prefixes
@@ -699,7 +705,11 @@ def _format_plan(
     efforts = _change_effort(explainer, changes)
     region = getattr(plan, "region", None)
     describe = getattr(region, "describe", None)
-    region_phrases: dict[str, str] = describe() if callable(describe) else {}
+    region_phrases: Mapping[str, str] = {}
+    if callable(describe):
+        described = describe()
+        if isinstance(described, Mapping):
+            region_phrases = described
     ordered = sorted(changes, key=lambda f: (-efforts[f], f))
 
     parts = []

@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import warnings
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -25,6 +25,7 @@ from treecf.targets import Target
 if TYPE_CHECKING:
     from treecf.backends.exact import ExactResult
     from treecf.backends.genetic import GeneticResult
+    from treecf.regions import RecourseRegion
 
 FloatArray = npt.NDArray[np.float64]
 
@@ -91,6 +92,7 @@ class Counterfactual:
     proof: str  # "heuristic" | "optimal" | "optimal_within_gap"
     solver_stats: dict[str, object] = field(default_factory=dict)
     snapped: dict[str, bool] = field(default_factory=dict)  # value_policy outcome
+    region: RecourseRegion | None = None  # set when `explain(..., region=True)`
 
 
 @dataclass(frozen=True)
@@ -202,6 +204,7 @@ class Explainer:
         warm_start: bool | None = None,
         node_budget: int | None = None,
         gap: float | None = None,
+        region: bool = False,
     ) -> Counterfactual | Infeasible | dict[str, object]:
         """Search for a counterfactual (or one per band for ``Target.bands``).
 
@@ -237,10 +240,16 @@ class Explainer:
         If the factual itself violates a constraint, a :class:`TreecfWarning`
         is emitted: the returned plan will include changes made solely to
         satisfy the constraint set.
+
+        ``region=True`` widens every successful ``Counterfactual`` into a
+        certified :class:`~treecf.regions.RecourseRegion` (``cf.region``) —
+        works with any backend, genetic included. Costs one oracle call per
+        attempted per-feature, per-direction expansion; see
+        ``Explainer.recourse_region``.
         """
         return self._explain(
             x, target, backend, time_budget_s, sparsity_weight, seed, warn_factual=True,
-            warm_start=warm_start, node_budget=node_budget, gap=gap,
+            warm_start=warm_start, node_budget=node_budget, gap=gap, region=region,
         )
 
     def _explain(
@@ -256,6 +265,7 @@ class Explainer:
         warm_start: bool | None = None,
         node_budget: int | None = None,
         gap: float | None = None,
+        region: bool = False,
     ) -> Counterfactual | Infeasible | dict[str, object]:
         """``explain`` body; ``explain_batch`` calls it with ``warn_factual=False``
         after emitting its own aggregate warning."""
@@ -282,7 +292,7 @@ class Explainer:
         if target.bands_spec is not None:
             results: dict[str, object] = {}
             for name, interval in target.band_intervals(self.ir.link).items():
-                results[name] = (
+                outcome = (
                     self._explain_exact(
                         x, interval, time_budget_s, resolved_warm_start,
                         resolved_node_budget, resolved_gap, sparsity_weight, seed,
@@ -292,16 +302,24 @@ class Explainer:
                         x, interval, time_budget_s, sparsity_weight, seed, rust=rust
                     )
                 )
+                if region and isinstance(outcome, Counterfactual):
+                    outcome = replace(outcome, region=self._region_for(x, outcome.x_cf, interval))
+                results[name] = outcome
             return results
         interval = target.raw_interval(self.ir.link)
-        if backend == "exact":
-            return self._explain_exact(
+        result = (
+            self._explain_exact(
                 x, interval, time_budget_s, resolved_warm_start,
                 resolved_node_budget, resolved_gap, sparsity_weight, seed,
             )
-        return self._explain_genetic(
-            x, interval, time_budget_s, sparsity_weight, seed, rust=rust
+            if backend == "exact"
+            else self._explain_genetic(
+                x, interval, time_budget_s, sparsity_weight, seed, rust=rust
+            )
         )
+        if region and isinstance(result, Counterfactual):
+            result = replace(result, region=self._region_for(x, result.x_cf, interval))
+        return result
 
     def explain_batch(
         self,
@@ -319,6 +337,7 @@ class Explainer:
         warm_start: bool | None = None,
         node_budget: int | None = None,
         gap: float | None = None,
+        region: bool = False,
     ) -> Any:
         """Mass-produce counterfactuals for a dataset; see ``treecf.batch``.
 
@@ -340,7 +359,9 @@ class Explainer:
         lever-blocking) sequentially — expect roughly linear-in-rows wall
         time rather than the Rust engine's parallel wave scheduling.
         ``warm_start``/``node_budget``/``gap`` thread through to every one of
-        those solves; see ``Explainer.explain``.
+        those solves; see ``Explainer.explain``. ``region=True`` attaches a
+        certified ``RecourseRegion`` (``BatchRecord.region``) to every
+        feasible record, at the same one-oracle-call-per-expansion cost.
         """
         from treecf.batch import explain_batch
 
@@ -349,7 +370,7 @@ class Explainer:
             ids=ids, backend=backend, time_budget_s=time_budget_s,
             sparsity_weight=sparsity_weight, seed=seed,
             coalitions=coalitions, include_full=include_full,
-            warm_start=warm_start, node_budget=node_budget, gap=gap,
+            warm_start=warm_start, node_budget=node_budget, gap=gap, region=region,
         )
 
     def explain_coalitions(
@@ -365,6 +386,7 @@ class Explainer:
         warm_start: bool | None = None,
         node_budget: int | None = None,
         gap: float | None = None,
+        region: bool = False,
     ) -> dict[str, Counterfactual | Infeasible]:
         """One counterfactual per named feature coalition (opt-in mode).
 
@@ -388,12 +410,12 @@ class Explainer:
         if include_full:
             results[_ALL_LEVERS] = self._explain_one(
                 x, target, backend, time_budget_s, sparsity_weight, seed,
-                warm_start=warm_start, node_budget=node_budget, gap=gap,
+                warm_start=warm_start, node_budget=node_budget, gap=gap, region=region,
             )
         for name, clone in self._coalition_explainers(normalized).items():
             results[name] = clone._explain_one(
                 x, target, backend, time_budget_s, sparsity_weight, seed,
-                warm_start=warm_start, node_budget=node_budget, gap=gap,
+                warm_start=warm_start, node_budget=node_budget, gap=gap, region=region,
             )
         return results
 
@@ -409,12 +431,13 @@ class Explainer:
         warm_start: bool | None = None,
         node_budget: int | None = None,
         gap: float | None = None,
+        region: bool = False,
     ) -> Counterfactual | Infeasible:
         """`explain` for a single-interval target, with the bands arm ruled out."""
         result = self._explain(
             x, target, backend, time_budget_s, sparsity_weight, seed,
             warn_factual=warn_factual,
-            warm_start=warm_start, node_budget=node_budget, gap=gap,
+            warm_start=warm_start, node_budget=node_budget, gap=gap, region=region,
         )
         assert not isinstance(result, dict)  # bands are rejected by the callers
         return result
@@ -803,6 +826,46 @@ class Explainer:
         if self.plausibility is None:
             return None
         return self.plausibility.if_ir, self.plausibility.min_total_path
+
+    def recourse_region(
+        self, x: FloatArray, x_cf: FloatArray, target: Target
+    ) -> RecourseRegion:
+        """Certify a per-feature box around an already-verified counterfactual.
+
+        ``x_cf`` must independently pass the same float-space re-check
+        ``explain`` runs on its own results; a row that fails it raises
+        ``TreecfError`` naming the reason, since there is nothing sound to
+        widen. Works for a counterfactual from any backend. Costs one oracle
+        call — a full interval-tree walk of every ensemble tree — per
+        attempted per-feature, per-direction expansion; see
+        ``treecf.regions.RecourseRegion``.
+        """
+        x = np.asarray(x, dtype=np.float64)
+        x_cf = np.asarray(x_cf, dtype=np.float64)
+        if target.bands_spec is not None:
+            raise TreecfError(
+                "Target.bands is not supported in recourse_region; pass the single "
+                "band's own interval via Target.raw/probability/calibrated"
+            )
+        interval = target.raw_interval(self.ir.link)
+        verification = self._verify(x, x_cf, interval)
+        if verification is not None:
+            raise TreecfError(
+                f"cannot certify a region for an unverified counterfactual: {verification}"
+            )
+        return self._region_for(x, x_cf, interval)
+
+    def _region_for(
+        self, x: FloatArray, x_cf: FloatArray, interval: tuple[float, float]
+    ) -> RecourseRegion:
+        """Build the region for an already-verified ``x_cf`` (no re-verification)."""
+        from treecf.regions import _recourse_region
+
+        if_ir, min_total_path = (None, 0.0)
+        plaus = self._plausibility_bound()
+        if plaus is not None:
+            if_ir, min_total_path = plaus
+        return _recourse_region(self.ir, x, x_cf, interval, self.compiled, if_ir, min_total_path)
 
     def _apply_value_policies(
         self, x: FloatArray, x_cf: FloatArray, interval: tuple[float, float]
