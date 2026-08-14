@@ -41,6 +41,21 @@ def main() -> int:
         assert isinstance(result, treecf.Counterfactual), f"{backend}: {result!r}"
         assert result.score_prob is not None and result.score_prob >= 0.6
         assert result.x_cf[0] <= 3.0, f"{backend}: expected income change, got {result.x_cf}"
+
+    exact_result = explainer.explain(
+        x, target, backend="exact", seed=0, time_budget_s=2.0,
+    )
+    assert isinstance(exact_result, treecf.Counterfactual), f"exact: {exact_result!r}"
+    assert exact_result.proof in {"optimal", "optimal_within_gap", "heuristic"}, (
+        f"exact: unexpected proof {exact_result.proof!r}"
+    )
+
+    region_result = explainer.explain(x, target, backend="genetic", seed=0, region=True)
+    assert isinstance(region_result, treecf.Counterfactual), f"region: {region_result!r}"
+    assert isinstance(region_result.region, treecf.RecourseRegion), (
+        f"region: {region_result.region!r}"
+    )
+
     print(f"smoke OK: treecf {treecf.__version__}")
     return 0
 
