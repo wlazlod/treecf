@@ -548,15 +548,36 @@ fn snap_candidates(values: &[f64], value: f64) -> Vec<f64> {
     ordered
 }
 
+/// `+0.0` for either zero. Python's `math.floor`/`math.ceil` and its one-argument
+/// `round()` all return *ints*, so a zero they produce is always `+0.0` once it
+/// meets a float; `f64::ceil` returns `-0.0` over `(-1.0, -0.0]` and
+/// `round_ties_even` over `(-0.5, -0.0]`. Nothing compares or sums differently,
+/// but the stored sign bit of a snapped candidate would.
+#[inline]
+fn py_zero(v: f64) -> f64 {
+    if v == 0.0 {
+        0.0
+    } else {
+        v
+    }
+}
+
 /// Nearest policy-conforming value inside the cell and bounds — port of
 /// `treecf.api._snap` (callable policies excluded, see the module header).
 fn snap(value: f64, policy: &ValuePolicy, cell: &Cell, lo: f64, hi: f64) -> Option<f64> {
     let candidates = match *policy {
-        ValuePolicy::Integer => snap_candidates(&[value.floor(), value.ceil()], value),
+        ValuePolicy::Integer => {
+            snap_candidates(&[py_zero(value.floor()), py_zero(value.ceil())], value)
+        }
         ValuePolicy::Grid { step, anchor } => {
-            // Python's round() is round-half-to-even
-            let base = anchor + step * ((value - anchor) / step).round_ties_even();
-            snap_candidates(&[base, base - step, base + step], value)
+            // Python's round() is round-half-to-even and returns an int, so the
+            // multiplier carries no sign of zero into `anchor + step * k`
+            let k = py_zero(((value - anchor) / step).round_ties_even());
+            let base = anchor + step * k;
+            snap_candidates(
+                &[py_zero(base), py_zero(base - step), py_zero(base + step)],
+                value,
+            )
         }
     };
     candidates
@@ -1756,7 +1777,18 @@ pub fn solve_exact(
         .copied()
         .filter(|&(a, b)| !policy_active(a) && !policy_active(b))
         .collect();
-    let policy_bound = !order_pairs.is_empty() && repairable_pairs.len() < order_pairs.len();
+    // Python holds the repairable pairs in a frozenset and weighs its size
+    // against the *list* of order pairs, so a pair declared twice — two
+    // identical `a - b <= 0` Linears, which the compiler accepts — already
+    // trips the withdrawal even with no value policy anywhere. Only this count
+    // is deduplicated; membership tests read the same either way.
+    let mut unique_repairable: Vec<(usize, usize)> = Vec::new();
+    for &pair in &repairable_pairs {
+        if !unique_repairable.contains(&pair) {
+            unique_repairable.push(pair);
+        }
+    }
+    let policy_bound = !order_pairs.is_empty() && unique_repairable.len() < order_pairs.len();
     let mut onehot_member = vec![false; cons.n_features];
     for group in &cons.onehot {
         for &f in group {
@@ -2322,6 +2354,43 @@ mod tests {
 
     /// Goldens straight from `treecf.api._snap`:
     /// `uv run python -c 'from treecf.api import _snap, Grid; g = Grid(step=2.0, anchor=0.0); print(_snap(2.4, "integer", lambda c: True, -10, 10), _snap(2.4, "integer", lambda c: True, 3, 10), _snap(2.25, "integer", lambda c: 2.2 <= c <= 2.3, -10, 10), _snap(1.0, g, lambda c: True, -10, 10), _snap(3.0, g, lambda c: True, -10, 10), _snap(2.6, g, lambda c: True, -10, 10))'`
+    /// A collision whose probe carries a nonzero perturb (`hash(40) >> 5 == 1`),
+    /// so the set-order emulation is pinned past the trivial `perturb == 0` case.
+    /// Golden: `uv run python -c 'print(list({36.0, 32.0, 40.0}))'` -> `[32.0, 40.0, 36.0]`
+    #[test]
+    fn set_order_survives_a_nonzero_perturb_collision() {
+        let values = [36.0, 32.0, 40.0];
+        let hashes: Vec<i64> = values.iter().map(|&v| py_hash_double(v)).collect();
+        let ordered: Vec<f64> = py_set_order(&hashes).iter().map(|&k| values[k]).collect();
+        assert_eq!(ordered, vec![32.0, 40.0, 36.0]);
+    }
+
+    /// Python's `math.floor`/`math.ceil`/`round()` return ints, so a zero
+    /// candidate always reaches the comparison as `+0.0`; Rust's own rounding
+    /// hands back `-0.0` just below zero. Goldens:
+    /// `uv run python -c 'from treecf.api import _snap, Grid; print(_snap(-0.4, "integer", lambda c: True, -10, 10), _snap(-0.2, Grid(step=1.0, anchor=-0.0), lambda c: True, -10, 10), _snap(-0.2, Grid(step=1.0, anchor=0.0), lambda c: True, -10, 10))'`
+    /// — all three are `0.0`, and Python's `0.0` has a clear sign bit.
+    #[test]
+    fn snap_normalizes_python_zero_signs() {
+        let wide = cell(f64::NEG_INFINITY, f64::INFINITY, true, true);
+        let got = snap(-0.4, &ValuePolicy::Integer, &wide, -10.0, 10.0).unwrap();
+        assert_eq!(got.to_bits(), 0x0, "integer arm produced {got:?}");
+        for anchor in [0.0, -0.0] {
+            let grid = ValuePolicy::Grid { step: 1.0, anchor };
+            let got = snap(-0.2, &grid, &wide, -10.0, 10.0).unwrap();
+            assert_eq!(
+                got.to_bits(),
+                0x0,
+                "grid arm (anchor {anchor:?}) produced {got:?}"
+            );
+        }
+        // a genuine negative candidate keeps its sign
+        assert_eq!(
+            snap(-1.4, &ValuePolicy::Integer, &wide, -10.0, 10.0),
+            Some(-1.0)
+        );
+    }
+
     #[test]
     fn snap_takes_the_first_candidate_inside_cell_and_bounds() {
         let wide = cell(f64::NEG_INFINITY, f64::INFINITY, true, true);
@@ -2817,6 +2886,34 @@ mod tests {
         mask.set(69);
         bounds.apply(69, &mask, &assigned, &values);
         assert_eq!((bounds.score_min, bounds.score_max), (0.5, 1.5));
+    }
+
+    /// The word seam itself: features 63 and 64 sit in different mask words, so
+    /// each must invalidate its own tree and neither the other's.
+    #[test]
+    fn bitset_handles_the_word_seam() {
+        let ens = stumps(&[(63, 1.0, true, 0.0, 1.0), (64, 2.0, true, 0.0, 0.5)], 65);
+        let mut assigned = vec![false; 65];
+        let mut values = vec![0.0; 65];
+        let mut mask = BitSet::new(65);
+        let mut bounds = EnsembleBounds::new(&ens, &assigned, &values);
+        assert_eq!(bounds.mask.len(), ens.feature.len() * 2);
+        assert_eq!((bounds.score_min, bounds.score_max), (0.0, 1.5));
+
+        assigned[64] = true;
+        values[64] = 5.0; // second tree fixed at +0.5, the first still free
+        mask.set(64);
+        let frame = bounds.apply(64, &mask, &assigned, &values);
+        assert_eq!((bounds.score_min, bounds.score_max), (0.5, 1.5));
+
+        assigned[63] = true;
+        values[63] = 5.0; // both fixed now
+        mask.set(63);
+        bounds.apply(63, &mask, &assigned, &values);
+        assert_eq!((bounds.score_min, bounds.score_max), (1.5, 1.5));
+
+        bounds.restore(&frame);
+        assert_eq!((bounds.score_min, bounds.score_max), (1.0, 1.5));
     }
 
     // ------------------------------------------------------ undo integrity ---
@@ -3488,6 +3585,53 @@ mod tests {
             result.stats,
             ExactStats {
                 nodes_expanded: 4,
+                nodes_pruned_score: 1,
+                nodes_pruned_cost: 0,
+                lower_bound: 0.0,
+                gap: 0.0,
+                completed: false,
+                warm_start_used: false,
+            }
+        );
+    }
+
+    /// The same pair declared twice — two identical `a - b <= 0` Linears, which
+    /// the compiler accepts — collapses in Python's frozenset of repairable
+    /// pairs but not in the list of order pairs, so the withdrawal fires even
+    /// with no value policy in sight. Python: `x_cf = [1.0, 1.0]`, distance 1.5,
+    /// proof "heuristic", completed false (against "optimal"/true for one copy).
+    #[test]
+    fn duplicate_order_pair_withdraws_the_completeness_claim() {
+        let ens = stumps(&[(0, 1.0, true, 0.0, 1.0)], 2);
+        let pair = || LinearC {
+            indices: vec![0, 1],
+            coefs: vec![1.0, -1.0],
+            op: LIN_LE,
+            rhs: 0.0,
+            policy: POLICY_SATISFIED,
+        };
+        let mut cons = cons_base(2);
+        cons.linears = vec![pair(), pair()];
+        let result = solve(
+            &ens,
+            &[0.0, 0.5],
+            (1.0, 2.0),
+            &cons,
+            0.0,
+            &no_policies(2),
+            &ExactParams::default(),
+            None,
+        );
+        assert_eq!(
+            bits_of(result.x_cf.as_ref().unwrap()),
+            vec![0x3ff0000000000000, 0x3ff0000000000000]
+        );
+        assert_eq!(result.distance.unwrap().to_bits(), 0x3ff8000000000000);
+        assert_eq!(result.proof, "heuristic");
+        assert_eq!(
+            result.stats,
+            ExactStats {
+                nodes_expanded: 3,
                 nodes_pruned_score: 1,
                 nodes_pruned_cost: 0,
                 lower_bound: 0.0,
