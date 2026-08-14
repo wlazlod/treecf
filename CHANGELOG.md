@@ -29,6 +29,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stream may differ from builds against rand 0.9, so genetic-search results for
   the same seed can change across this upgrade.
 
+### Fixed
+
+- Derived per-feature bounds from single-feature linear constraints now include the
+  linear check's tolerance, so they can no longer exclude counterfactuals the
+  constraint itself admits (previously possible with very small coefficients).
+
 ## [0.1.1] - 2026-08-08
 
 ### Added
