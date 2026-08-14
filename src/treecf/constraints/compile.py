@@ -366,9 +366,12 @@ def compile_constraints(
                 # Linear itself is retained so missing_policy still governs NaN).
                 # Widen by the check_matrix slack (1e-9) translated into feature
                 # space, so the derived bound never excludes a candidate that the
-                # slacked linear check itself admits.
+                # slacked linear check itself admits. For large |coef| that slack
+                # can shrink below the float rounding gap between coef*candidate
+                # (how check_matrix evaluates it) and rhs/coef (this bound), so
+                # floor the widening at a few ulp of the bound too.
                 bound = c.rhs / coef
-                slack_feat = 1e-9 / abs(coef)
+                slack_feat = max(1e-9 / abs(coef), 4.0 * math.ulp(abs(bound)))
                 if math.isinf(slack_feat):
                     pass  # subnormal coef: slack is unbounded; the retained Linear still governs
                 elif c.op == "==":

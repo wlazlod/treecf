@@ -1,5 +1,6 @@
 """Compilation and validation of the full M2 constraint set."""
 
+import dataclasses
 import math
 
 import numpy as np
@@ -166,6 +167,33 @@ class TestDerivedBoundSlack:
         (rng,) = compiled.derived_ranges
         assert rng.lo == -math.inf
         assert rng.hi == 5.0 + 5e-10
+
+    def test_large_coef_ulp_floor_admits_reviewer_counterexample(self) -> None:
+        # For large |coef|, 1e-9/|coef| underflows below the float rounding gap
+        # between rhs/coef (this bound) and coef*candidate (how check_matrix
+        # evaluates it). Without a ulp-scale floor on the widening, this exact
+        # candidate satisfies the Linear (coef*cand == rhs bit-for-bit) but the
+        # derived bound rejects it.
+        coef = 358050016645.61365
+        rhs = 9373711634.780518
+        bound = rhs / coef
+        cand = math.nextafter(bound, math.inf)
+        assert coef * cand == rhs  # exactly on the constraint, by construction
+
+        compiled = compile_constraints([Linear({"a": coef}, "<=", rhs)], NAMES)
+        (rng,) = compiled.derived_ranges
+        assert cand <= rng.hi  # the widened bound admits it
+
+        x = np.zeros(len(NAMES))
+        row = np.zeros(len(NAMES))
+        row[0] = cand
+        X = row.reshape(1, -1)
+        assert compiled.check_matrix(X, x)[0]  # with the derived bound in play
+
+        # Parity: stripping the derived bound must not change the verdict — the
+        # retained Linear constraint alone already admits this candidate.
+        stripped = dataclasses.replace(compiled, derived_ranges=())
+        assert stripped.check_matrix(X, x)[0]
 
 
 class TestFactualViolations:
