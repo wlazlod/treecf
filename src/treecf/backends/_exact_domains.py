@@ -24,7 +24,7 @@ import numpy as np
 import numpy.typing as npt
 
 from treecf._errors import ConstraintValidationError
-from treecf.aim.cells import Cell, cell_index
+from treecf.aim.cells import Cell, cell_index, feature_cells
 from treecf.api import ValuePolicy, _snap
 from treecf.backends._exact_orderpairs import _achievable_bounds, _intersect_cell
 from treecf.constraints.compile import CompiledConstraints
@@ -38,6 +38,7 @@ from treecf.constraints.objects import (
     OneHot,
     Range,
 )
+from treecf.ir.model import EnsembleIR
 
 FloatArray = npt.NDArray[np.float64]
 
@@ -117,6 +118,61 @@ def _cost_of_row(
     return total
 
 
+def _split_cell_at(cells: tuple[Cell, ...], value: float) -> tuple[Cell, ...]:
+    """``cells`` with the one holding ``value`` cut into the part below it, the
+    single point itself, and the part above — the same three pieces
+    ``build_cells`` emits where an LT and an LE split share a threshold. The
+    outer edges keep the openness they had; the two new inner edges are open,
+    so the point belongs to the middle piece alone. A cell that is already that
+    single point is left as it is, which makes repeated splitting harmless."""
+    out: list[Cell] = []
+    for cell in cells:
+        if not cell.contains(value) or (cell.lo == value and cell.hi == value):
+            out.append(cell)
+            continue
+        if cell.lo < value:
+            out.append(Cell(cell.lo, value, cell.lo_open, True))
+        out.append(Cell(value, value, False, False))
+        if value < cell.hi:
+            out.append(Cell(value, cell.hi, True, cell.hi_open))
+    return tuple(out)
+
+
+def _constraint_cells(
+    compiled: CompiledConstraints, *irs: EnsembleIR
+) -> tuple[tuple[Cell, ...], ...]:
+    """The routing grid, cut finer wherever a constraint can tell two points of
+    one cell apart.
+
+    ``feature_cells`` answers a question about the trees: inside one of its
+    cells every tree routes a row the same way, so one point per cell is enough
+    to know the score. That is not enough to know whether a row is *allowed*.
+    An implication fires on a feature holding one exact value and says nothing
+    about any other, so within a single routing cell the constraint can hold at
+    one point and be silent a hair away — and the search, seeing one point per
+    cell, would never find the hair. So the value each implication watches for
+    becomes a cell boundary of its own here: the cell holding it is cut into
+    the part below, the point itself, and the part above, and the neighbours
+    then offer their own nearest reachable points.
+
+    This refines constraint geometry on top of the routing grid; it does not
+    correct it. ``aim.cells`` stays as it is, because it is right about what it
+    claims. Both the exact backend and the brute-force oracle build their
+    candidates from this function, so the two search the same space.
+    """
+    grids = feature_cells(*irs)
+    triggers: dict[int, set[float]] = {}
+    for imp in compiled.implications:
+        triggers.setdefault(imp.cond_index, set()).add(imp.cond_value)
+    if not triggers:
+        return grids
+    refined = list(grids)
+    for feature, values in triggers.items():
+        for value in sorted(values):
+            refined[feature] = _split_cell_at(refined[feature], value)
+    return tuple(refined)
+
+
 def _demanded_values(compiled: CompiledConstraints) -> dict[int, list[float]]:
     """Per feature, the exact values some constraint can come to demand of it.
 
@@ -146,7 +202,9 @@ def _build_domains(
 
     Assumes ``_validate`` already accepted ``compiled``/``value_policies`` (no
     multi-feature Linears, no callable policies) — this function does not
-    re-check either.
+    re-check either. ``grids`` must be the grid ``_constraint_cells`` builds,
+    not ``feature_cells``' own: every state's ``cell_idx`` points into whatever
+    grid is passed here, so the caller has to search the same one.
 
     A frozen feature gets a single keep state at zero cost (Freeze always pins
     ``lo == hi == x[j]`` for a non-NaN factual, so this is really a special

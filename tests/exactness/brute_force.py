@@ -14,6 +14,12 @@ and an isolation-forest ensemble (mirrors ``Explainer.plausibility``) and filter
 candidates by the forest's path-length bound. Optional ``value_policies`` snaps
 per-feature candidates through the same ``_snap`` the API uses, dropping any cell
 whose snapped representative falls outside the intersected cell/bounds interval.
+
+The grid comes from ``_constraint_cells``, not from ``feature_cells`` directly, so
+that a value some constraint watches for is a cell of its own and its neighbours
+are reachable separately. One point per routing cell is enough to know a row's
+score but not whether it is allowed, and the exact backend has to be compared
+against an oracle that searches the same space, not a coarser one.
 """
 
 from __future__ import annotations
@@ -26,8 +32,9 @@ from dataclasses import dataclass
 import numpy as np
 import numpy.typing as npt
 
-from treecf.aim.cells import Cell, feature_cells
+from treecf.aim.cells import Cell
 from treecf.api import _snap
+from treecf.backends._exact_domains import _constraint_cells
 from treecf.constraints.compile import CompiledConstraints
 from treecf.ir.evaluate import raw_score
 from treecf.ir.model import EnsembleIR
@@ -63,7 +70,11 @@ def solve_brute_force(
     lo_b = np.where(np.isnan(lo_b), -math.inf, lo_b)  # Monotone on a NaN factual: no bound
     hi_b = np.where(np.isnan(hi_b), math.inf, hi_b)
     if_ir, min_total_path = plausibility if plausibility is not None else (None, None)
-    per_feature = feature_cells(ir, if_ir) if if_ir is not None else feature_cells(ir)
+    per_feature = (
+        _constraint_cells(compiled, ir, if_ir)
+        if if_ir is not None
+        else _constraint_cells(compiled, ir)
+    )
     p = ir.n_features
 
     # Candidate values per feature: nearest-in-(cell ∩ bounds) to x_j, plus the NaN

@@ -58,6 +58,14 @@ Only one of those two constraint kinds narrows what a feature may hold in the
 first place, and ``_exact_domains`` is where that happens: a one-hot member is
 restricted to 0 and 1, since nothing else can make its group sum to one, while
 an implication restricts nothing and only adds a candidate.
+
+An implication does change the grid the alphabet is drawn from, though. The
+value it watches for gets a cell of its own, because a routing cell is a
+statement about the trees and not about the constraints: every point of one
+routes a row identically, but an implication fires on a single point of it and
+is silent a hair away, so a search reading one point per cell could never find
+that hair. ``_exact_domains._constraint_cells`` cuts those cells before
+anything else runs.
 """
 
 from __future__ import annotations
@@ -69,11 +77,12 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from treecf.aim.cells import Cell, feature_cells
+from treecf.aim.cells import Cell
 from treecf.api import ValuePolicy
 from treecf.backends._exact_domains import (
     FloatArray,
     _build_domains,
+    _constraint_cells,
     _cost_of_row,
     _demanded_values,
     _domain_span,
@@ -372,7 +381,11 @@ def solve_exact(
             distance=0.0,
         )
 
-    grids = feature_cells(ir) if if_ir is None else feature_cells(ir, if_ir)
+    grids = (
+        _constraint_cells(compiled, ir)
+        if if_ir is None
+        else _constraint_cells(compiled, ir, if_ir)
+    )
     domains = _build_domains(grids, x, compiled, sigma, weights, lam, value_policies)
     order = _feature_order(grids, compiled)
     if any(not domains[j] for j in order):

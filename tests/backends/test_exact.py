@@ -12,10 +12,12 @@ from treecf.aim.cells import Cell, feature_cells
 from treecf.api import Grid
 from treecf.backends._exact_domains import (
     _build_domains,
+    _constraint_cells,
     _cost_of_row,
     _domain_span,
     _feature_order,
     _h_suffix,
+    _split_cell_at,
     _State,
     _term_cost,
     _validate,
@@ -37,6 +39,7 @@ from treecf.ir.evaluate import raw_score
 from treecf.ir.model import EnsembleIR, Link, Node, SplitOp, Tree
 
 from ..conftest import make_random_ir
+from ..exactness.brute_force import solve_brute_force
 
 PropFrame = _PropFrame
 Snapshot = tuple[list[float | None], list[int], list[int]]
@@ -943,13 +946,16 @@ class TestOneHotPropagation:
 
 class TestImpliesPropagation:
     def test_meeting_the_condition_settles_the_consequence(self) -> None:
-        """x0 keeps its factual 1.0, which is exactly what the condition asks
-        for, so x1 has to be 1.0 — and both of its other candidates, including
-        the 0.5 its cell would otherwise offer, are cut without being tried."""
+        """x0 is frozen on the value the condition asks for, so the implication
+        has to fire and x1 has to be 1.0 — both of x1's other candidates,
+        including the 0.5 its cell would otherwise offer, are cut without being
+        tried. (Frozen on purpose: left free, x0 would rather step a hair off
+        the trigger than pay for x1, which is what
+        ``TestImpliesTriggerEvasion`` is about.)"""
         ir = _binary_gate_ir((1.0, 4.0))
         x = np.array([1.0, 0.0])
         compiled = compile_constraints(
-            (Implies(Equals("x0", 1.0), Equals("x1", 1.0)),), ir.feature_names
+            (Implies(Equals("x0", 1.0), Equals("x1", 1.0)), Freeze("x0")), ir.feature_names
         )
         result = solve_exact(
             ir, x, (5.0, 5.0), compiled, np.ones(2), np.ones(2), 0.0, time_budget_s=1e9
@@ -957,8 +963,6 @@ class TestImpliesPropagation:
         assert result.x_cf is not None
         np.testing.assert_array_equal(result.x_cf, np.array([1.0, 1.0]))
         assert result.distance == 1.0
-        assert result.stats["nodes_expanded"] == 5
-        assert result.stats["nodes_pruned_score"] == 1
         assert result.stats["nodes_pruned_cost"] == 2  # x1 = 0.0 and x1 = 0.5
 
     def test_leaving_the_condition_unmet_leaves_the_consequence_free(self) -> None:
@@ -977,7 +981,118 @@ class TestImpliesPropagation:
         assert result.x_cf is not None
         np.testing.assert_array_equal(result.x_cf, np.array([0.0, 0.5]))
         assert result.distance == 0.5
-        assert result.stats["nodes_pruned_cost"] == 2
+        # x0's cell around the trigger is cut in three, so it branches wider
+        assert result.stats["nodes_pruned_cost"] == 4
+
+
+class TestConstraintCells:
+    """The routing grid says where the trees route a row the same way. It does
+    not say where the constraints treat a row the same way, and an implication
+    watching for one exact value tells two points of a single routing cell
+    apart. Those values become cells of their own."""
+
+    def test_the_trigger_becomes_a_cell_of_its_own_with_open_neighbours(self) -> None:
+        cells = (Cell(0.0, 10.0, False, True),)
+        assert _split_cell_at(cells, 1.0) == (
+            Cell(0.0, 1.0, False, True),
+            Cell(1.0, 1.0, False, False),
+            Cell(1.0, 10.0, True, True),
+        )
+
+    def test_the_outer_edges_keep_the_openness_they_had(self) -> None:
+        cells = (Cell(-math.inf, 4.0, True, False),)
+        assert _split_cell_at(cells, 1.0) == (
+            Cell(-math.inf, 1.0, True, True),
+            Cell(1.0, 1.0, False, False),
+            Cell(1.0, 4.0, True, False),
+        )
+
+    def test_a_trigger_on_a_closed_edge_only_splits_off_the_point(self) -> None:
+        cells = (Cell(1.0, 4.0, False, True),)
+        assert _split_cell_at(cells, 1.0) == (
+            Cell(1.0, 1.0, False, False),
+            Cell(1.0, 4.0, True, True),
+        )
+
+    def test_splitting_the_same_value_twice_changes_nothing(self) -> None:
+        once = _split_cell_at((Cell(0.0, 10.0, False, True),), 1.0)
+        assert _split_cell_at(once, 1.0) == once
+
+    def test_cells_that_do_not_hold_the_value_are_untouched(self) -> None:
+        cells = (Cell(-math.inf, 0.0, True, True), Cell(0.0, 10.0, False, True))
+        assert _split_cell_at(cells, 5.0)[0] == cells[0]
+
+    def test_only_condition_features_are_refined(self) -> None:
+        """x0 is watched for, x1 is only ever asked to take a value; the second
+        needs no split, because being a hair off the value it is asked for
+        makes a row illegal rather than legal."""
+        ir = _band_ir((1.0, 1.0))
+        compiled = compile_constraints(
+            (Implies(Equals("x0", 1.0), Equals("x1", 1.0)),), ir.feature_names
+        )
+        plain = feature_cells(ir)
+        refined = _constraint_cells(compiled, ir)
+        assert refined[0] == _split_cell_at(plain[0], 1.0)
+        assert refined[1] == plain[1]
+
+    def test_a_constraint_set_with_no_implication_leaves_the_grid_alone(self) -> None:
+        ir = _band_ir((1.0, 1.0))
+        compiled = compile_constraints((OneHot(("x0", "x1")),), ir.feature_names)
+        assert _constraint_cells(compiled, ir) == feature_cells(ir)
+
+
+class TestImpliesTriggerEvasion:
+    """Review regression. An implication fires on one exact value, so stepping
+    a hair off it costs almost nothing and buys the row its freedom. Reading
+    one point per routing cell hid that: the search saw only the factual 1.0,
+    obeyed the implication, and certified a counterfactual four whole units
+    away as optimal."""
+
+    def _problem(self) -> tuple[EnsembleIR, np.ndarray, object]:
+        ir = _band_ir((1.0, 1.0))
+        x = np.array([1.0, 5.0])
+        compiled = compile_constraints(
+            (Implies(Equals("x0", 1.0), Equals("x1", 1.0)),), ir.feature_names
+        )
+        return ir, x, compiled
+
+    def _just_under_one(self, ir: EnsembleIR) -> float:
+        """The dearest point below the trigger the grid can actually reach."""
+        cells = _constraint_cells(self._problem()[2], ir)[0]
+        below = next(c for c in cells if c.hi == 1.0)
+        return below.nearest_to(1.0)
+
+    def test_the_search_steps_off_the_trigger_instead_of_obeying_it(self) -> None:
+        ir, x, compiled = self._problem()
+        result = solve_exact(
+            ir, x, (2.0, 2.0), compiled, np.ones(2), np.ones(2), 0.0, time_budget_s=1e9
+        )
+        assert result.x_cf is not None
+        expected = np.array([self._just_under_one(ir), 5.0])
+        np.testing.assert_array_equal(result.x_cf, expected)
+        assert result.distance == _cost_of_row(x, expected, np.ones(2), np.ones(2), 0.0, {})
+        assert result.distance < 1e-7  # against the 4.0 it used to certify
+        assert bool(compiled.check_matrix(result.x_cf[np.newaxis, :], x)[0])
+        assert raw_score(ir, result.x_cf) == 2.0
+
+    def test_the_oracle_offers_the_same_option(self) -> None:
+        """The oracle enumerates one point per cell too, so it shared the blind
+        spot exactly — which is why no randomized comparison could see it. It
+        reads the same refined grid now, and lands on the same row."""
+        ir, x, compiled = self._problem()
+        oracle = solve_brute_force(ir, x, (2.0, 2.0), compiled, np.ones(2), np.ones(2), 0.0)
+        assert oracle.feasible
+        assert oracle.x_cf is not None
+        np.testing.assert_array_equal(
+            oracle.x_cf, np.array([self._just_under_one(ir), 5.0])
+        )
+
+    def test_the_row_it_used_to_certify_is_four_units_worse(self) -> None:
+        ir, x, compiled = self._problem()
+        obedient = np.array([1.0, 1.0])
+        assert bool(compiled.check_matrix(obedient[np.newaxis, :], x)[0])
+        assert raw_score(ir, obedient) == 2.0
+        assert _cost_of_row(x, obedient, np.ones(2), np.ones(2), 0.0, {}) == 4.0
 
 
 class TestPropagationUndo:
@@ -1469,7 +1584,23 @@ class TestOrderPairOverAnImpliedFeature:
         return ir, x, compiled
 
     def test_the_demanded_value_repairs_the_pair(self) -> None:
-        ir, x, compiled = self._problem()
+        """x0 is frozen on the implication's trigger, so the implication really
+        does fire and x2 really is pinned to 1.0. That is what makes the pair
+        unrepairable on cost alone and the demanded value the answer.
+
+        The freeze is not decoration. Left free, x0 would step a hair below 1.0,
+        leave the implication with nothing to say and let the pair settle
+        wherever it likes — the case the test below covers, and the reason this
+        one no longer asserts the 8.0 it once did."""
+        ir, x, _compiled = self._problem()
+        compiled = compile_constraints(
+            (
+                Implies(Equals("x0", 1.0), Equals("x2", 1.0)),
+                _order_pair("x1", "x2"),
+                Freeze("x0"),
+            ),
+            ir.feature_names,
+        )
         result = solve_exact(
             ir, x, (3.0, 3.0), compiled, np.ones(3), np.ones(3), 0.0, time_budget_s=1e9
         )
@@ -1477,6 +1608,26 @@ class TestOrderPairOverAnImpliedFeature:
         np.testing.assert_array_equal(result.x_cf, np.array([1.0, 1.0, 1.0]))
         assert result.distance == 8.0
         assert result.stats["completed"] is True
+        assert bool(compiled.check_matrix(result.x_cf[np.newaxis, :], x)[0])
+        assert raw_score(ir, result.x_cf) == 3.0
+
+    def test_a_free_condition_feature_steps_off_the_trigger_instead(self) -> None:
+        """The same problem with x0 free. Stepping a hair below the trigger
+        costs about 6e-8 and buys x2 its freedom, so the pair can be repaired
+        anywhere in the band: 6.0 all in, against the 8.0 this search used to
+        certify as optimal while that row sat there unreachable."""
+        ir, x, compiled = self._problem()
+        result = solve_exact(
+            ir, x, (3.0, 3.0), compiled, np.ones(3), np.ones(3), 0.0, time_budget_s=1e9
+        )
+        assert result.x_cf is not None
+        assert result.x_cf[0] < 1.0  # off the trigger, inside the same band
+        assert result.distance is not None
+        assert result.distance == _cost_of_row(
+            x, result.x_cf, np.ones(3), np.ones(3), 0.0, {}
+        )
+        assert result.distance == pytest.approx(6.0, abs=1e-6)
+        assert result.distance < 8.0
         assert bool(compiled.check_matrix(result.x_cf[np.newaxis, :], x)[0])
         assert raw_score(ir, result.x_cf) == 3.0
 
