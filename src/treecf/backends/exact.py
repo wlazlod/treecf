@@ -25,19 +25,28 @@ not offer: each feature's candidate is the point of its cell nearest to the
 factual, and those two points can sit the wrong way round even though the two
 cells overlap. The cheapest repair moves both features onto the same value
 ``t`` somewhere in the overlap, and because the cost is piecewise linear in
-``t`` the best ``t`` is always one of four points: either factual value, or
-either end of the overlap. Every completed assignment therefore gets a
-boundary-repair pass before the arbiter sees it. Two features whose repaired
-values would still break some other pair are handled conservatively — the
-repairs are applied one pair at a time and the whole completion is dropped if
-any pair is still broken afterwards. No wrong row can come out of that, since
-``check_matrix`` still decides every row that is returned, but a dropped
-completion is one the search never really settled: it says so by reporting
-that it did not get through the whole space, so a search that comes back
-empty-handed there is not claiming that nothing exists. The one feature the
-repair leaves alone is one carrying a value policy: only one point per cell is
-on the policy's grid to begin with, so there is nowhere legal to move it, and
-a search over such a pair does not claim to have settled the space either.
+``t`` the cheapest ``t`` is one of four points: either factual value, or either
+end of the overlap. Cost is not the only thing that decides a repair, though —
+another constraint may leave one of the two features a single legal value — so
+the values a constraint can demand of either feature are proposed as well.
+Every completed assignment gets that repair pass before the arbiter sees it.
+
+Two features whose repaired values would still break some other pair are
+handled conservatively: the repairs are applied one pair at a time and the
+whole completion is dropped if any pair is still broken afterwards. No wrong
+row can come out of that, since ``check_matrix`` still decides every row that
+is returned. But a repair that comes to nothing, for any reason at all, leaves
+a completion the search never really settled, and it says so afterwards by
+reporting that it did not get through the whole space — so a search that comes
+back empty-handed there is not claiming that nothing exists. For the one shape
+where it can still bound what such a completion was worth (two plain features,
+no other pair sharing either of them) it remembers the cost committed so far
+and keeps its claim when the answer it did find is already that cheap.
+
+The one feature the repair leaves alone is one carrying a value policy: only
+one point per cell is on the policy's grid to begin with, so there is nowhere
+legal to move it, and a search over such a pair never claims to have settled
+the space.
 
 The other rule is propagation: assigning a feature can settle other features
 outright (the trigger side of an implication, or the last free member of a
@@ -66,6 +75,7 @@ from treecf.backends._exact_domains import (
     FloatArray,
     _build_domains,
     _cost_of_row,
+    _demanded_values,
     _domain_span,
     _feature_order,
     _h_suffix,
@@ -417,21 +427,31 @@ def solve_exact(
         (a, b) for a, b in order_pairs if not any(policy_active(f) for f in (a, b))
     )
     policy_bound = bool(order_pairs) and len(repairable_pairs) < len(order_pairs)
-    # A pair whose feature is a one-hot member has a repair the four candidates
-    # cannot argue about: the group's sum decides feasibility, so it can turn
-    # on and off along the boundary segment rather than staying put, and the
-    # cheapest legal point may sit between two candidates. A pair sharing a
-    # feature with another pair is in the same position for a different reason —
-    # a repair can break its neighbour. In both cases a repair that comes to
-    # nothing settles nothing, and the search says so afterwards.
     onehot_members = {f for group in compiled.onehot_groups for f in group}
-    unbounded_drop_pairs = frozenset(
-        pair for pair in order_pairs if any(f in onehot_members for f in pair)
-    )
+    demanded_values = _demanded_values(compiled)
     entangled_pairs = frozenset(
         pair
         for pair in order_pairs
         if any(other != pair and set(other) & set(pair) for other in order_pairs)
+    )
+    # When a repair comes to nothing, the cost committed so far is a floor on
+    # what that completion could still have been worth — but only for the one
+    # kind of pair the argument was proven for: two plain features, each
+    # sitting on the point of its cell nearest to the factual, with no second
+    # pair to disturb. A one-hot member sits on its group's 0 or 1 instead of
+    # that nearest point, a feature some constraint can demand an exact value
+    # of carries that value among its candidates, and a value policy moves the
+    # candidate onto its own grid; in all three the committed cost can be
+    # higher than what a repair would have cost, so it is no floor. Pairs are
+    # listed in only if they qualify, never out if they look suspicious: a kind
+    # of pair nobody has thought of yet lands on withdrawal, not on silence.
+    g_floor_pairs = frozenset(
+        pair
+        for pair in order_pairs
+        if pair not in entangled_pairs
+        and not any(
+            f in onehot_members or f in demanded_values or policy_active(f) for f in pair
+        )
     )
 
     assigned = [False] * len(x)
@@ -517,12 +537,28 @@ def solve_exact(
             return None
         return _intersect_cell(grids[f][picked.cell_idx], float(bounds_lo[f]), float(bounds_hi[f]))
 
+    def demanded_for(a: int, b: int) -> list[float]:
+        """Exact values a repair of this pair may have to land on: what an
+        implication asks of either feature, and what the current assignment has
+        already settled about them. Feature ``a`` before feature ``b``, its
+        constraint's demands before what the search settled, so the order a
+        repair tries them in never depends on how the two were found."""
+        out: list[float] = []
+        for f in (a, b):
+            settled = propagation.forced_value[f]
+            for value in (*demanded_values.get(f, ()), *(() if settled is None else (settled,))):
+                if value not in out:
+                    out.append(value)
+        return out
+
     def candidates_for(a: int, b: int) -> list[float]:
         cell_a = intersected_cell(a)
         cell_b = intersected_cell(b)
         if cell_a is None or cell_b is None:
             return []
-        return _boundary_candidates(cell_a, cell_b, float(x[a]), float(x[b]))
+        return _boundary_candidates(
+            cell_a, cell_b, float(x[a]), float(x[b]), demanded_for(a, b)
+        )
 
     def broken(row: FloatArray, pairs: list[tuple[int, int]]) -> list[tuple[int, int]]:
         """The pairs this row orders the wrong way round, by the arbiter's own
@@ -540,18 +576,18 @@ def solve_exact(
     def set_aside(pairs: list[tuple[int, int]]) -> None:
         """Remember a completion the repair could not settle.
 
-        The committed cost is a floor on anything that completion could have
-        turned into, since every feature already sits on the point of its cell
-        nearest to the factual and a repair can only move it away. That floor
-        does not hold once a one-hot member is involved: its candidates are the
-        group's 0 and 1 rather than the cell's nearest point, so a repair can
-        land somewhere cheaper. Those completions leave no floor at all.
+        Every repair that comes to nothing goes through here, whatever the
+        reason: no candidate to try, a pair still broken afterwards, or the
+        arbiter refusing all of them. What differs is only how much can still
+        be said about the completion — the committed cost is a floor on what it
+        could have become for the pairs listed in ``g_floor_pairs``, and
+        nothing at all can be said about any other, so those withdraw outright.
         """
         nonlocal dropped_floor
-        if any(pair in unbounded_drop_pairs for pair in pairs):
-            dropped_floor = -math.inf
-        else:
+        if all(pair in g_floor_pairs for pair in pairs):
             dropped_floor = min(dropped_floor, g)
+        else:
+            dropped_floor = -math.inf
 
     def finish(row: FloatArray) -> FloatArray | None:
         """The row to weigh against the incumbent, or ``None`` if there is none.
@@ -586,11 +622,7 @@ def solve_exact(
                 if cost < best_cost and accepts(variant):
                     best_cost = cost
                     best_row = variant
-            if best_row is None and (
-                violated[0] in entangled_pairs or violated[0] in unbounded_drop_pairs
-            ):
-                # every candidate turned down, and for this pair the four of
-                # them are not the whole story
+            if best_row is None:
                 set_aside(violated)
             return best_row
         repaired = row.copy()

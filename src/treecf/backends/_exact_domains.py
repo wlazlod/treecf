@@ -117,6 +117,21 @@ def _cost_of_row(
     return total
 
 
+def _demanded_values(compiled: CompiledConstraints) -> dict[int, list[float]]:
+    """Per feature, the exact values some constraint can come to demand of it.
+
+    Only implications do that: meeting a condition leaves its consequence one
+    legal value and nothing else. Both the candidate states a feature is given
+    and the values an order-pair repair may propose for it are built from this,
+    so they agree on what is worth offering. Ascending per feature, so the
+    order in which those values get tried is fixed.
+    """
+    demanded: dict[int, set[float]] = {}
+    for imp in compiled.implications:
+        demanded.setdefault(imp.cons_index, set()).add(imp.cons_value)
+    return {f: sorted(values) for f, values in demanded.items()}
+
+
 def _build_domains(
     grids: tuple[tuple[Cell, ...], ...],
     x: FloatArray,
@@ -189,9 +204,7 @@ def _build_domains(
     }
     policies: Mapping[str, ValuePolicy] = value_policies or {}
     onehot_members = {f for group in compiled.onehot_groups for f in group}
-    demanded: dict[int, set[float]] = {}
-    for imp in compiled.implications:
-        demanded.setdefault(imp.cons_index, set()).add(imp.cons_value)
+    demanded = _demanded_values(compiled)
 
     domains: list[list[_State]] = []
     for j in range(len(x)):
@@ -259,7 +272,7 @@ def _build_domains(
 
         anchor = 0.0 if x_nan else x_j
         is_binary = j in onehot_members
-        demanded_here = sorted(demanded.get(j, ()))
+        demanded_here = demanded.get(j, [])
 
         states: list[_State] = []
         keep_added = False

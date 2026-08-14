@@ -13,6 +13,7 @@ imports nothing from the other three.
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 
 from treecf.aim.cells import Cell
 
@@ -79,27 +80,42 @@ def _achievable_bounds(cell: Cell) -> tuple[float, float]:
     return lo, hi
 
 
-def _boundary_candidates(cell_a: Cell, cell_b: Cell, x_a: float, x_b: float) -> list[float]:
+def _boundary_candidates(
+    cell_a: Cell,
+    cell_b: Cell,
+    x_a: float,
+    x_b: float,
+    demanded: Sequence[float],
+) -> list[float]:
     """Values worth trying when a pair ``a <= b`` has to be pulled onto the
     boundary ``a' == b' == t``.
 
     ``cell_a`` and ``cell_b`` are the two features' cells already intersected
     with their constraint bounds, so ``t`` has to lie in the intersection of
     the two. Summed over the pair the cost is piecewise linear in ``t`` with
-    kinks only at the two factual values, so the cheapest ``t`` is one of
-    those two or one of the interval's own ends. They are returned in that
-    fixed order — factual of ``a``, factual of ``b``, low end, high end —
-    which is what makes the choice between equally cheap repairs
-    reproducible. Values outside the interval, missing values and infinite
-    ends drop out, and a repeat of an earlier candidate is not offered twice.
-    An empty list means the pair cannot be repaired inside these cells at all.
+    kinks only at the two factual values, so on cost alone the cheapest ``t``
+    is one of those two or one of the interval's own ends.
+
+    Cost is not the only thing deciding a repair, though: some other
+    constraint may leave one of the two features a single legal value, and
+    then the cheapest ``t`` is worth nothing because the arbiter will refuse
+    it. ``demanded`` carries those values — whatever an implication asks of
+    either feature, and whatever the search has already settled about them —
+    so a repair that has to land on one of them can.
+
+    Everything is returned in one fixed order: factual of ``a``, factual of
+    ``b``, the demanded values as given, low end, high end. That order is what
+    makes the choice between equally cheap repairs reproducible. Values
+    outside the interval, missing values and infinite ends drop out, and a
+    repeat of an earlier candidate is not offered twice. An empty list means
+    the pair cannot be repaired inside these cells at all.
     """
     iv = _intersect_cells(cell_a, cell_b)
     if iv is None:
         return []
     ach_lo, ach_hi = _achievable_bounds(iv)
     out: list[float] = []
-    for t in (x_a, x_b, ach_lo, ach_hi):
+    for t in (x_a, x_b, *demanded, ach_lo, ach_hi):
         if not math.isfinite(t) or not iv.contains(t) or t in out:
             continue
         out.append(t)

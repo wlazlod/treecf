@@ -1095,34 +1095,61 @@ def _order_pair(a: str, b: str, missing_policy: str = "forbid_missing") -> Linea
 class TestBoundaryCandidates:
     def test_returns_both_factuals_and_both_ends_in_the_documented_order(self) -> None:
         cell = Cell(0.0, 10.0, False, True)
-        assert _boundary_candidates(cell, cell, 8.0, 2.0) == [
+        assert _boundary_candidates(cell, cell, 8.0, 2.0, ()) == [
             8.0,
             2.0,
             0.0,
             cell.nearest_to(10.0),
         ]
 
+    def test_demanded_values_sit_between_the_factuals_and_the_ends(self) -> None:
+        cell = Cell(0.0, 10.0, False, True)
+        assert _boundary_candidates(cell, cell, 8.0, 2.0, (1.0, 5.0)) == [
+            8.0,
+            2.0,
+            1.0,
+            5.0,
+            0.0,
+            cell.nearest_to(10.0),
+        ]
+
+    def test_a_demanded_value_outside_the_shared_interval_is_dropped_too(self) -> None:
+        cell_a = Cell(0.0, 10.0, False, True)
+        cell_b = Cell(4.0, math.inf, False, True)
+        assert _boundary_candidates(cell_a, cell_b, 5.0, 5.0, (1.0,)) == [
+            5.0,
+            4.0,
+            cell_a.nearest_to(10.0),
+        ]
+
     def test_drops_candidates_outside_the_shared_interval(self) -> None:
         cell_a = Cell(0.0, 10.0, False, True)
         cell_b = Cell(4.0, math.inf, False, True)
         # the shared interval is [4, 10); neither factual value lies inside it
-        assert _boundary_candidates(cell_a, cell_b, 2.0, 12.0) == [4.0, cell_a.nearest_to(10.0)]
+        assert _boundary_candidates(cell_a, cell_b, 2.0, 12.0, ()) == [
+            4.0,
+            cell_a.nearest_to(10.0),
+        ]
 
     def test_disjoint_cells_leave_nothing_to_try(self) -> None:
         assert (
             _boundary_candidates(
-                Cell(5.0, 9.0, False, True), Cell(0.0, 5.0, False, True), 6.0, 2.0
+                Cell(5.0, 9.0, False, True), Cell(0.0, 5.0, False, True), 6.0, 2.0, (3.0,)
             )
             == []
         )
 
     def test_missing_and_infinite_candidates_are_skipped(self) -> None:
         wide = Cell(-math.inf, math.inf, True, True)
-        assert _boundary_candidates(wide, wide, math.nan, 3.0) == [3.0]
+        assert _boundary_candidates(wide, wide, math.nan, 3.0, ()) == [3.0]
 
     def test_a_repeated_candidate_is_offered_once(self) -> None:
         cell = Cell(0.0, 10.0, False, True)
-        assert _boundary_candidates(cell, cell, 4.0, 4.0) == [4.0, 0.0, cell.nearest_to(10.0)]
+        assert _boundary_candidates(cell, cell, 4.0, 4.0, (4.0, 0.0)) == [
+            4.0,
+            0.0,
+            cell.nearest_to(10.0),
+        ]
 
 
 class TestDomainSpan:
@@ -1422,6 +1449,51 @@ class TestOrderPairOverAOneHotMember:
         assert bool(compiled.check_matrix(row[np.newaxis, :], x)[0])
         assert raw_score(ir, row) == 2.0
         assert _cost_of_row(x, row, np.ones(3), np.ones(3), 0.0, {}) == 1.0
+
+
+class TestOrderPairOverAnImpliedFeature:
+    """Review regression. x0 keeps its factual and meets the implication's
+    condition, so x2 has to be 1.0; the pair x1 <= x2 is broken at every
+    candidate the two features' own values and cell ends can offer. Repairing
+    on cost alone therefore finds nothing, and the completion used to be thrown
+    away and the empty hand reported as proof. The value the implication
+    demands is now offered as a repair too, and it is the one that works."""
+
+    def _problem(self) -> tuple[EnsembleIR, np.ndarray, object]:
+        ir = _band_ir((1.0, 1.0, 1.0))
+        x = np.array([1.0, 8.0, 2.0])
+        compiled = compile_constraints(
+            (Implies(Equals("x0", 1.0), Equals("x2", 1.0)), _order_pair("x1", "x2")),
+            ir.feature_names,
+        )
+        return ir, x, compiled
+
+    def test_the_demanded_value_repairs_the_pair(self) -> None:
+        ir, x, compiled = self._problem()
+        result = solve_exact(
+            ir, x, (3.0, 3.0), compiled, np.ones(3), np.ones(3), 0.0, time_budget_s=1e9
+        )
+        assert result.x_cf is not None
+        np.testing.assert_array_equal(result.x_cf, np.array([1.0, 1.0, 1.0]))
+        assert result.distance == 8.0
+        assert result.stats["completed"] is True
+        assert bool(compiled.check_matrix(result.x_cf[np.newaxis, :], x)[0])
+        assert raw_score(ir, result.x_cf) == 3.0
+
+    def test_cost_alone_would_have_proposed_none_of_it(self) -> None:
+        """The four cost-derived candidates for this pair, spelled out: both
+        factual values and both ends of the shared cell. The value that works,
+        1.0, is not among them."""
+        ir, x, _compiled = self._problem()
+        cells = feature_cells(ir)[1]
+        band = next(c for c in cells if c.contains(8.0))
+        assert _boundary_candidates(band, band, float(x[1]), float(x[2]), ()) == [
+            8.0,
+            2.0,
+            0.0,
+            band.nearest_to(10.0),
+        ]
+        assert _boundary_candidates(band, band, float(x[1]), float(x[2]), (1.0,))[2] == 1.0
 
 
 class TestOrderPairUnderAValuePolicy:

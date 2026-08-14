@@ -173,15 +173,28 @@ def _draw_relational(
     reasons that have nothing to do with the search. Writing those values into
     ``x`` also clears any missing value drawn there.
 
-    Two of the kinds combine constraints on purpose. ``"onehot+order"`` puts an
-    order pair across a one-hot member and an outside feature, which is the
-    shape that used to have the search throw a repair away and call the result
-    a proof. ``"chain"`` draws two order pairs sharing a feature, the shape a
-    pair-at-a-time repair cannot always settle.
+    Three of the kinds combine constraints on purpose. ``"onehot+order"`` puts
+    an order pair across a one-hot member and an outside feature, and
+    ``"implies+order"`` puts one across the consequence of an implication and
+    an outside feature; both are shapes that used to have the search throw a
+    repair away and call the result a proof. ``"chain"`` draws two order pairs
+    sharing a feature, the shape a pair-at-a-time repair cannot always settle.
     """
     kind = str(
         rng.choice(
-            ["", "", "", "", "", "order", "onehot", "implies", "onehot+order", "chain"]
+            [
+                "",
+                "",
+                "",
+                "",
+                "",
+                "order",
+                "onehot",
+                "implies",
+                "onehot+order",
+                "implies+order",
+                "chain",
+            ]
         )
     )
     if not kind:
@@ -207,7 +220,12 @@ def _draw_relational(
         ), kind
     x[a] = float(rng.integers(0, 2))
     x[b] = float(rng.integers(0, 2))
-    return (Implies(Equals(names[a], 1.0), Equals(names[b], 1.0)),), kind
+    implication = Implies(Equals(names[a], 1.0), Equals(names[b], 1.0))
+    if kind == "implies+order":
+        # the pair runs across the consequence, whose legal value the search
+        # only learns from the implication
+        return (implication, _order_pair(rng, names[c], names[b])), kind
+    return (implication,), kind
 
 
 def _draw_value_policies(
@@ -302,27 +320,18 @@ def _verify(case: _Case, row: FloatArray) -> list[str]:
 
 
 def _may_leave_the_space_unsettled(case: _Case) -> bool:
-    """True when the draw holds an order pair whose repair the search cannot
-    always settle, which is when a `completed` of False is the documented
-    answer rather than a regression. Three shapes do it: a pair whose feature
-    carries a value policy (the repair has nowhere on the grid to move it), a
-    pair sharing a feature with another pair (repairing one can break the
-    other), and a pair over a one-hot member (the group's sum decides
-    feasibility, and four candidate points cannot argue with it). Everything
-    the oracle can build was still enumerated in every case, so the
-    comparisons below hold either way.
+    """True when the draw holds an order pair at all.
+
+    Any repair that comes to nothing leaves its completion undecided, and the
+    search says so rather than reporting the empty hand as proof. For a plain
+    pair it still remembers what that completion would have cost at least, so
+    the certificate survives whenever the incumbent is already that cheap —
+    but whether it does is a property of the instance, not of the draw, so a
+    `completed` of False is a documented answer for any pair-carrying case
+    here. Everything the oracle can build was enumerated either way, so the
+    comparisons below hold regardless.
     """
-    pairs = [lin.indices for lin in case.compiled.linears if len(lin.indices) == 2]
-    if len(pairs) > 1:
-        return True
-    policies = case.value_policies or {}
-    names = case.compiled.feature_names
-    members = {f for group in case.compiled.onehot_groups for f in group}
-    return any(
-        policies.get(names[j], "raw") != "raw" or j in members
-        for pair in pairs
-        for j in pair
-    )
+    return any(len(lin.indices) == 2 for lin in case.compiled.linears)
 
 
 def _binary_valued(case: _Case, row: FloatArray | None) -> bool:
@@ -391,7 +400,7 @@ class TestExactVersusOracle:
                         f"oracle={oracle.objective!r} on a row it could have built"
                     )
                 continue
-            if case.relational in ("order", "chain", "implies"):
+            if case.relational in ("order", "chain", "implies", "implies+order"):
                 # the exact backend may beat the oracle here, never lose to it
                 if oracle.feasible and result.x_cf is None:
                     problems.append(f"seed {seed}: oracle found a row the exact search missed")
@@ -426,9 +435,10 @@ class TestExactVersusOracle:
 
 
 class TestSolverDeterminism:
-    # 12 draws an order pair, 22 a chain of two, 11 a one-hot group crossed by
-    # an order pair, 18 a plain one-hot group, 1 an implication
-    @pytest.mark.parametrize("seed", [0, 3, 1, 11, 12, 17, 18, 22])
+    # one seed per draw kind: 0 and 3 plain, 39 an order pair, 22 a chain of
+    # two, 1 a one-hot group crossed by an order pair, 12 a plain one-hot
+    # group, 11 an implication crossed by an order pair, 18 a plain implication
+    @pytest.mark.parametrize("seed", [0, 3, 39, 22, 1, 12, 11, 18])
     def test_same_inputs_twice_give_the_same_row_and_node_count(self, seed: int) -> None:
         case = _draw_case(seed)
         first = _solve(case)
