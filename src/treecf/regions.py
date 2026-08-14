@@ -87,8 +87,9 @@ class RecourseRegion:
         """One human-readable phrase per non-degenerate feature.
 
         One-sided (``"<= v"``/``">= v"``) when the other endpoint is
-        infinite, two-sided (``"in [lo, hi]"``) otherwise; values formatted
-        ``"{:.3g}"``.
+        infinite, two-sided (``"in [lo, hi]"``) otherwise, and
+        ``"unconstrained"`` when both endpoints are infinite; values
+        formatted ``"{:.3g}"``.
         """
         out: dict[str, str] = {}
         for name, (lo, hi) in self.feature_intervals.items():

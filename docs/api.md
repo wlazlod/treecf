@@ -36,6 +36,10 @@
 
 ::: treecf.Plausibility
 
+## Regions
+
+::: treecf.RecourseRegion
+
 ## Visualization
 
 ::: treecf.viz

@@ -2,8 +2,8 @@
 
 This file, ``_exact_domains``, ``_exact_orderpairs`` and ``_exact_propagation``
 are one implementation, split across four files for size alone. Together they
-are the Python reference for the exact backend; a Rust mirror lands later and
-must match all four bit-for-bit, so operation order in the arithmetic is a
+are the Python reference for the exact backend; a Rust mirror exists and
+matches all four bit-for-bit, so operation order in the arithmetic is a
 compatibility contract, not a style choice. Here that governs the score
 brackets the search prunes on: they are re-summed in full over the trees in
 ascending index after every assignment, never patched with an incremental
@@ -108,8 +108,8 @@ _LINEAR_SLACK = 1e-9
 
 @dataclass(frozen=True)
 class ExactResult:
-    """Outcome of an exact-backend search (Task 2.3 produces these; this task
-    only defines the shape). ``snapped`` is built by the search from the chosen
+    """Outcome of an exact-backend search (the search populates these; this
+    class only defines the shape). ``snapped`` is built by the search from the chosen
     states' own ``_State.snapped`` flags (feature name -> flag, for features that
     changed) — ``_build_domains`` does not know which state wins."""
 

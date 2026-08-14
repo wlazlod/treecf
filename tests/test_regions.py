@@ -140,7 +140,7 @@ class TestRecourseRegionMethod:
         assert region.feature_intervals["a"][0] == 1.0
 
     def test_scoring_error_on_an_unrouted_missing_split_surfaces_as_treecf_error(self) -> None:
-        """Fold-in (Task 2.9 re-review): an adversarial ``x_cf`` whose own path
+        """Regression guard: an adversarial ``x_cf`` whose own path
         hits a split with no missing routing defined makes ``_verify``'s
         ``raw_score`` re-check raise a raw ``ValueError`` -- ``recourse_region``
         must surface that as the ``TreecfError`` its docstring promises, not

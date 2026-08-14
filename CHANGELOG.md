@@ -32,7 +32,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   both default so existing code is unaffected.
 - **Recourse regions**: `explain(..., region=True)` (also on `explain_coalitions`/
   `explain_batch`) widens a verified counterfactual into a `RecourseRegion` — a per-feature box
-  where every point is independently re-verified as feasible, not sampled. Works with every
+  where every point is certified feasible by interval arithmetic over the whole box, not
+  sampled. Works with every
   backend via `Explainer.recourse_region`; `Counterfactual.region` carries it, and
   `BatchRecord.region` persists it through batch save/load.
 - `plot_recourse_map`: one-axes map of a single applicant's recourse options — model

@@ -4,7 +4,7 @@ Run with: uv run python scripts/gen_exact_fixtures.py
 
 Regenerating overwrites tests/fixtures/exact/*.json — do this ONLY when the
 Python exact backend's behavior changes deliberately; the fixtures freeze it
-otherwise (Task 2.8's Rust port has to reproduce them bit-for-bit). Every
+otherwise (the Rust port has to reproduce them bit-for-bit). Every
 input here is either a fixed-seed draw or a hand-built ensemble, so two runs
 of this script always produce byte-identical files.
 """
@@ -315,7 +315,7 @@ SCENARIO_BUILDERS = (
 
 
 # --------------------------------------------------------------------------
-# Region fixtures (Task 2.10): a verified x_cf widened into a certified box.
+# Region fixtures: a verified x_cf widened into a certified box.
 # --------------------------------------------------------------------------
 
 

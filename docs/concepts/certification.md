@@ -109,8 +109,9 @@ Two things the certificate does *not* claim:
   narrower one. Do not assume tightening the target only shrinks the region.
 
 `region.describe()` gives one human-readable phrase per non-degenerate feature — two-sided
-(`"in [lo, hi]"`) when both endpoints are finite, and one-sided (`"≤ v"` / `"≥ v"`) *only* when
-the other side is genuinely unbounded, not merely wide. `plot_recourse_map(..., schematic=True)`
+(`"in [lo, hi]"`) when both endpoints are finite, one-sided (`"≤ v"` / `"≥ v"`) *only* when
+the other side is genuinely unbounded, not merely wide, and `"unconstrained"` when both
+endpoints are unbounded. `plot_recourse_map(..., schematic=True)`
 reads these phrases directly when a plan carries a region, in place of the single-value wording
 it otherwise falls back to.
 

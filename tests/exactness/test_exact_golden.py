@@ -5,7 +5,7 @@ call from scratch (ensemble, constraints, value policies, an optional pinned
 warm-start incumbent) and compares the result byte-identically against the
 answer the Python backend gave when the fixture was generated
 (``scripts/gen_exact_fixtures.py``). This is the regression freeze the Rust
-port (Task 2.8) must also reproduce bit-for-bit — see ``fixture_utils.py``
+port must also reproduce bit-for-bit — see ``fixture_utils.py``
 for the shared JSON contract.
 
 Regenerating fixtures is a deliberate act (rerun the generator); a failure
@@ -29,7 +29,7 @@ import gen_exact_fixtures  # noqa: E402  (needs the sys.path insert above)
 
 FIXTURES = fixture_utils.fixture_paths()
 
-# The frozen scenario id set from the brief (Task 2.6): exactly these 11, no more,
+# The frozen scenario id set: exactly these 11, no more,
 # no fewer -- a scenario silently added or dropped should fail loudly here rather
 # than only nudging the `>= 11` count.
 EXPECTED_FIXTURE_IDS = frozenset(
@@ -79,7 +79,7 @@ def test_scenario_builders_cover_the_expected_fixture_ids() -> None:
 
 
 # --------------------------------------------------------------------------
-# Region fixtures (Task 2.10): the pure-Python growth loop's own golden freeze.
+# Region fixtures: the pure-Python growth loop's own golden freeze.
 # --------------------------------------------------------------------------
 
 REGION_FIXTURES = fixture_utils.region_fixture_paths()

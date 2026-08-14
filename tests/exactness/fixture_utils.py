@@ -9,7 +9,7 @@ budget must never be what decides ``completed``, or the freeze would be
 machine-dependent.
 
 This module is the one place that knows the JSON layout, so the Rust parity
-harness (Task 2.8) can import it too instead of re-deriving the schema.
+harness can import it too instead of re-deriving the schema.
 """
 
 from __future__ import annotations

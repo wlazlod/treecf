@@ -269,7 +269,7 @@ res.changes      # {"utilization": (0.71, 0.419…), "max_dpd_12m": (9.0, 3.0)}
 res.snapped      # which value policies actually applied
 ```
 
-## Two engines, one behavior; one row or ten thousand
+## The two genetic engines, one behavior; one row or ten thousand
 
 Both engines — the Rust default and the numpy reference — share the IR, the compiled
 constraints, and the algorithm above; they are seed-deterministic and held to statistical

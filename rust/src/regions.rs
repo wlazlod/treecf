@@ -532,7 +532,7 @@ mod tests {
 
     // ---------------------------------------- unrouted missing split rejection ---
 
-    /// Reviewer probe (Task 2.9 fix-round): a model whose root splits on `g`
+    /// Reviewer probe: a model whose root splits on `g`
     /// (routing feature), whose right subtree splits on a NaN-degenerate
     /// feature `f` with an UNDEFINED missing direction (as every split of an
     /// sklearn-parsed model has). Widening `g` past the root threshold opens
