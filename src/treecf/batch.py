@@ -179,6 +179,9 @@ def explain_batch(
     seed: int = 0,
     coalitions: Mapping[str, Sequence[str]] | None = None,
     include_full: bool = False,
+    warm_start: bool | None = None,
+    node_budget: int | None = None,
+    gap: float | None = None,
 ) -> BatchResult:
     """See ``Explainer.explain_batch``.
 
@@ -192,7 +195,15 @@ def explain_batch(
     ``diversity="coalitions"`` produces one record per named coalition per
     row (``n_per_example`` is not used); ``coalitions``/``include_full`` are
     only valid in that mode.
+
+    ``backend="exact"`` has no vectorized population, so this loops the
+    single-instance exact solve per row (and per plan, for lever-blocking)
+    sequentially instead of running the Rust engine's parallel waves.
+    ``warm_start``/``node_budget``/``gap`` configure that solve; they are
+    only valid together with ``backend="exact"`` (see ``Explainer.explain``).
     """
+    from treecf.api import _resolve_exact_kwargs
+
     if target.bands_spec is not None:
         raise TreecfError("Target.bands is not supported in explain_batch; loop bands explicitly")
     if diversity not in ("seeds", "lever-blocking", "coalitions"):
@@ -201,6 +212,10 @@ def explain_batch(
         raise TreecfError("diversity='coalitions' requires a coalitions mapping")
     if diversity != "coalitions" and (coalitions is not None or include_full):
         raise TreecfError("coalitions/include_full are only valid with diversity='coalitions'")
+    # Validated here too (not only inside `_explain`) because the rust
+    # wave-parallel paths below (`_rows_by_seed_waves`, `_lever_primaries`)
+    # never call `_explain` and would otherwise silently ignore the kwargs.
+    _resolve_exact_kwargs(backend, warm_start, node_budget, gap)
     X = np.asarray(X, dtype=np.float64)
     row_ids: Sequence[object] = range(len(X)) if ids is None else list(ids)
     if len(row_ids) != len(X):
@@ -232,6 +247,7 @@ def explain_batch(
         records = _rows_by_coalitions(
             explainer, X, target, row_ids, coalitions, include_full,
             backend, time_budget_s, sparsity_weight, seed=seed,
+            warm_start=warm_start, node_budget=node_budget, gap=gap,
         )
     elif diversity == "seeds" and backend in ("genetic", "genetic-rust"):
         # Same attempts, dedup, and stopping rule as `_row_by_seeds`, but each
@@ -255,12 +271,14 @@ def explain_batch(
                     explainer, X[i], target, row_id, n_per_example,
                     backend, time_budget_s, sparsity_weight,
                     master_seed=seed * 1_000_003 + i * 1_009,
+                    warm_start=warm_start, node_budget=node_budget, gap=gap,
                 )
             else:
                 row_records, row_essential = _row_by_lever_blocking(
                     explainer, X[i], target, row_id, n_per_example,
                     backend, time_budget_s, sparsity_weight, seed=seed,
                     primary=None if primaries is None else primaries[i],
+                    warm_start=warm_start, node_budget=node_budget, gap=gap,
                 )
                 essential[row_id] = row_essential
             records.extend(row_records)
@@ -406,7 +424,12 @@ def _lever_primaries(
     outcomes: list[Counterfactual | Infeasible] = []
     for t, result in enumerate(results):
         if result.x_cf is None:
-            outcomes.append(Infeasible(reason="heuristic search exhausted (genetic backend)"))
+            outcomes.append(
+                Infeasible(
+                    reason="heuristic search exhausted (genetic backend)",
+                    proof="search_exhausted",
+                )
+            )
         else:
             outcomes.append(
                 explainer._finalize_candidate(
@@ -427,6 +450,9 @@ def _rows_by_coalitions(
     time_budget_s: float,
     sparsity_weight: float,
     seed: int,
+    warm_start: bool | None = None,
+    node_budget: int | None = None,
+    gap: float | None = None,
 ) -> list[BatchRecord]:
     """One record per named coalition per row (plus the optional baseline).
 
@@ -457,7 +483,10 @@ def _rows_by_coalitions(
             results = solver._solve_batch(X, tasks, interval, time_budget_s, sparsity_weight)
             scores = _wave_scores(solver, results)
             outcomes[name] = [
-                Infeasible(reason="heuristic search exhausted (genetic backend)")
+                Infeasible(
+                    reason="heuristic search exhausted (genetic backend)",
+                    proof="search_exhausted",
+                )
                 if result.x_cf is None
                 else solver._finalize_candidate(
                     X[i], result.x_cf, interval, result.stats, score=scores.get(i)
@@ -469,6 +498,7 @@ def _rows_by_coalitions(
                 solver._explain_one(
                     X[i], target, backend, time_budget_s, sparsity_weight, seed,
                     warn_factual=False,
+                    warm_start=warm_start, node_budget=node_budget, gap=gap,
                 )
                 for i in range(len(X))
             ]
@@ -502,6 +532,9 @@ def _row_by_seeds(
     time_budget_s: float,
     sparsity_weight: float,
     master_seed: int,
+    warm_start: bool | None = None,
+    node_budget: int | None = None,
+    gap: float | None = None,
 ) -> list[BatchRecord]:
     from treecf.api import Counterfactual
 
@@ -511,6 +544,7 @@ def _row_by_seeds(
         result = explainer._explain(
             x, target, backend, time_budget_s, sparsity_weight, attempt_seed,
             warn_factual=False,  # explain_batch already warned in aggregate
+            warm_start=warm_start, node_budget=node_budget, gap=gap,
         )
         if isinstance(result, Counterfactual):
             key = frozenset(result.changes)
@@ -538,6 +572,9 @@ def _row_by_lever_blocking(
     sparsity_weight: float,
     seed: int,
     primary: Counterfactual | Infeasible | None = None,
+    warm_start: bool | None = None,
+    node_budget: int | None = None,
+    gap: float | None = None,
 ) -> tuple[list[BatchRecord], list[str]]:
     from treecf.api import Counterfactual
 
@@ -545,6 +582,7 @@ def _row_by_lever_blocking(
         explained = explainer._explain(
             x, target, backend, time_budget_s, sparsity_weight, seed,
             warn_factual=False,  # explain_batch already warned in aggregate
+            warm_start=warm_start, node_budget=node_budget, gap=gap,
         )
         assert not isinstance(explained, dict)  # bands are rejected by explain_batch
         primary = explained
@@ -568,6 +606,7 @@ def _row_by_lever_blocking(
         alternative = explainer._with_extra_freezes([lever])._explain(
             x, target, backend, time_budget_s, sparsity_weight, seed,
             warn_factual=False,  # explain_batch already warned in aggregate
+            warm_start=warm_start, node_budget=node_budget, gap=gap,
         )
         if isinstance(alternative, Counterfactual):
             key = frozenset(alternative.changes)
