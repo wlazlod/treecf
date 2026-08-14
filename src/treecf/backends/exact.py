@@ -177,7 +177,11 @@ def _build_domains(
     since constraints win over policies. A NaN factual without
     ``AllowMissing`` gets a single keep-NaN state; with ``AllowMissing`` it
     additionally offers moving to the pinned value ``v``, priced by
-    ``delta_from_miss``.
+    ``delta_from_miss``; either NaN-involving state is dropped when a
+    single-feature Linear's ``missing_policy`` forbids NaN there, and a NaN
+    factual that is both forced to stay NaN and forbidden from being NaN
+    yields an empty domain for that feature — a certified-infeasible signal
+    for the search, not an error.
 
     Every other feature intersects each grid cell with its bounds first
     (dropping empty intersections, preserving open/closed edges), and each
@@ -211,7 +215,8 @@ def _build_domains(
         weight_j, sigma_j = float(weights[j]), float(sigma[j])
 
         if frozen[j]:
-            domains.append([_State(x_j, 0.0, 0, x_nan)])
+            idx = len(cells) if x_nan else cell_index(cells, x_j)
+            domains.append([_State(x_j, 0.0, idx, x_nan)])
             continue
 
         if pinned:
@@ -220,11 +225,19 @@ def _build_domains(
                 cost = _term_cost(x_j, v, weight_j, sigma_j, lam, to_miss, from_miss)
                 domains.append([_State(v, cost, cell_index(cells, v), False)])
                 continue
-            nan_states = [_State(math.nan, 0.0, len(cells), True)]
+            # A NaN factual pinned to v: staying NaN is legal only when no
+            # single-feature Linear forbids it here (missing_policy); moving to
+            # v is legal only under AllowMissing. Both can fail at once (a
+            # forbid_missing feature with no AllowMissing and a NaN factual) --
+            # that yields an empty domain here, a certified-infeasible signal
+            # for the search, not an error.
+            nan_states: list[_State] = []
+            if j not in suppress_nan:
+                nan_states.append(_State(math.nan, 0.0, len(cells), True))
             if allow_j:
                 cost = _term_cost(x_j, v, weight_j, sigma_j, lam, to_miss, from_miss)
                 nan_states.append(_State(v, cost, cell_index(cells, v), False))
-                nan_states.sort(key=_sort_key)
+            nan_states.sort(key=_sort_key)
             domains.append(nan_states)
             continue
 

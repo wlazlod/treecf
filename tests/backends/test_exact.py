@@ -85,6 +85,18 @@ class TestKeepOnlyDomains:
         domains = _build_domains(grids, x, compiled, np.ones(1), np.ones(1), 0.0, None)
         assert domains == [[_State(3.0, 0.0, 0, False)]]
 
+    def test_frozen_feature_gets_its_real_cell_index_not_a_hardcoded_zero(self) -> None:
+        cells = (
+            Cell(-math.inf, 0.0, True, True),
+            Cell(0.0, 4.0, False, True),
+            Cell(4.0, math.inf, False, True),
+        )
+        grids = (cells,)
+        compiled = compile_constraints((Freeze("x0"),), ("x0",))
+        x = np.array([5.0])  # falls in cells[2], not cells[0]
+        domains = _build_domains(grids, x, compiled, np.ones(1), np.ones(1), 0.0, None)
+        assert domains == [[_State(5.0, 0.0, 2, False)]]
+
     def test_pinned_matching_the_factual_is_keep_at_zero_cost(self) -> None:
         grids = ((Cell(-math.inf, math.inf, True, True),),)
         compiled = compile_constraints((Range("x0", 5.0, 5.0),), ("x0",))
@@ -155,6 +167,46 @@ class TestKeepOnlyDomains:
         assert d0[0].is_nan and d0[0].cost == 0.0  # stay missing: the cheap option
         assert d0[1].value == 5.0
         assert d0[1].cost == lam + (weights[0] * 6.0) / sigma[0]  # priced by delta_from_miss
+
+    def test_pinned_nan_factual_forbid_missing_suppresses_the_nan_state(self) -> None:
+        """Reviewer repro: a pinned feature with AllowMissing but also a
+        single-feature Linear forbidding NaN there must never offer the NaN
+        state, even though the factual is NaN — only the pinned-value state
+        (priced by delta_from_miss) survives."""
+        grids = ((Cell(-math.inf, math.inf, True, True),),)
+        compiled = compile_constraints(
+            (
+                Range("x0", 5.0, 5.0),
+                AllowMissing("x0", delta_miss=1.0, delta_from_miss=6.0),
+                Linear({"x0": 1.0}, op="<=", rhs=100.0, missing_policy="forbid_missing"),
+            ),
+            ("x0",),
+        )
+        x = np.array([math.nan])
+        sigma, weights, lam = np.array([2.0]), np.array([3.0]), 0.5
+        domains = _build_domains(grids, x, compiled, sigma, weights, lam, None)
+        d0 = domains[0]
+        assert len(d0) == 1
+        assert not d0[0].is_nan
+        assert d0[0].value == 5.0
+        assert d0[0].cost == lam + (weights[0] * 6.0) / sigma[0]
+
+    def test_pinned_nan_factual_forced_and_forbidden_yields_empty_domain(self) -> None:
+        """Contradictory sub-case: no AllowMissing forces the counterfactual to
+        stay NaN (``check_matrix`` legality), but ``forbid_missing`` forbids
+        NaN outright -- no value can ever satisfy both, so the domain is
+        empty (a certified-infeasible signal), not an error."""
+        grids = ((Cell(-math.inf, math.inf, True, True),),)
+        compiled = compile_constraints(
+            (
+                Range("x0", 5.0, 5.0),
+                Linear({"x0": 1.0}, op="<=", rhs=100.0, missing_policy="forbid_missing"),
+            ),
+            ("x0",),
+        )
+        x = np.array([math.nan])
+        domains = _build_domains(grids, x, compiled, np.ones(1), np.ones(1), 0.0, None)
+        assert domains == [[]]
 
 
 class TestIntersectFirst:
