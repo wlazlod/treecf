@@ -559,13 +559,22 @@ class Explainer:
         incumbent — the exact search still runs with the full, undiminished
         ``time_budget_s`` afterwards.
 
+        The search itself dispatches rust-first: when the `_treecf_core`
+        extension is importable, ``exact_rust.solve_exact_rust`` runs instead
+        of the pure-Python ``solve_exact``. The rust engine is a bit-parity
+        mirror, not a heuristic stand-in — every fixture in
+        ``tests/fixtures/exact/`` proves the two produce a RESULT-IDENTICAL
+        answer (same ``x_cf`` or both ``None``, same ``distance``, ``proof``,
+        and all seven ``stats`` keys), so the fallback only ever changes
+        which engine ran, never what it found.
+
         A ``ConstraintValidationError`` from the exact backend's constraint
         validation (an unsupported multi-feature ``Linear`` shape, or a
         callable ``value_policy``) propagates unchanged; it already names
         ``backend="genetic"`` as the fallback.
         """
         from treecf.backends._exact_domains import _cost_of_row
-        from treecf.backends.exact import solve_exact
+        from treecf.backends.exact_rust import _rust_available, solve_exact_rust
 
         incumbent: tuple[float, FloatArray] | None = None
         if warm_start:
@@ -580,21 +589,41 @@ class Explainer:
                 )
                 incumbent = (cost, warm.x_cf)
 
-        res = solve_exact(
-            self.ir,
-            x,
-            interval,
-            self.compiled,
-            self.sigma,
-            self.weights,
-            sparsity_weight,
-            value_policies=self.value_policy,
-            plausibility=self._plausibility_bound(),
-            node_budget=node_budget,
-            gap=gap,
-            time_budget_s=time_budget_s,
-            incumbent=incumbent,
-        )
+        if _rust_available():
+            res = solve_exact_rust(
+                self.ir,
+                x,
+                interval,
+                self.compiled,
+                self.sigma,
+                self.weights,
+                sparsity_weight,
+                value_policies=self.value_policy,
+                plausibility=self._plausibility_bound(),
+                node_budget=node_budget,
+                gap=gap,
+                time_budget_s=time_budget_s,
+                incumbent=incumbent,
+                cache=self._rust_cache,
+            )
+        else:
+            from treecf.backends.exact import solve_exact
+
+            res = solve_exact(
+                self.ir,
+                x,
+                interval,
+                self.compiled,
+                self.sigma,
+                self.weights,
+                sparsity_weight,
+                value_policies=self.value_policy,
+                plausibility=self._plausibility_bound(),
+                node_budget=node_budget,
+                gap=gap,
+                time_budget_s=time_budget_s,
+                incumbent=incumbent,
+            )
         if res.x_cf is None:
             # Certification is read from stats["completed"], never from
             # res.proof: proof carries no meaning on an infeasible result
