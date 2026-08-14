@@ -1,7 +1,8 @@
-//! The branch-and-bound search itself — port of `treecf.backends.exact`. The
-//! three parity rules in the module header of `super` are load-bearing here in
-//! particular: no rayon call may enter this file, the ensemble brackets are
-//! re-summed in full, and every stored merge goes through `py_min`/`py_max`.
+//! The branch-and-bound search itself — port of `treecf.backends.exact` and
+//! `treecf.backends._exact_bounds`. The three parity rules in the module header
+//! of `super` are load-bearing here in particular: no rayon call may enter this
+//! file, the ensemble brackets are re-summed in full, and every stored merge
+//! goes through `py_min`/`py_max`.
 
 use std::time::Instant;
 

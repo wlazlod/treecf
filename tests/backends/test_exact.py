@@ -11,6 +11,7 @@ from treecf import Counterfactual, Explainer, Target, TreecfWarning
 from treecf._errors import ConstraintValidationError
 from treecf.aim.cells import Cell, feature_cells
 from treecf.api import Grid
+from treecf.backends._exact_bounds import _EnsembleBounds
 from treecf.backends._exact_domains import (
     _build_domains,
     _constraint_cells,
@@ -25,7 +26,7 @@ from treecf.backends._exact_domains import (
 )
 from treecf.backends._exact_orderpairs import _boundary_candidates
 from treecf.backends._exact_propagation import _Propagation, _PropFrame
-from treecf.backends.exact import ExactResult, _EnsembleBounds, solve_exact
+from treecf.backends.exact import ExactResult, solve_exact
 from treecf.constraints import (
     AllowMissing,
     Equals,

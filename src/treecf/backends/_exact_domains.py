@@ -1,8 +1,8 @@
 """The branching alphabet of the exact backend, and what may enter it.
 
-Split out of ``treecf.backends.exact`` for size only: ``exact``, this file,
-``_exact_orderpairs`` and ``_exact_propagation`` are one implementation, and
-the Rust mirror has to match all four bit-for-bit. That makes the operation
+Split out of ``treecf.backends.exact`` for size only: ``exact``, ``_exact_bounds``,
+this file, ``_exact_orderpairs`` and ``_exact_propagation`` are one implementation,
+and the Rust mirror has to match all five bit-for-bit. That makes the operation
 order in the cost arithmetic here a compatibility contract rather than a style
 choice — every multiply/divide/add mirrors ``treecf.backends.genetic``'s
 ``objective()`` term-for-term.

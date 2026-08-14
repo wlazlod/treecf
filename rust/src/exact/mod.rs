@@ -1,16 +1,18 @@
 //! Exact backend — the sequential branch-and-bound search over the candidate grid.
 //!
-//! This is the Rust mirror of one Python implementation split across four files,
-//! and it keeps that split module for module:
+//! This is the Rust mirror of one Python implementation split across five files,
+//! and it keeps that split module for module — except that the Python-side
+//! split between `exact` and `_exact_bounds` is for file size alone and has no
+//! counterpart here, so `search` covers both:
 //!
 //! | Python | here |
 //! |---|---|
-//! | `treecf.backends.exact` | `search` |
+//! | `treecf.backends.exact` + `treecf.backends._exact_bounds` | `search` |
 //! | `treecf.backends._exact_domains` (+ the `treecf.api._snap` it calls) | `domains` |
 //! | `treecf.backends._exact_propagation` | `propagation` |
 //! | `treecf.backends._exact_orderpairs` | `orderpairs` |
 //!
-//! Those four Python files carry the bit-parity contract in their own headers;
+//! Those five Python files carry the bit-parity contract in their own headers;
 //! every module here follows its counterpart line for line, so the operation
 //! order of the arithmetic is a compatibility contract rather than a style
 //! choice.

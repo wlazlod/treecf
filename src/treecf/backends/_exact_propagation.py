@@ -1,8 +1,8 @@
 """Domain settling for the exact backend: implications and one-hot groups.
 
-Split out of ``treecf.backends.exact`` for size only: ``exact``, this file,
-``_exact_domains`` and ``_exact_orderpairs`` are one implementation, and the
-Rust mirror has to match all four bit-for-bit.
+Split out of ``treecf.backends.exact`` for size only: ``exact``, ``_exact_bounds``,
+this file, ``_exact_domains`` and ``_exact_orderpairs`` are one implementation,
+and the Rust mirror has to match all five bit-for-bit.
 """
 
 from __future__ import annotations

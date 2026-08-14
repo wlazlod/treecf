@@ -1,13 +1,13 @@
 """Cell arithmetic the order-pair rules of the exact backend are built on.
 
-Split out of ``treecf.backends.exact`` for size only: ``exact``, this file,
-``_exact_domains`` and ``_exact_propagation`` are one implementation, and the
-Rust mirror has to match all four bit-for-bit.
+Split out of ``treecf.backends.exact`` for size only: ``exact``, ``_exact_bounds``,
+this file, ``_exact_domains`` and ``_exact_propagation`` are one implementation,
+and the Rust mirror has to match all five bit-for-bit.
 
 Everything here answers one of two questions: which values a cell, or a pair of
 cells, can really hold, and which of those are worth trying when two features
-tied by ``a <= b`` end up the wrong way round. It is the leaf of the four — it
-imports nothing from the other three.
+tied by ``a <= b`` end up the wrong way round. It is the leaf of the five — it
+imports nothing from the other four.
 """
 
 from __future__ import annotations
