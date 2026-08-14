@@ -121,6 +121,20 @@ result = exp.explain_coalitions(
 plot_alternatives(result, explainer=exp)   # coalition names label the plans
 ```
 
+## When you need proof
+
+`explain` never claims optimality by default — for that, ask for the exact backend and a
+certified region around the answer:
+
+```python
+res = exp.explain(x_row, target=t, backend="exact", region=True, seed=0)
+res.proof              # "optimal" | "optimal_within_gap" | "heuristic"
+res.region.describe()  # per-feature interval every point of which is also a valid plan
+```
+
+[Certification](concepts/certification.md) covers exactly what that proof does and does not
+guarantee.
+
 ## Scale to a dataset
 
 ```python
@@ -146,6 +160,6 @@ batch — lever usage, per-plan effort, cost/sparsity/feasibility — as shown i
 
 - [How it works](how-it-works.md) — the pipeline from objective to verified answer.
 - [Concepts](concepts/models.md) — one page per stage: models, targets, constraints,
-  missing values, plausibility, backends.
+  missing values, plausibility, backends, certification.
 - [Tutorials](notebooks/01-quickstart.ipynb) — runnable notebooks.
 - [API reference](api.md).

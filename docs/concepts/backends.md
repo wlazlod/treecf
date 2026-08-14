@@ -1,20 +1,23 @@
 # Backends
 
-Counterfactual search runs on a constrained genetic algorithm with two
-interchangeable engines:
+`explain(..., backend=...)` selects one of three engines:
 
-| backend | engine | when |
-|---|---|---|
-| `"genetic"` (default) | bundled Rust core | 44–58× faster than the numpy engine ([performance](#performance)); typically milliseconds even on 300-tree models |
-| `"python"` | pure numpy | reference implementation, kept for cross-checking and as the behavioral baseline the Rust core is tested against |
+| backend | engine | proof | when |
+|---|---|---|---|
+| `"genetic"` (default) | bundled Rust core | `"heuristic"` | 44–58× faster than the numpy engine ([performance](#performance)); typically milliseconds even on 300-tree models |
+| `"python"` | pure numpy | `"heuristic"` | reference implementation, kept for cross-checking and as the behavioral baseline the Rust core is tested against |
+| `"exact"` | rust-first branch-and-bound, numpy fallback | `"optimal"` / `"optimal_within_gap"` / `"heuristic"` | a proof matters more than solve time — see [the exact backend](#the-exact-backend) below |
 
-Both engines share one constraint compiler, are held to statistical parity
-(identical outcome distributions across seeds), and are seed-deterministic.
-Results carry `proof="heuristic"`: the search is feasibility-first and
-excellent in practice (it brackets a brute-force oracle on toy suites), but it
-does not prove optimality. Every result — target, every constraint, the
-plausibility bound — is re-verified in float space against the IR before being
-returned; an invalid candidate is never returned.
+All three share one constraint compiler and one notion of the search space (the
+[cells](#how-the-search-works) below), and every result — target, every constraint, the
+plausibility bound — is re-verified in float space against the IR before being returned; an
+invalid candidate is never returned. `"genetic"` and `"python"` are additionally held to
+statistical parity (identical outcome distributions across seeds) and are seed-deterministic;
+both always report `proof="heuristic"` — feasibility-first and excellent in practice (they
+bracket a brute-force oracle on toy suites), but never a claim of optimality. `"exact"` is
+covered on its own below; [Certification](certification.md) has the full proof taxonomy for all
+three backends, what a proof does and does not cover, and the certified-region layer that sits
+on top of any of them.
 
 ## How the search works
 
@@ -28,6 +31,41 @@ mutations and a revert-to-factual mutation that drives sparsity.
 Candidate values placed next to a decision threshold are kept one *float32*
 ulp away from it, so the deployed model (which compares in float32) routes
 them the same way the IR does.
+
+## The exact backend
+
+`backend="exact"` searches the same kind of cell grid depth-first with branch-and-bound instead
+of evolving a population, and proves what it finds: `proof="optimal"` when no cheaper feasible
+row exists in the searched grid, `proof="optimal_within_gap"` when `gap > 0` bounded the proof to
+a relative fraction of the optimum instead, and — rarely, honestly — `proof="heuristic"` for a
+real, verified row it is not claiming is cheapest. `Infeasible.proof="certified"` means the whole
+reachable grid was tried and nothing was feasible; the ordinary `"search_exhausted"` means only
+that nothing was found. [Certification](certification.md) has the complete taxonomy, the two
+honesty notes worth reading before trusting a `"heuristic"` or a `"certified"` result, and how
+`value_policy` changes what "optimal" is measured against.
+
+**Rust-first, result-identical fallback.** The search dispatches to a `_treecf_core` Rust
+extension when it is importable (bundled in wheel installs; built by `uv sync` in a dev
+checkout) and falls back to the pure-Python branch-and-bound otherwise. The fallback is not a
+lesser engine: the Rust and Python implementations are proven bit-parity on a fixture set — same
+`x_cf` (or both `None`), same `distance`, `proof`, and every `solver_stats` key — so which one
+ran changes nothing about the answer, only how fast it arrived.
+
+**Constraint coverage.** Single-feature `Linear` constraints and the canonical two-feature order
+pair (`constraint("a <= b")`) are supported exactly. A `Linear` over three or more features, or
+any other two-feature shape, raises `ConstraintValidationError` naming `backend="genetic"` as the
+fallback — the exact search does not silently solve a smaller problem than the one declared. A
+callable `value_policy` is rejected the same way; string and `Grid` policies are supported.
+
+**Cost.** Proof comes at the price of a search that can run to the full `node_budget`
+(2,000,000 assignments by default) or `time_budget_s` before answering, unlike the genetic
+engine's typical milliseconds. `warm_start=True` (the default) seeds the search with a quick
+genetic pass so pruning starts strong; `node_budget` and `gap` are the two levers for trading
+proof strength against wall time. See [Certification — scaling
+guidance](certification.md#scaling-guidance) for what problem sizes are realistic. Measured
+exact-backend solve times are not yet published on this page; the benchmark protocol below
+(pre-registered, seeds fixed, backends interleaved on one machine) is what a future exact-backend
+number here will follow.
 
 ## Performance
 
@@ -129,9 +167,13 @@ pulls dice-ml and NICEx automatically.
 
 ## History
 
-Earlier development versions included an exact CP-SAT backend (via OR-Tools)
-with optimality proofs. It was removed before the first release: it duplicated
-capability available in dedicated exact-optimization packages, its solve times
-missed targets on large ensembles, and maintaining two backend families
-doubled the surface of every change. Users needing provably optimal
-counterfactuals can pair treecf's IR with an exact solver directly.
+Earlier development versions included a different exact backend, `backend="cpsat"`, built on
+OR-Tools CP-SAT. It was removed before the first release: it duplicated capability available in
+dedicated exact-optimization packages, its solve times missed targets on large ensembles, and
+maintaining two backend families doubled the surface of every change.
+
+The current `backend="exact"` is not a revival of that one. It has no solver dependency at all —
+branch-and-bound over treecf's own cell grid, in Python with a bit-parity Rust mirror, using the
+same constraint compiler and IR every other backend uses — which sidesteps the two reasons the
+CP-SAT backend was cut: nothing to duplicate a dedicated package's job, and one backend family
+throughout, not two.

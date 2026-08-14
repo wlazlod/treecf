@@ -67,6 +67,7 @@ nav:
       - Plausibility: concepts/plausibility.md
       - Coalitions: concepts/coalitions.md
       - Backends and proofs: concepts/backends.md
+      - Certification: concepts/certification.md
   - Tutorials:
       - Quickstart: notebooks/01-quickstart.ipynb
       - Credit-risk walkthrough: notebooks/02-credit-risk-tutorial.ipynb
