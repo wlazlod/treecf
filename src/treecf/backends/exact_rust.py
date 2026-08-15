@@ -101,7 +101,14 @@ def solve_exact_rust(
 ) -> ExactResult:
     """Drop-in for ``solve_exact``; ``cache`` (e.g. on the ``Explainer``)
     avoids re-marshaling the ensembles and constraints on every call, exactly
-    as ``solve_genetic_rust``'s does."""
+    as ``solve_genetic_rust``'s does.
+
+    The search runs with the GIL released, so a ``Ctrl-C`` cannot land between
+    Python bytecode instructions the way it would for ``solve_exact``; the
+    Rust side polls for it instead and aborts within about 2^18 nodes,
+    raising ``KeyboardInterrupt`` with no result and discarding whatever
+    incumbent it was holding.
+    """
     core = _core()
     cache = cache if cache is not None else {}
     if "ensemble" not in cache:
