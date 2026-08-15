@@ -632,9 +632,11 @@ class Explainer:
         row still gets the full, undiminished ``time_budget_s``. Because that
         wall time is easy to underestimate, ``backend="exact"`` here is
         opt-in: without ``allow_exact_batch=True`` this raises ``ValueError``
-        naming a worst-case estimate (rows × plans × ``time_budget_s``,
-        hours-formatted) instead of silently running; passing it through with
-        any other backend also raises ``ValueError``. Opting in additionally
+        naming an estimate (rows × plans × ``time_budget_s``, hours-formatted)
+        instead of silently running -- a floor, not a ceiling, since
+        ``diversity="seeds"`` can retry each plan up to 3x on a seed
+        collision; passing it through with any other backend also raises
+        ``ValueError``. Opting in additionally
         replaces ``warm_start``'s N sequential per-row (or, in seeds mode,
         per-attempt) genetic warm passes with a single vectorized one across
         every row — see ``treecf.batch.explain_batch`` for exactly which
@@ -660,9 +662,10 @@ class Explainer:
             ValueError: If ``warm_start``, ``node_budget``, or ``gap`` is
                 given a non-default value together with a ``backend`` other
                 than ``"exact"``; if ``backend="exact"`` is requested without
-                ``allow_exact_batch=True`` (message names the worst-case wall
-                time estimate); or if ``allow_exact_batch=True`` is passed
-                with a ``backend`` other than ``"exact"``.
+                ``allow_exact_batch=True`` (message names the wall time
+                estimate, a floor rather than a ceiling); or if
+                ``allow_exact_batch=True`` is passed with a ``backend`` other
+                than ``"exact"``.
         """
         from treecf.batch import explain_batch
 

@@ -170,6 +170,40 @@ feature count. In practice:
   which prunes harder from the first node without costing anything from the main budget — the
   exact search still gets the full `time_budget_s` afterward.
 
+## The exact-batch opt-in
+
+`explain_batch(..., backend="exact")` has no vectorized population to parallelize the way the
+genetic engine does — it loops the single-instance exact solve per row (and per plan, for
+`diversity="lever-blocking"`), sequentially, and each row still gets the full, undiminished
+`time_budget_s`. That wall time is easy to underestimate from a single
+`explain(..., backend="exact")` call, so the batch path requires explicit consent:
+`backend="exact"` without `allow_exact_batch=True` raises `ValueError` instead of running,
+naming the arithmetic behind the estimate — `rows × plans × time_budget_s`, hours-formatted,
+where `plans` is `n_per_example` for `diversity="seeds"`/`"lever-blocking"` or the coalition
+count (`len(coalitions) + 1` when `include_full=True`) for `diversity="coalitions"`. The figure
+is a floor, not a ceiling: `diversity="seeds"` retries up to three attempts per requested plan
+when a draw collides with one already found, so its actual wall time can run past the estimate;
+the other two diversity modes never exceed it.
+
+Opting in also changes how `warm_start` (default `True`) behaves. Instead of every row (or, in
+`diversity="seeds"`, every attempt) running its own internal genetic warm pass, one vectorized
+`Explainer._solve_batch` call warms every row at once, budgeted at
+`min(time_budget_s * 0.25, 2.0)` regardless of row count — the saving is entirely in the warm-up,
+not in the exact search itself: each row's exact solve afterward still gets the full
+`time_budget_s`. A row whose warm draw comes back infeasible, or fails float-space verification,
+gets no incumbent and runs unwarmed; there is no per-row genetic fallback.
+
+For `diversity="seeds"`, the shared warm pass has a real trade-off: every attempt of a row starts
+from the same one incumbent, rather than each attempt warm-starting its own the way a sequential
+run of `explain` would. With `n_per_example=1` that makes no difference — the result matches a
+sequential `explain(..., backend="exact")` call exactly — but for `n_per_example > 1` a batch run
+is not guaranteed to explore as many distinct warm starts per row as an equivalent sequence of
+`explain` calls would. `diversity="lever-blocking"` shares the incumbent for the primary solve
+only; the per-lever frozen clones keep their own per-solve `warm_start`, since a `Freeze` changes
+the constraint set enough that the primary's incumbent does not necessarily still verify for
+them. `diversity="coalitions"` keeps per-coalition-solver `warm_start` throughout, for the same
+reason.
+
 ## Interrupting a search
 
 A `Ctrl-C` during an exact search, a certified-region growth, or a batch genetic solve raises

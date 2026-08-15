@@ -347,13 +347,15 @@ def explain_batch(
     sequentially instead of running the Rust engine's parallel waves -- each
     row still gets the full, undiminished ``time_budget_s``. Because that
     wall time is easy to underestimate, it requires ``allow_exact_batch=True``
-    to opt in explicitly: without it this raises ``ValueError`` naming a
-    worst-case estimate instead (``rows`` × ``plans`` × ``time_budget_s``,
-    hours-formatted, where ``plans`` is ``n_per_example`` for
-    ``"seeds"``/``"lever-blocking"`` or the coalition count for
-    ``"coalitions"``); passing ``allow_exact_batch=True`` with any other
-    backend also raises ``ValueError``. ``node_budget``/``gap`` thread
-    through to every one of those solves unchanged; see ``Explainer.explain``.
+    to opt in explicitly: without it this raises ``ValueError`` naming an
+    estimate instead (``rows`` × ``plans`` × ``time_budget_s``, hours-formatted,
+    where ``plans`` is ``n_per_example`` for ``"seeds"``/``"lever-blocking"`` or
+    the coalition count for ``"coalitions"``) -- a floor, not a ceiling, since
+    ``diversity="seeds"`` can retry each plan up to
+    ``_SEED_ATTEMPT_FACTOR``x (3x) on a seed collision, pushing actual wall
+    time higher; passing ``allow_exact_batch=True`` with any other backend
+    also raises ``ValueError``. ``node_budget``/``gap`` thread through to
+    every one of those solves unchanged; see ``Explainer.explain``.
 
     Opting in also replaces ``warm_start``'s (default ``True``) N sequential
     per-row genetic warm passes with a single vectorized one across every row
@@ -411,10 +413,12 @@ def explain_batch(
             "backend='exact' inside explain_batch loops the single-instance exact "
             "solve sequentially, one solve per (row, plan) pair -- no vectorized "
             f"population to parallelize -- estimated {len(X)} rows x {plans} plans x "
-            f"{time_budget_s:.4g}s time_budget_s each ~= {hours:.1f} hours worst case; "
-            "pass allow_exact_batch=True to opt in explicitly. Opting in also switches "
-            "warm_start (default True) from one genetic pass per row (or, in seeds "
-            "mode, per attempt) to a single vectorized pass across every row."
+            f"{time_budget_s:.4g}s time_budget_s each ~= {hours:.1f} hours at least "
+            "(diversity='seeds' can retry each plan up to 3x on a seed collision, "
+            "pushing this higher); pass allow_exact_batch=True to opt in explicitly. "
+            "Opting in also switches warm_start (default True) from one genetic pass "
+            "per row (or, in seeds mode, per attempt) to a single vectorized pass "
+            "across every row."
         )
     if allow_exact_batch and backend != "exact":
         raise ValueError("allow_exact_batch is only valid with backend='exact'")
