@@ -169,6 +169,12 @@ feature count. In practice:
   capped at 2 seconds) seeds the exact search with an incumbent before it starts branching,
   which prunes harder from the first node without costing anything from the main budget — the
   exact search still gets the full `time_budget_s` afterward.
+- The budgets can be removed entirely: `time_budget_s=math.inf` disables the time cut, and a
+  very large `node_budget` (any value up to 2^64 − 1) makes the node cut unreachable, so the
+  search runs until it proves optimality or certified infeasibility — practical since Ctrl-C
+  now aborts promptly (see [Interrupting a search](#interrupting-a-search)). An unlimited
+  budget guarantees the search completes, not that it certifies: the conservative constraint
+  repair described above can still return an honestly-warned `proof="heuristic"`.
 
 ## The exact-batch opt-in
 

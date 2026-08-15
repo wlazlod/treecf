@@ -417,7 +417,9 @@ class Explainer:
         ``x`` is the factual instance (one row, aligned to the model's feature
         order); ``target`` bounds the model output the counterfactual must
         reach. ``time_budget_s`` caps wall time per solve (per band, when
-        ``target`` is a ``Target.bands`` ladder). ``sparsity_weight`` makes
+        ``target`` is a ``Target.bands`` ladder); ``math.inf`` is accepted
+        and removes the time cut, letting an exact search run until it
+        proves its answer (Ctrl-C still aborts promptly). ``sparsity_weight`` makes
         the search minimize ``distance + sparsity_weight * n_changed``
         instead of plain ``distance``, trading a cheaper plan that touches
         more features against a sparser one that costs more per feature; the
