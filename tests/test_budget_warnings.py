@@ -15,6 +15,7 @@ import pytest
 
 from treecf import Counterfactual, Explainer, Infeasible, Target, TreecfWarning, constraint
 from treecf.api import _gap_parenthetical
+from treecf.constraints import Freeze, Linear, OneHot
 from treecf.ir.model import EnsembleIR, Link, Node, SplitOp, Tree
 
 
@@ -134,6 +135,72 @@ class TestWithdrawalBody:
         assert "withdrew its optimality certificate" in message
         assert "not proven cheapest" in message
 
+    def test_no_row_withdrawal_never_claims_exhaustion(self) -> None:
+        """Adapted from ``tests/backends/test_exact.py::TestOrderPairOverAOneHotMember
+        ::test_a_repair_the_group_refuses_outright_withdraws_the_certificate`` through
+        the public ``Explainer`` API: ``x1`` is frozen below ``x0``'s only in-target
+        value, so every candidate for the ``x0 <= x1`` pair either leaves the pair
+        broken or breaks the one-hot group's sum -- the search settles nothing and
+        finds no row at all, without ever touching the budget."""
+        gate = Tree(
+            nodes=(
+                Node(0, 0, 0.5, SplitOp.LT, True, 1, 2, None),
+                Node(1, None, None, None, None, None, None, 0.0),
+                Node(2, None, None, None, None, None, None, 1.0),
+            )
+        )
+        band = Tree(
+            nodes=(
+                Node(0, 1, 0.0, SplitOp.LT, True, 1, 2, None),
+                Node(1, None, None, None, None, None, None, 0.0),
+                Node(2, 1, 10.0, SplitOp.LT, True, 3, 4, None),
+                Node(3, None, None, None, None, None, None, 1.0),
+                Node(4, None, None, None, None, None, None, 0.0),
+            )
+        )
+        ir = EnsembleIR(
+            trees=(gate, band),
+            base_score=0.0,
+            link=Link.IDENTITY,
+            n_features=3,
+            feature_names=("x0", "x1", "x2"),
+            meta={"source": "test"},
+        )
+        x = np.array([1.0, 0.5, 0.0])
+        withdrawing = Explainer(
+            ir, normalizers=np.ones(3),
+            constraints=[
+                OneHot(("x0", "x2")),
+                Linear({"x0": 1.0, "x1": -1.0}, op="<=", rhs=0.0, missing_policy="forbid_missing"),
+                Freeze("x1"),
+            ],
+        )
+        target = Target.raw(range=(1.999999, 2.000001))  # pins the score to 2.0
+        with pytest.warns(TreecfWarning) as record:
+            result = withdrawing.explain(
+                x, target, backend="exact", seed=0,
+                warm_start=False, node_budget=2_000_000, time_budget_s=10.0,
+            )
+        assert isinstance(result, Infeasible)
+        stats = result.solver_stats
+        assert stats["completed"] is False
+        assert stats["nodes_expanded"] < 2_000_000  # budget nowhere near touched
+
+        withdrawal_messages = [
+            str(w.message)
+            for w in record
+            if "withdrew its optimality certificate" in str(w.message)
+        ]
+        assert len(withdrawal_messages) == 1  # the factual-violation warning also fires
+        message = withdrawal_messages[0]
+        # the cardinal rule: a withdrawal must never be spelled as an exhaustion
+        assert "exhausted" not in message
+        assert message == (
+            "exact search withdrew its optimality certificate after a conservative "
+            "constraint repair without exhausting its budget; no feasible "
+            "counterfactual was found, and this is NOT a certified infeasibility."
+        )
+
 
 class TestSeedClause:
     """Appended iff ``seed is None`` and the warm start actually produced the
@@ -232,3 +299,27 @@ class TestAggregateWarnings:
         assert len(batch) == 3
         assert len(record) == 1
         assert "3/3 rows" in str(record[0].message)
+
+    def test_batch_aggregate_disambiguates_rows_from_per_kind_solves(
+        self, exp: Explainer
+    ) -> None:
+        """``n_per_example=2`` retries each row up to three times per plan
+        (``_SEED_ATTEMPT_FACTOR``), so the per-kind solve count in the
+        parenthetical can exceed the row count in the outer fraction -- the
+        two must carry distinct unit words so neither figure is ambiguous."""
+        target = Target.raw(op=">=", value=0.5)
+        # row 2 already satisfies the target (score 1.0 >= 0.5): immediate
+        # `proof="optimal"`, `completed=True`, never degraded -- only rows 0/1
+        # are affected, while every attempt at both of them degrades.
+        X = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [2.0, 0.0, 0.0]])
+        with pytest.warns(TreecfWarning) as record:
+            batch = exp.explain_batch(
+                X, target, backend="exact", seed=0, n_per_example=2,
+                warm_start=False, node_budget=1, time_budget_s=5.0,
+            )
+        assert len(batch) == 3
+        assert len(record) == 1
+        message = str(record[0].message)
+        assert "2/3 rows" in message  # rows affected, out of all rows
+        assert "solves)" in message  # per-kind counts are a different unit
+        assert "12 solves" in message  # 2 affected rows x up to 3 seed attempts x k=2
