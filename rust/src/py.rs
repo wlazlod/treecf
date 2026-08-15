@@ -10,6 +10,7 @@ use pyo3::prelude::*;
 use crate::constraints::{Constraints, LinearC};
 use crate::exact::{ExactParams, ValuePolicy};
 use crate::ga::GaParams;
+use crate::interrupt::SearchOutcome;
 use crate::ir::{Ensemble, Link};
 
 /// Per-feature value-policy flat encoding: `0=raw` (`None`), `1=integer`,
@@ -390,7 +391,8 @@ fn solve_genetic_batch_raw<'py>(
         (Some(if_e), Some(bound)) => Some((&if_e.inner, bound)),
         _ => None,
     };
-    let results = py.detach(|| {
+    let outcome = py.detach(|| {
+        let mut noop = || false;
         crate::ga::solve_genetic_batch(
             ens,
             &xs_own,
@@ -404,8 +406,13 @@ fn solve_genetic_batch_raw<'py>(
             bg_own.as_ref().map(|(data, n)| (data.as_slice(), *n)),
             plaus,
             &params,
+            &mut noop,
         )
     });
+    let results = match outcome {
+        SearchOutcome::Done(results) => results,
+        SearchOutcome::Interrupted => unreachable!("no-op probe never interrupts"),
+    };
     let n_tasks = tasks.len();
     let mut x_cf = vec![0.0f64; n_tasks * p];
     let mut feasible = vec![false; n_tasks];
@@ -515,8 +522,9 @@ fn solve_exact_raw<'py>(
         gap,
         time_budget_s,
     };
-    let result = py
+    let outcome = py
         .detach(|| {
+            let mut noop = || false;
             crate::exact::solve_exact(
                 ens,
                 &x_own,
@@ -529,9 +537,14 @@ fn solve_exact_raw<'py>(
                 plaus,
                 &params,
                 incumbent,
+                &mut noop,
             )
         })
         .map_err(PyValueError::new_err)?;
+    let result = match outcome {
+        SearchOutcome::Done(result) => result,
+        SearchOutcome::Interrupted => unreachable!("no-op probe never interrupts"),
+    };
     let stats = result.stats;
     let stats_tuple = (
         stats.nodes_expanded,
@@ -697,7 +710,8 @@ fn compute_region_raw<'py>(
         (Some(if_e), Some(md)) => Some((&if_e.inner, md.as_slice())),
         _ => None,
     };
-    let result = py.detach(|| {
+    let outcome = py.detach(|| {
+        let mut noop = || false;
         crate::regions::recourse_region(
             ens,
             &missing_defined_own,
@@ -709,8 +723,13 @@ fn compute_region_raw<'py>(
             &open_set_own,
             if_pair,
             min_total_path.unwrap_or(0.0),
+            &mut noop,
         )
     });
+    let result = match outcome {
+        SearchOutcome::Done(result) => result,
+        SearchOutcome::Interrupted => unreachable!("no-op probe never interrupts"),
+    };
     Ok((result.lo.into_pyarray(py), result.hi.into_pyarray(py)))
 }
 

@@ -33,9 +33,15 @@
 use crate::cells::{cell_index, Cell};
 use crate::constraints::{py_max, py_min, Constraints, LinearC, LIN_GE, LIN_LE, POLICY_SATISFIED};
 use crate::exact::orderpairs::{achievable_bounds, intersect_cell};
+use crate::interrupt::{InterruptProbe, SearchOutcome};
 use crate::ir::Ensemble;
 
 const LINEAR_SLACK: f64 = 1e-9; // matches Explainer._verify / CompiledConstraints.check_matrix
+
+/// How many growth attempts between two interrupt polls. One attempt is a
+/// whole-box soundness check, so this is a far coarser unit of work than a
+/// search node and the interval is correspondingly small.
+const SIGNAL_CHECK_INTERVAL: u64 = 64;
 
 /// `lo`/`hi` per feature (degenerate coordinates equal `x_cf` there, a single
 /// point). `treecf.regions._recourse_region`'s Rust dispatch wraps this into
@@ -268,6 +274,10 @@ fn try_grow(
 /// both directions fail in the same round, and the whole loop stops once a
 /// full round accepts nothing. No step reads from hash-map iteration order,
 /// so the result is bit-deterministic.
+///
+/// `probe` is asked every `SIGNAL_CHECK_INTERVAL` growth attempts whether to
+/// stop. Answering yes drops the partly grown box and returns
+/// `SearchOutcome::Interrupted` — a box is only ever handed back whole.
 #[allow(clippy::too_many_arguments)]
 pub fn recourse_region(
     ens: &Ensemble,
@@ -280,7 +290,8 @@ pub fn recourse_region(
     open_set: &[usize],
     if_pair: Option<(&Ensemble, &[bool])>,
     min_total_path: f64,
-) -> RegionBox {
+    probe: InterruptProbe<'_>,
+) -> SearchOutcome<RegionBox> {
     let ensembles: Vec<&Ensemble> = match if_pair {
         None => vec![ens],
         Some((if_ens, _)) => vec![ens, if_ens],
@@ -292,6 +303,9 @@ pub fn recourse_region(
     let is_nan_arr: Vec<bool> = x_cf.iter().map(|v| v.is_nan()).collect();
 
     let mut open: Vec<usize> = open_set.to_vec();
+    // Every feature costs exactly two attempts, so counting the pair at once
+    // polls on the same attempt numbers as counting them one by one would.
+    let mut attempts: u64 = 0;
     while !open.is_empty() {
         let mut still_open: Vec<usize> = Vec::new();
         for &j in &open {
@@ -333,14 +347,18 @@ pub fn recourse_region(
             if grew_up || grew_down {
                 still_open.push(j);
             }
+            attempts += 2;
+            if attempts % SIGNAL_CHECK_INTERVAL == 0 && probe() {
+                return SearchOutcome::Interrupted;
+            }
         }
         open = still_open;
     }
 
-    RegionBox {
+    SearchOutcome::Done(RegionBox {
         lo: box_lo,
         hi: box_hi,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -364,6 +382,14 @@ mod tests {
 
     fn all_defined(ens: &Ensemble) -> Vec<bool> {
         vec![true; ens.feature.len()]
+    }
+
+    /// Unwrap a growth that was run with a probe that never fires.
+    fn done(outcome: SearchOutcome<RegionBox>) -> RegionBox {
+        match outcome {
+            SearchOutcome::Done(region) => region,
+            SearchOutcome::Interrupted => unreachable!("no-op probe never interrupts"),
+        }
     }
 
     // ---------------------------------------------- oracle straddle conservatism ---
@@ -421,7 +447,7 @@ mod tests {
         let lo_b = [f64::NEG_INFINITY; 3];
         let hi_b = [f64::INFINITY; 3];
         let open_set = [0usize, 1, 2];
-        let first = recourse_region(
+        let first = done(recourse_region(
             &ens,
             &missing_defined,
             &cons,
@@ -432,8 +458,9 @@ mod tests {
             &open_set,
             None,
             0.0,
-        );
-        let second = recourse_region(
+            &mut || false,
+        ));
+        let second = done(recourse_region(
             &ens,
             &missing_defined,
             &cons,
@@ -444,7 +471,8 @@ mod tests {
             &open_set,
             None,
             0.0,
-        );
+            &mut || false,
+        ));
         assert_eq!(first.lo, second.lo);
         assert_eq!(first.hi, second.hi);
         // "a" is the only lever the >= 0.9 target needs: it must stay pinned
@@ -562,7 +590,7 @@ mod tests {
         let lo_b = [f64::NEG_INFINITY, f64::NEG_INFINITY];
         let hi_b = [f64::INFINITY, f64::INFINITY];
 
-        let region = recourse_region(
+        let region = done(recourse_region(
             &ens,
             &missing_defined,
             &cons,
@@ -573,7 +601,8 @@ mod tests {
             &[0],
             None,
             0.0,
-        );
+            &mut || false,
+        ));
         // g must never cross into the unrouted subtree (g >= 1.0): the (unsound)
         // old behavior -- treating the undefined node as routing right, reaching
         // leaf value 5.0 -- would have accepted a box wide enough to include it.
@@ -599,6 +628,72 @@ mod tests {
             &straddling_hi,
             &[false, true],
         ));
+    }
+
+    // ------------------------------------------------------- interrupt probe ---
+
+    /// Forty independent levers on forty features, in a target so wide that
+    /// every one of them grows all the way out — enough attempts that the
+    /// polling interval is crossed several times.
+    fn many_levers() -> Ensemble {
+        let specs: Vec<(i32, f64, bool, f64, f64)> =
+            (0..40).map(|j| (j, 1.0, true, 0.0, 1.0)).collect();
+        stumps(&specs, 40)
+    }
+
+    fn grow_many(probe: InterruptProbe<'_>) -> SearchOutcome<RegionBox> {
+        let ens = many_levers();
+        let missing_defined = all_defined(&ens);
+        let cons = cons_base(40);
+        let x_cf = vec![0.0; 40];
+        let lo_b = vec![f64::NEG_INFINITY; 40];
+        let hi_b = vec![f64::INFINITY; 40];
+        let open_set: Vec<usize> = (0..40).collect();
+        recourse_region(
+            &ens,
+            &missing_defined,
+            &cons,
+            &x_cf,
+            (-1.0, 100.0),
+            &lo_b,
+            &hi_b,
+            &open_set,
+            None,
+            0.0,
+            probe,
+        )
+    }
+
+    /// A probe that says stop throws the half-grown box away: nothing partial
+    /// is ever handed back.
+    #[test]
+    fn growth_stops_and_reports_nothing_when_the_probe_says_stop() {
+        let mut polls = 0usize;
+        let outcome = grow_many(&mut || {
+            polls += 1;
+            true
+        });
+        assert!(matches!(outcome, SearchOutcome::Interrupted));
+        assert_eq!(polls, 1); // the very first question ends it
+    }
+
+    /// The probe is asked once per 64 growth attempts and the box it never
+    /// stops is bit-for-bit the box no probe at all produces.
+    #[test]
+    fn growth_polls_every_64_attempts_and_leaves_the_box_alone() {
+        let mut polls = 0usize;
+        let probed = done(grow_many(&mut || {
+            polls += 1;
+            false
+        }));
+        // 40 features x 2 attempts x 3 rounds = 240 attempts -> 3 questions.
+        assert_eq!(polls, 3);
+        let plain = done(grow_many(&mut || false));
+        let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<u64>>();
+        assert_eq!(bits(&probed.lo), bits(&plain.lo));
+        assert_eq!(bits(&probed.hi), bits(&plain.hi));
+        assert_eq!(bits(&probed.lo), bits(&vec![f64::NEG_INFINITY; 40]));
+        assert_eq!(bits(&probed.hi), bits(&vec![f64::INFINITY; 40]));
     }
 
     // ------------------------------------------------- Python-derived canary ---
@@ -635,7 +730,7 @@ mod tests {
         let x_cf = [1.0, 0.0, 0.0];
         let lo_b = [f64::NEG_INFINITY; 3];
         let hi_b = [f64::INFINITY; 3];
-        let region = recourse_region(
+        let region = done(recourse_region(
             &ens,
             &missing_defined,
             &cons,
@@ -646,7 +741,8 @@ mod tests {
             &[0, 1, 2],
             None,
             0.0,
-        );
+            &mut || false,
+        ));
         let lo_bits: Vec<u64> = region.lo.iter().map(|v| v.to_bits()).collect();
         let hi_bits: Vec<u64> = region.hi.iter().map(|v| v.to_bits()).collect();
         assert_eq!(

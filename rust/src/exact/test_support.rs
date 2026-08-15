@@ -6,6 +6,7 @@ use crate::constraints::Constraints;
 use crate::exact::domains::{build_domains, constraint_cells, State};
 use crate::exact::search::solve_exact;
 use crate::exact::{ExactParams, ExactResult, ValuePolicy};
+use crate::interrupt::{InterruptProbe, SearchOutcome};
 use crate::ir::{Ensemble, Link};
 
 // ------------------------------------------------------------ builders ---
@@ -139,6 +140,36 @@ pub(crate) fn solve(
     params: &ExactParams,
     incumbent: Option<(f64, &[f64])>,
 ) -> ExactResult {
+    match solve_probed(
+        ens,
+        x,
+        interval,
+        cons,
+        lam,
+        policies,
+        params,
+        incumbent,
+        &mut || false,
+    ) {
+        SearchOutcome::Done(result) => result,
+        SearchOutcome::Interrupted => unreachable!("no-op probe never interrupts"),
+    }
+}
+
+/// `solve` with a probe of the caller's own — for the tests that care what the
+/// probe is asked and what happens when it says yes.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn solve_probed(
+    ens: &Ensemble,
+    x: &[f64],
+    interval: (f64, f64),
+    cons: &Constraints,
+    lam: f64,
+    policies: &[Option<ValuePolicy>],
+    params: &ExactParams,
+    incumbent: Option<(f64, &[f64])>,
+    probe: InterruptProbe<'_>,
+) -> SearchOutcome<ExactResult> {
     let p = ens.n_features;
     solve_exact(
         ens,
@@ -152,6 +183,7 @@ pub(crate) fn solve(
         None,
         params,
         incumbent,
+        probe,
     )
     .unwrap()
 }
