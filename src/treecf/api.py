@@ -104,10 +104,12 @@ class Counterfactual:
         changes: ``{feature: (factual_value, counterfactual_value)}`` for every
             feature that actually differs (including a transition to or from
             ``NaN``); unchanged features are omitted.
-        distance: The recourse cost ``J`` the search minimized: the weighted,
-            normalized sum of per-feature changes (``sum(weight * |delta| /
-            sigma)``, with ``AllowMissing``'s ``delta_miss``/``delta_from_miss``
-            pricing any NaN transition).
+        distance: The weighted, normalized sum of per-feature changes
+            (``sum(weight * |delta| / sigma)``, with ``AllowMissing``'s
+            ``delta_miss``/``delta_from_miss`` pricing any NaN transition),
+            excluding the sparsity term. When ``sparsity_weight > 0`` the
+            search minimizes ``distance + sparsity_weight * n_changed``, so
+            ``distance`` alone does not reproduce the search's own ranking.
         n_changed: ``len(changes)`` — the number of features actually changed.
         score_raw: The model's raw score at ``x_cf`` (pre-link, i.e. margin for
             a sigmoid-link model).
@@ -415,11 +417,13 @@ class Explainer:
         ``x`` is the factual instance (one row, aligned to the model's feature
         order); ``target`` bounds the model output the counterfactual must
         reach. ``time_budget_s`` caps wall time per solve (per band, when
-        ``target`` is a ``Target.bands`` ladder). ``sparsity_weight`` adds
-        ``sparsity_weight * n_changed`` to the minimized distance, trading a
-        cheaper plan that touches more features against a sparser one that
-        costs more per feature; ``0.0`` (the default) does not penalize
-        sparsity at all. ``seed`` fixes the genetic search's (and, on the
+        ``target`` is a ``Target.bands`` ladder). ``sparsity_weight`` makes
+        the search minimize ``distance + sparsity_weight * n_changed``
+        instead of plain ``distance``, trading a cheaper plan that touches
+        more features against a sparser one that costs more per feature; the
+        returned ``Counterfactual.distance`` itself always excludes the
+        sparsity term. ``0.0`` (the default) does not penalize sparsity at
+        all. ``seed`` fixes the genetic search's (and, on the
         exact backend, the warm start's) randomness for reproducibility;
         ``None`` draws a fresh one each call.
 

@@ -1,6 +1,6 @@
 """Certified recourse regions: widen a verified counterfactual into a sound box.
 
-A :class:`RecourseRegion` is a per-feature interval around one already-verified
+A ``RecourseRegion`` is a per-feature interval around one already-verified
 counterfactual ``x_cf``: every point inside it -- not just ``x_cf`` itself --
 is provably still in the target interval, still plausible (when configured),
 and still constraint-feasible. That makes the region a *certified*

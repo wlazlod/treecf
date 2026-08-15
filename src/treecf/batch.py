@@ -63,8 +63,9 @@ class BatchRecord:
             ``feasible`` is ``False``.
         changes: ``{feature: (factual_value, counterfactual_value)}`` for
             every feature that differs; ``{}`` when ``feasible`` is ``False``.
-        distance: The recourse cost ``J``, or ``None`` when ``feasible`` is
-            ``False``.
+        distance: The weighted, normalized sum of per-feature changes,
+            excluding the sparsity term (see ``Counterfactual.distance``), or
+            ``None`` when ``feasible`` is ``False``.
         n_changed: ``len(changes)``, or ``None`` when ``feasible`` is
             ``False``.
         score_raw: The model's raw score at ``x_cf``, or ``None`` when

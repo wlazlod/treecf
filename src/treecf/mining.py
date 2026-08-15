@@ -52,9 +52,10 @@ class SuggestedConstraint:
             be suggested down to ``min_support``.
         n_rows_checked: Number of rows the check was evaluated over; what
             counts as checkable depends on ``kind`` — co-present rows for
-            ``"order"``/``"equality"``, rows where the antecedent holds for
-            ``"implication"``, rows where ``a`` is missing for
-            ``"missing_link"``, present rows for ``"integer"``/``"range"``.
+            ``"order"``/``"equality"``, rows where the antecedent holds and
+            the consequent feature is present for ``"implication"``, rows
+            where ``a`` is missing for ``"missing_link"``, present rows for
+            ``"integer"``/``"range"``.
         n_violations: Number of those rows that violated the invariant;
             ``0`` for every kind except ``"order"``.
         evidence: Up to 5 violating rows, ``{"row": index, "values": (a, b)}``
