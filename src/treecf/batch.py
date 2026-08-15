@@ -24,7 +24,7 @@ from treecf._json import decode_floats, encode_floats
 from treecf.ir.evaluate import raw_score_batch_prepared
 
 if TYPE_CHECKING:
-    from treecf.api import Counterfactual, Explainer, Infeasible
+    from treecf.api import Counterfactual, Explainer, Infeasible, _Degradation
     from treecf.backends.genetic import GeneticResult
     from treecf.regions import RecourseRegion
     from treecf.targets import Target
@@ -244,7 +244,7 @@ def explain_batch(
     importable, exactly as a single ``explain(..., region=True)`` call would
     run it) -- there is no batched/parallel region path.
     """
-    from treecf.api import _resolve_exact_kwargs
+    from treecf.api import _degraded_summary, _resolve_exact_kwargs
 
     if target.bands_spec is not None:
         raise TreecfError("Target.bands is not supported in explain_batch; loop bands explicitly")
@@ -284,12 +284,18 @@ def explain_batch(
 
     records: list[BatchRecord] = []
     essential: dict[object, list[str]] = {}
+    # Per-row degraded-exact-result buckets, whatever the diversity mode; a
+    # row counts as affected once, however many of its solves degraded --
+    # the same "affected/total rows" shape `explain_batch`'s own
+    # factual-violation aggregate above uses.
+    row_degraded: list[list[_Degradation]] = [[] for _ in row_ids]
     if diversity == "coalitions":
         assert coalitions is not None  # narrowed by the validation above
         records = _rows_by_coalitions(
             explainer, X, target, row_ids, coalitions, include_full,
             backend, time_budget_s, sparsity_weight, seed=seed,
             warm_start=warm_start, node_budget=node_budget, gap=gap, region=region,
+            row_degraded=row_degraded,
         )
     elif diversity == "seeds" and backend in ("genetic", "genetic-rust"):
         # Same attempts, dedup, and stopping rule as `_row_by_seeds`, but each
@@ -314,6 +320,7 @@ def explain_batch(
                     backend, time_budget_s, sparsity_weight,
                     master_seed=seed * 1_000_003 + i * 1_009,
                     warm_start=warm_start, node_budget=node_budget, gap=gap, region=region,
+                    degraded=row_degraded[i],
                 )
             else:
                 row_records, row_essential = _row_by_lever_blocking(
@@ -321,9 +328,16 @@ def explain_batch(
                     backend, time_budget_s, sparsity_weight, seed=seed,
                     primary=None if primaries is None else primaries[i],
                     warm_start=warm_start, node_budget=node_budget, gap=gap, region=region,
+                    degraded=row_degraded[i],
                 )
                 essential[row_id] = row_essential
             records.extend(row_records)
+
+    degraded_all = [d for bucket in row_degraded for d in bucket]
+    affected_rows = sum(1 for bucket in row_degraded if bucket)
+    message = _degraded_summary(degraded_all, affected_rows, len(row_ids), "rows")
+    if message is not None:
+        warnings.warn(message, TreecfWarning, stacklevel=2)
 
     return BatchResult(
         feature_names=explainer.ir.feature_names,
@@ -503,6 +517,7 @@ def _rows_by_coalitions(
     node_budget: int | None = None,
     gap: float | None = None,
     region: bool = False,
+    row_degraded: list[list[_Degradation]] | None = None,
 ) -> list[BatchRecord]:
     """One record per named coalition per row (plus the optional baseline).
 
@@ -511,7 +526,9 @@ def _rows_by_coalitions(
     by row. Per row, feasible plans are ranked by distance (k = 0, 1, ...),
     then infeasible coalitions follow in coalition order — an infeasible
     record with ``coalition`` set means that group alone cannot reach the
-    target.
+    target. ``row_degraded`` (one bucket per row, indexed like ``row_ids``)
+    collects exact-backend degradations across every coalition's solve for
+    ``explain_batch``'s own aggregate warning.
     """
     from treecf.api import _ALL_LEVERS, Counterfactual, Infeasible, _validate_coalitions
 
@@ -549,6 +566,7 @@ def _rows_by_coalitions(
                     X[i], target, backend, time_budget_s, sparsity_weight, seed,
                     warn_factual=False,
                     warm_start=warm_start, node_budget=node_budget, gap=gap,
+                    degraded=None if row_degraded is None else row_degraded[i],
                 )
                 for i in range(len(X))
             ]
@@ -587,6 +605,7 @@ def _row_by_seeds(
     node_budget: int | None = None,
     gap: float | None = None,
     region: bool = False,
+    degraded: list[_Degradation] | None = None,
 ) -> list[BatchRecord]:
     from treecf.api import Counterfactual
 
@@ -597,6 +616,7 @@ def _row_by_seeds(
             x, target, backend, time_budget_s, sparsity_weight, attempt_seed,
             warn_factual=False,  # explain_batch already warned in aggregate
             warm_start=warm_start, node_budget=node_budget, gap=gap,
+            degraded=degraded,
         )
         if isinstance(result, Counterfactual):
             key = frozenset(result.changes)
@@ -632,6 +652,7 @@ def _row_by_lever_blocking(
     node_budget: int | None = None,
     gap: float | None = None,
     region: bool = False,
+    degraded: list[_Degradation] | None = None,
 ) -> tuple[list[BatchRecord], list[str]]:
     from treecf.api import Counterfactual
 
@@ -640,6 +661,7 @@ def _row_by_lever_blocking(
             x, target, backend, time_budget_s, sparsity_weight, seed,
             warn_factual=False,  # explain_batch already warned in aggregate
             warm_start=warm_start, node_budget=node_budget, gap=gap,
+            degraded=degraded,
         )
         assert not isinstance(explained, dict)  # bands are rejected by explain_batch
         primary = explained
@@ -669,6 +691,7 @@ def _row_by_lever_blocking(
             x, target, backend, time_budget_s, sparsity_weight, seed,
             warn_factual=False,  # explain_batch already warned in aggregate
             warm_start=warm_start, node_budget=node_budget, gap=gap,
+            degraded=degraded,
         )
         if isinstance(alternative, Counterfactual):
             key = frozenset(alternative.changes)

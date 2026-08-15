@@ -15,6 +15,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The exact backend now always warns when it returns a degraded result
+  (`solver_stats["completed"] is False`): a `TreecfWarning` names whether the search
+  genuinely ran out of budget or instead withdrew its optimality certificate through a
+  conservative constraint repair without touching the budget -- the two causes are never
+  conflated. `Target.bands`, `explain_coalitions`, and `explain_batch` collapse every
+  degraded solve in one call into a single aggregate warning instead of one per solve.
+
 ### Changed
 
 - README and the package's one-line description refreshed to cover the exact backend,

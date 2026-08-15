@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import math
+import time
 import warnings
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 import numpy.typing as npt
@@ -147,6 +148,109 @@ def _resolve_exact_kwargs(
     return resolved_warm_start, resolved_node_budget, resolved_gap
 
 
+@dataclass(frozen=True)
+class _Degradation:
+    """One exact-backend result with ``stats["completed"] is False``, collected
+    instead of warned immediately when a caller aggregates over several solves
+    (``Target.bands``, ``explain_coalitions``, ``explain_batch``)."""
+
+    kind: str  # "exhausted" | "withdrawn"
+    message: str  # standalone warning body; the seed clause is applied separately
+    unseeded: bool  # seed clause applies (seed is None and warm_start_used)
+
+
+_SEED_CLAUSE = (
+    " Warm start was unseeded; rerunning may return a different heuristic result — "
+    "pass seed= for reproducibility."
+)
+
+
+def _gap_parenthetical(distance: float | None, lower_bound: float) -> str:
+    """`` (lower bound X, gap <= Y%)``, or ``""`` when there is no row, or the
+    lower bound is absent, non-positive, or non-finite."""
+    if distance is None or not math.isfinite(lower_bound) or lower_bound <= 0.0:
+        return ""
+    displayed_gap = (distance - lower_bound) / lower_bound
+    return f" (lower bound {lower_bound:.4g}, gap ≤ {displayed_gap:.1%})"
+
+
+def _exhausted_message(
+    nodes_expanded: int, has_row: bool, distance: float | None, lower_bound: float
+) -> str:
+    if has_row:
+        return (
+            f"exact search exhausted its budget after {nodes_expanded:,} nodes; the "
+            "result is the best found, not proven optimal"
+            f"{_gap_parenthetical(distance, lower_bound)}; raise node_budget/time_budget_s "
+            "or set gap= to accept a proven tolerance."
+        )
+    return (
+        f"exact search exhausted its budget after {nodes_expanded:,} nodes without "
+        "finding a feasible counterfactual; this is NOT a certified infeasibility — "
+        "raise budgets or use backend='genetic'."
+    )
+
+
+def _withdrawn_message(has_row: bool, distance: float | None, lower_bound: float) -> str:
+    if has_row:
+        return (
+            "exact search withdrew its optimality certificate after a conservative "
+            "constraint repair without exhausting its budget; the result is verified "
+            f"but not proven cheapest{_gap_parenthetical(distance, lower_bound)}."
+        )
+    return (
+        "exact search withdrew its optimality certificate after a conservative "
+        "constraint repair without exhausting its budget; no feasible counterfactual "
+        "was found, and this is NOT a certified infeasibility."
+    )
+
+
+def _degradation_for(
+    res: ExactResult, node_budget: int, time_budget_s: float, elapsed: float, seed: int | None
+) -> _Degradation:
+    """Classify one degraded exact-search result (``stats["completed"] is False``).
+
+    Elapsed time is measured around the whole solver call, including the
+    Python<->Rust marshaling overhead — that overhead only ever pushes
+    ``elapsed`` up, so it only ever biases the classification toward
+    "exhausted", never toward the unearned "conservative withdrawal" reading.
+    """
+    stats = res.stats
+    nodes_expanded = cast(int, stats["nodes_expanded"])
+    lower_bound = cast(float, stats["lower_bound"])
+    exhausted = nodes_expanded >= node_budget or elapsed >= time_budget_s
+    has_row = res.x_cf is not None
+    unseeded = seed is None and bool(stats["warm_start_used"])
+    if exhausted:
+        kind = "exhausted"
+        message = _exhausted_message(nodes_expanded, has_row, res.distance, lower_bound)
+    else:
+        kind = "withdrawn"
+        message = _withdrawn_message(has_row, res.distance, lower_bound)
+    return _Degradation(kind=kind, message=message, unseeded=unseeded)
+
+
+def _degraded_summary(
+    degraded: list[_Degradation], affected: int, total: int, unit: str
+) -> str | None:
+    """Message body for one aggregate degraded-result warning, or ``None`` when
+    nothing degraded. Counts stay broken down by kind so the aggregate never
+    claims exhaustion for a withdrawn result, or the reverse. The caller emits
+    the actual ``warnings.warn`` itself, so its own stacklevel stays accurate."""
+    if not degraded:
+        return None
+    counts: dict[str, int] = {}
+    for d in degraded:
+        counts[d.kind] = counts.get(d.kind, 0) + 1
+    summary = "; ".join(f"{kind}: {n} solve{'s' if n != 1 else ''}" for kind, n in counts.items())
+    unseeded = any(d.unseeded for d in degraded)
+    return (
+        f"exact search returned a degraded result in {affected}/{total} {unit} "
+        f"({summary}); see each result's own proof/solver_stats for which case applies."
+        + (_SEED_CLAUSE if unseeded else "")
+    )
+
+
 class Explainer:
     """Counterfactual explainer for a tree-ensemble model.
 
@@ -235,7 +339,13 @@ class Explainer:
         repair of some constraint shapes can withdraw the optimality
         certificate honestly rather than claim a cheapest row it did not
         prove — the row itself is still real and verified, only the
-        "cheapest possible" claim is dropped.
+        "cheapest possible" claim is dropped. Whenever the exact search
+        returns any result with ``solver_stats["completed"] is False`` — for
+        that reason or because the budget genuinely ran out — a
+        :class:`TreecfWarning` names which of the two happened, never the
+        other one. ``Target.bands``, ``explain_coalitions``, and
+        ``explain_batch`` collapse this into one aggregate warning per call
+        instead of one per solve.
 
         If the factual itself violates a constraint, a :class:`TreecfWarning`
         is emitted: the returned plan will include changes made solely to
@@ -266,9 +376,13 @@ class Explainer:
         node_budget: int | None = None,
         gap: float | None = None,
         region: bool = False,
+        degraded: list[_Degradation] | None = None,
     ) -> Counterfactual | Infeasible | dict[str, object]:
         """``explain`` body; ``explain_batch`` calls it with ``warn_factual=False``
-        after emitting its own aggregate warning."""
+        after emitting its own aggregate warning. ``degraded`` collects exact-backend
+        degradations for an external caller's own aggregate instead of warning
+        immediately; ignored (a fresh local collector is used instead) when
+        ``target.bands_spec`` is set, since batch/coalitions never pass bands through."""
         x = np.asarray(x, dtype=np.float64)
         if warn_factual:
             violations = self.compiled.factual_violations(x)
@@ -291,11 +405,14 @@ class Explainer:
 
         if target.bands_spec is not None:
             results: dict[str, object] = {}
-            for name, interval in target.band_intervals(self.ir.link).items():
+            band_degraded: list[_Degradation] = []
+            intervals = target.band_intervals(self.ir.link)
+            for name, interval in intervals.items():
                 outcome = (
                     self._explain_exact(
                         x, interval, time_budget_s, resolved_warm_start,
                         resolved_node_budget, resolved_gap, sparsity_weight, seed,
+                        degraded=band_degraded,
                     )
                     if backend == "exact"
                     else self._explain_genetic(
@@ -305,12 +422,18 @@ class Explainer:
                 if region and isinstance(outcome, Counterfactual):
                     outcome = replace(outcome, region=self._region_for(x, outcome.x_cf, interval))
                 results[name] = outcome
+            message = _degraded_summary(band_degraded, len(band_degraded), len(intervals), "bands")
+            if message is not None:
+                warnings.warn(
+                    message, TreecfWarning, stacklevel=3  # _explain <- explain <- user code
+                )
             return results
         interval = target.raw_interval(self.ir.link)
         result = (
             self._explain_exact(
                 x, interval, time_budget_s, resolved_warm_start,
                 resolved_node_budget, resolved_gap, sparsity_weight, seed,
+                degraded=degraded,
             )
             if backend == "exact"
             else self._explain_genetic(
@@ -399,7 +522,10 @@ class Explainer:
         under the reserved key ``"(all levers)"``. One solve per coalition
         (milliseconds each); this mode is optional and never the default.
         ``warm_start``/``node_budget``/``gap`` thread through to every
-        coalition's solve; see ``Explainer.explain``.
+        coalition's solve; see ``Explainer.explain``. A degraded exact result
+        (``solver_stats["completed"] is False``) in any coalition's solve is
+        collapsed into one aggregate :class:`TreecfWarning` for the whole call,
+        rather than one per coalition.
         """
         if target.bands_spec is not None:
             raise TreecfError(
@@ -407,16 +533,22 @@ class Explainer:
             )
         normalized = _validate_coalitions(coalitions, self.ir.feature_names, include_full)
         results: dict[str, Counterfactual | Infeasible] = {}
+        degraded: list[_Degradation] = []
         if include_full:
             results[_ALL_LEVERS] = self._explain_one(
                 x, target, backend, time_budget_s, sparsity_weight, seed,
                 warm_start=warm_start, node_budget=node_budget, gap=gap, region=region,
+                degraded=degraded,
             )
         for name, clone in self._coalition_explainers(normalized).items():
             results[name] = clone._explain_one(
                 x, target, backend, time_budget_s, sparsity_weight, seed,
                 warm_start=warm_start, node_budget=node_budget, gap=gap, region=region,
+                degraded=degraded,
             )
+        message = _degraded_summary(degraded, len(degraded), len(results), "coalitions")
+        if message is not None:
+            warnings.warn(message, TreecfWarning, stacklevel=2)  # explain_coalitions <- user code
         return results
 
     def _explain_one(
@@ -432,12 +564,14 @@ class Explainer:
         node_budget: int | None = None,
         gap: float | None = None,
         region: bool = False,
+        degraded: list[_Degradation] | None = None,
     ) -> Counterfactual | Infeasible:
         """`explain` for a single-interval target, with the bands arm ruled out."""
         result = self._explain(
             x, target, backend, time_budget_s, sparsity_weight, seed,
             warn_factual=warn_factual,
             warm_start=warm_start, node_budget=node_budget, gap=gap, region=region,
+            degraded=degraded,
         )
         assert not isinstance(result, dict)  # bands are rejected by the callers
         return result
@@ -571,6 +705,7 @@ class Explainer:
         gap: float,
         sparsity_weight: float,
         seed: int | None,
+        degraded: list[_Degradation] | None = None,
     ) -> Counterfactual | Infeasible:
         """Exact-backend counterfactual for one target interval.
 
@@ -595,6 +730,11 @@ class Explainer:
         validation (an unsupported multi-feature ``Linear`` shape, or a
         callable ``value_policy``) propagates unchanged; it already names
         ``backend="genetic"`` as the fallback.
+
+        When the returned ``stats["completed"] is False``, ``degraded`` (when
+        given) collects a :class:`_Degradation` instead of warning here
+        directly, for an external caller's own aggregate warning; ``None``
+        (the default) warns immediately.
         """
         from treecf.backends._exact_domains import _cost_of_row
         from treecf.backends.exact_rust import _rust_available, solve_exact_rust
@@ -612,6 +752,12 @@ class Explainer:
                 )
                 incumbent = (cost, warm.x_cf)
 
+        # Wraps only the solver call: any Python<->Rust marshaling overhead this
+        # measurement picks up can only push `elapsed` up, which only ever
+        # biases the exhaustion classifier below toward "exhausted" -- the
+        # honest direction, never toward the stronger "conservative
+        # withdrawal" reading it has not earned.
+        start = time.monotonic()
         if _rust_available():
             res = solve_exact_rust(
                 self.ir,
@@ -647,6 +793,19 @@ class Explainer:
                 time_budget_s=time_budget_s,
                 incumbent=incumbent,
             )
+        elapsed = time.monotonic() - start
+
+        if res.stats["completed"] is False:
+            degradation = _degradation_for(res, node_budget, time_budget_s, elapsed, seed)
+            if degraded is None:
+                warnings.warn(
+                    degradation.message + (_SEED_CLAUSE if degradation.unseeded else ""),
+                    TreecfWarning,
+                    stacklevel=4,  # _explain_exact <- _explain <- explain/_explain_one <- caller
+                )
+            else:
+                degraded.append(degradation)
+
         if res.x_cf is None:
             # Certification is read from stats["completed"], never from
             # res.proof: proof carries no meaning on an infeasible result
