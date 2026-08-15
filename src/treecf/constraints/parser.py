@@ -33,10 +33,32 @@ class _Token:
 
 
 def constraint(text: str, feature_names: Sequence[str] | None = None) -> Linear:
-    """Parse ``"2*a - b <= 3"``-style sugar into a canonical Linear object.
+    """Parse ``"2*a - b <= 3"``-style sugar into a canonical ``Linear`` object.
 
-    When ``feature_names`` is given, identifiers are validated immediately;
-    otherwise validation happens later in ``compile_constraints``.
+    Only linear expressions over ``+``/``-``/``*`` and one of ``<=``/``>=``/
+    ``==`` are accepted; anything richer (nonlinear terms, multiple
+    comparisons) must be written as constraint objects directly. Terms on
+    both sides are folded into ``coefficients``/``rhs`` on the left-hand
+    side's convention, so ``"a <= b"`` and ``"a - b <= 0"`` produce the same
+    ``Linear``. See [Constraints](concepts/constraints.md).
+
+    Args:
+        text: The constraint string, e.g. ``"2*a - b <= 3"`` or
+            ``"income >= 0"``.
+        feature_names: When given, every identifier in ``text`` is validated
+            against it immediately; when omitted (the default), unknown
+            identifiers are only caught later, at
+            ``Explainer``/``compile_constraints`` time.
+
+    Returns:
+        The parsed ``Linear`` constraint.
+
+    Raises:
+        ConstraintParseError: If ``text`` contains an unexpected character, is
+            missing an operator or a term, has trailing tokens after the
+            right-hand side, references no feature at all, or (when
+            ``feature_names`` is given) references an identifier not in it.
+            The message carries a caret marking the offending token.
     """
     tokens = _tokenize(text)
     parser = _Parser(text, tokens, feature_names)

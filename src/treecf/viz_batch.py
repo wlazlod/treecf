@@ -29,6 +29,26 @@ def plot_batch_levers(
     Increases, decreases, and NaN transitions stack per feature, ordered by how
     often the feature is used. For ``diversity="lever-blocking"`` results,
     features recorded as essential levers are annotated with their count.
+
+    Args:
+        batch: The batch result to summarize.
+        k: Which plan(s) to include per row — ``0`` (the default) keeps only
+            each row's best plan; ``None`` keeps every feasible plan.
+        normalize: When ``True`` (the default), bar widths are a fraction of
+            the selected plans; when ``False``, raw plan counts.
+        top_n: Maximum number of features to show, most-used first.
+        show_essential: When ``True`` (the default) and
+            ``batch.diversity == "lever-blocking"``, annotates each bar with
+            how many rows recorded that feature as an essential lever
+            (``batch.essential_levers``).
+        ax: Existing axes to draw on; a new figure is created if omitted.
+
+    Returns:
+        The axes the chart was drawn on.
+
+    Raises:
+        MissingExtraError: If matplotlib is not installed.
+        TreecfError: If ``batch`` has no plan matching ``k``.
     """
     plt = _import_pyplot()
     selected = _select_records(batch, k)
@@ -93,6 +113,29 @@ def plot_batch_matrix(
     legs priced via ``AllowMissing``); without, cells mark changed features
     like ``plot_counterfactuals``. Rows sort by distance; columns by how often
     the feature is changed.
+
+    Args:
+        batch: The batch result to visualize.
+        explainer: When given, shades cells by change effort instead of a
+            flat binary mark; must describe the same feature space as
+            ``batch``.
+        k: Which plan(s) to include per row — ``0`` (the default) keeps only
+            each row's best plan; ``None`` keeps every feasible plan.
+        sort_rows: When ``True`` (the default), rows are ordered by ascending
+            distance.
+        max_row_labels: Row id labels are drawn only when the selected plan
+            count is at or below this limit; beyond it, the y-axis is left
+            unlabeled with a plan-count caption instead.
+        ax: Existing axes to draw on; a new figure is created if omitted.
+
+    Returns:
+        The axes the heatmap was drawn on.
+
+    Raises:
+        MissingExtraError: If matplotlib is not installed.
+        TreecfError: If ``explainer`` is given and its feature space does not
+            match ``batch.feature_names``, or if ``batch`` has no plan
+            matching ``k``.
     """
     plt = _import_pyplot()
     import numpy as np
@@ -145,7 +188,26 @@ def plot_batch_summary(batch: BatchResult, k: int | None = 0, axs: Any = None) -
     """Three-panel batch overview: plan cost, sparsity, and feasibility.
 
     Creates its own figure when ``axs`` is None and returns the array of three
-    axes (unlike the single-axes functions, which return one ``ax``).
+    axes (unlike the single-axes functions, which return one ``ax``). Panels:
+    a histogram of ``distance`` over the selected plans, a bar chart of
+    ``n_changed`` counts, and a feasible-vs-infeasible bar over every row
+    (independent of ``k`` — every row counts once).
+
+    Args:
+        batch: The batch result to summarize.
+        k: Which plan(s) feed the cost/sparsity panels — ``0`` (the default)
+            keeps only each row's best plan; ``None`` keeps every feasible
+            plan. Does not affect the feasibility panel.
+        axs: Existing array of 3 axes to draw on; a new figure is created if
+            omitted.
+
+    Returns:
+        The array of 3 axes (cost, sparsity, feasibility) the panels were
+        drawn on.
+
+    Raises:
+        MissingExtraError: If matplotlib is not installed.
+        TreecfError: If ``batch`` has no records at all.
     """
     plt = _import_pyplot()
     ids_all = {record.id for record in batch.records}
@@ -203,6 +265,25 @@ def plot_batch_deltas(
     counted in a per-feature annotation instead of plotted. With ``explainer``,
     deltas are divided by the per-feature normalizer sigma so features of
     different scales share one axis.
+
+    Args:
+        batch: The batch result to visualize.
+        explainer: When given, standardizes deltas by its per-feature
+            ``sigma``; must describe the same feature space as ``batch``.
+            Without it, raw deltas are plotted.
+        k: Which plan(s) to include per row — ``0`` (the default) keeps only
+            each row's best plan; ``None`` keeps every feasible plan.
+        top_n: Maximum number of features to show, most-changed first.
+        ax: Existing axes to draw on; a new figure is created if omitted.
+
+    Returns:
+        The axes the strip plot was drawn on.
+
+    Raises:
+        MissingExtraError: If matplotlib is not installed.
+        TreecfError: If ``explainer`` is given and its feature space does not
+            match ``batch.feature_names``, or if ``batch`` has no plan
+            matching ``k``.
     """
     plt = _import_pyplot()
     import numpy as np

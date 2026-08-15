@@ -11,7 +11,23 @@ from treecf.api import Counterfactual, Infeasible
 
 
 def plot_changes(cf: Counterfactual, ax: Any = None) -> Any:
-    """Dumbbell chart of per-feature changes (from -> to); NaN transitions annotated."""
+    """Dumbbell chart of per-feature changes (from -> to); NaN transitions annotated.
+
+    One row per changed feature, a gray dot at the factual value and a blue
+    dot at the counterfactual value joined by a line; a feature that
+    transitions to or from ``NaN`` is drawn as a single gray dot annotated
+    ``"-> NaN"``/``"NaN ->"`` instead.
+
+    Args:
+        cf: The counterfactual to plot.
+        ax: Existing axes to draw on; a new figure is created if omitted.
+
+    Returns:
+        The axes the chart was drawn on.
+
+    Raises:
+        MissingExtraError: If matplotlib is not installed.
+    """
     plt = _import_pyplot()
     if ax is None:
         _, ax = plt.subplots(figsize=(7, 0.6 * max(2, len(cf.changes))))
@@ -46,7 +62,24 @@ def plot_changes(cf: Counterfactual, ax: Any = None) -> Any:
 
 
 def plot_counterfactuals(results: Sequence[Counterfactual], ax: Any = None) -> Any:
-    """Changed-feature matrix comparing diverse counterfactuals."""
+    """Changed-feature matrix comparing diverse counterfactuals.
+
+    One row per result, one column per feature changed by any of them; a
+    filled cell marks that the row's plan changed that column's feature.
+    Rows are labeled by rank and distance (``#1 (J=...)``, ...), in the order
+    ``results`` is given.
+
+    Args:
+        results: The counterfactuals to compare (e.g. the ``k`` alternatives
+            for one row from ``diversity="seeds"``/``"lever-blocking"``).
+        ax: Existing axes to draw on; a new figure is created if omitted.
+
+    Returns:
+        The axes the matrix was drawn on.
+
+    Raises:
+        MissingExtraError: If matplotlib is not installed.
+    """
     plt = _import_pyplot()
     features = sorted({name for cf in results for name in cf.changes})
     if ax is None:
@@ -63,7 +96,22 @@ def plot_counterfactuals(results: Sequence[Counterfactual], ax: Any = None) -> A
 
 
 def plot_ladder(bands_result: Mapping[str, object], ax: Any = None) -> Any:
-    """Cost of reaching each rating band (Target.bands): the price of every grade."""
+    """Cost of reaching each rating band (``Target.bands``): the price of every grade.
+
+    One bar per band, named and ordered like ``bands_result``; a
+    ``Counterfactual`` bar is its ``distance``, an ``Infeasible`` band is
+    drawn at zero height and labeled ``"infeasible"``.
+
+    Args:
+        bands_result: The dict returned by ``explain(x, target=Target.bands(...))``.
+        ax: Existing axes to draw on; a new figure is created if omitted.
+
+    Returns:
+        The axes the chart was drawn on.
+
+    Raises:
+        MissingExtraError: If matplotlib is not installed.
+    """
     plt = _import_pyplot()
     if ax is None:
         _, ax = plt.subplots(figsize=(1.5 + 0.9 * len(bands_result), 4))
@@ -102,6 +150,21 @@ def plot_alternatives(results: Any, explainer: Any = None, ax: Any = None) -> An
     ``explainer``, changes are plotted as standardized deltas from the
     factual (Δ/σ), so features of different scales share one axis; without,
     raw values are shown with gray factual dots.
+
+    Args:
+        results: The plans to overlay — a sequence, or a mapping keyed by
+            plan name; see above for accepted element types.
+        explainer: When given, changes are standardized by its per-feature
+            ``sigma``; when omitted, raw feature values are plotted instead.
+        ax: Existing axes to draw on; a new figure is created if omitted.
+
+    Returns:
+        The axes the chart was drawn on.
+
+    Raises:
+        MissingExtraError: If matplotlib is not installed.
+        TreecfError: If ``results`` contains no feasible plans, or more than
+            10.
     """
     plt = _import_pyplot()
     plans = _plans_with_labels(results)
@@ -171,6 +234,20 @@ def plot_tradeoff(results: Any, target: Any = None, ax: Any = None) -> Any:
     to reach. Accepts a sequence of ``Counterfactual`` objects or feasible
     ``BatchRecord`` entries, or a mapping as returned by
     ``explain_coalitions`` (keys label the dots; ``Infeasible`` skipped).
+
+    Args:
+        results: The plans to plot; see above for accepted shapes.
+        target: When given, draws the target interval's finite bounds
+            (mapped into the same probability/raw space as the plans) as
+            horizontal reference lines.
+        ax: Existing axes to draw on; a new figure is created if omitted.
+
+    Returns:
+        The axes the chart was drawn on.
+
+    Raises:
+        MissingExtraError: If matplotlib is not installed.
+        TreecfError: If ``results`` contains no feasible plans.
     """
     plt = _import_pyplot()
     plans = _plans_with_labels(results)
@@ -273,6 +350,7 @@ def plot_recourse_map(
         The axes the recourse map was drawn on.
 
     Raises:
+        MissingExtraError: If matplotlib is not installed.
         TreecfError: If ``results`` contains no plans at all, or more than
             10 feasible plans.
     """
@@ -571,6 +649,20 @@ def plot_waterfall(explainer: Any, cf: Counterfactual, target: Any = None, ax: A
     (recomputed through the IR — endpoints are exact; per-bar attribution is
     sequential and therefore order-dependent, like any sequential decomposition).
     Sigmoid-link models are plotted in probability space.
+
+    Args:
+        explainer: Explainer wrapping the model; supplies the IR the score
+            deltas are recomputed through and the link function.
+        cf: The counterfactual to decompose.
+        target: When given, draws the target interval's finite bounds (in the
+            same display space) as vertical reference lines.
+        ax: Existing axes to draw on; a new figure is created if omitted.
+
+    Returns:
+        The axes the waterfall was drawn on.
+
+    Raises:
+        MissingExtraError: If matplotlib is not installed.
     """
     import numpy as np
 
@@ -640,7 +732,26 @@ def plot_waterfall(explainer: Any, cf: Counterfactual, target: Any = None, ax: A
 
 
 def plot_effort(explainer: Any, cf: Counterfactual, ax: Any = None) -> Any:
-    """Cost-space companion: how the distance J splits across the changes."""
+    """Cost-space companion: how the distance J splits across the changes.
+
+    One horizontal bar per changed feature, its length the feature's own
+    contribution ``w * |delta| / sigma`` to ``cf.distance`` (a NaN transition
+    priced via ``AllowMissing``'s ``delta_miss``/``delta_from_miss``),
+    descending. Unlike ``plot_waterfall``'s exact score deltas, this
+    decomposes the recourse *cost*, not the model score.
+
+    Args:
+        explainer: Explainer wrapping the model; supplies the distance
+            weights and normalizers each contribution is computed from.
+        cf: The counterfactual to decompose.
+        ax: Existing axes to draw on; a new figure is created if omitted.
+
+    Returns:
+        The axes the chart was drawn on.
+
+    Raises:
+        MissingExtraError: If matplotlib is not installed.
+    """
     plt = _import_pyplot()
     contributions = sorted(
         _change_effort(explainer, cf.changes).items(), key=lambda pair: pair[1], reverse=True

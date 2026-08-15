@@ -36,7 +36,54 @@ _SEED_ATTEMPT_FACTOR = 3  # try up to 3k seeds per row when hunting k distinct p
 
 @dataclass(frozen=True)
 class BatchRecord:
-    """One counterfactual (or the infeasibility marker) for one dataset row."""
+    """One counterfactual (or the infeasibility marker) for one dataset row.
+
+    Fields mirror ``Counterfactual`` (``x_cf``, ``changes``, ``distance``,
+    ``n_changed``, ``score_raw``, ``score_prob``, ``region``), plus batch
+    bookkeeping: ``id`` and ``k`` place the record in the dataset, and
+    ``feasible`` distinguishes a real plan from the infeasibility marker.
+
+    Attributes:
+        id: The row identifier this record belongs to (an element of
+            ``explain_batch``'s ``ids``, or the row's integer index when
+            ``ids`` was not given).
+        k: Rank of this plan among the row's feasible alternatives,
+            ``0``-based, ascending by distance (``0`` is always the
+            cheapest). For a wholly infeasible row (``diversity="seeds"``/
+            ``"lever-blocking"``), the single infeasibility marker gets
+            ``k=0``; for ``diversity="coalitions"``, an infeasible
+            coalition's marker instead continues the same row's ascending
+            sequence after its feasible plans, so each coalition still gets
+            a distinct ``k``.
+        feasible: ``False`` marks the infeasibility marker for a row (or
+            coalition) that produced no plan; ``x_cf``/``changes``/
+            ``distance``/``n_changed``/``score_raw``/``score_prob`` are then
+            ``None``/``{}`` rather than real values.
+        x_cf: The full counterfactual feature vector, or ``None`` when
+            ``feasible`` is ``False``.
+        changes: ``{feature: (factual_value, counterfactual_value)}`` for
+            every feature that differs; ``{}`` when ``feasible`` is ``False``.
+        distance: The recourse cost ``J``, or ``None`` when ``feasible`` is
+            ``False``.
+        n_changed: ``len(changes)``, or ``None`` when ``feasible`` is
+            ``False``.
+        score_raw: The model's raw score at ``x_cf``, or ``None`` when
+            ``feasible`` is ``False``.
+        score_prob: ``sigmoid(score_raw)`` for a sigmoid-link model, ``None``
+            for an identity-link model or when ``feasible`` is ``False``.
+        seed: The seed that produced this plan, set only for
+            ``diversity="seeds"``; ``None`` otherwise.
+        blocked_lever: The feature frozen to produce this plan, set only for
+            ``diversity="lever-blocking"`` alternatives (not the primary
+            plan, ``k=0``); ``None`` otherwise.
+        coalition: The coalition name this plan belongs to, set only for
+            ``diversity="coalitions"`` (including the reserved
+            ``"(all levers)"`` baseline when ``include_full=True``); ``None``
+            otherwise.
+        region: The certified box around ``x_cf``, set only when
+            ``explain_batch`` ran with ``region=True`` and ``feasible`` is
+            ``True``; ``None`` otherwise.
+    """
 
     id: object
     k: int
@@ -55,7 +102,26 @@ class BatchRecord:
 
 @dataclass(frozen=True)
 class BatchResult:
-    """Counterfactuals for a whole dataset, addressable by row id."""
+    """Counterfactuals for a whole dataset, addressable by row id.
+
+    Returned by ``Explainer.explain_batch``; supports ``len()``, iteration
+    over its ``records``, id lookup (``for_id``), a JSON round trip
+    (``save``/``load``), and a pandas view (``to_frame``).
+
+    Attributes:
+        feature_names: The model's feature names, in the order ``x_cf``
+            arrays are indexed by.
+        diversity: The ``diversity`` mode ``explain_batch`` ran with
+            (``"seeds"``, ``"lever-blocking"``, or ``"coalitions"``).
+        records: Every ``BatchRecord``, feasible and infeasible, across every
+            row and alternative/coalition; order matches the originating
+            ``explain_batch`` call.
+        essential_levers: ``{row_id: [feature, ...]}`` — for
+            ``diversity="lever-blocking"`` rows only, the features whose
+            freezing made every alternative infeasible (so the primary plan
+            has no substitute for that lever). Empty for other diversity
+            modes.
+    """
 
     feature_names: tuple[str, ...]
     diversity: str
@@ -69,9 +135,28 @@ class BatchResult:
         return iter(self.records)
 
     def for_id(self, row_id: object) -> list[BatchRecord]:
+        """Every record (all alternatives/coalitions) for one dataset row.
+
+        Args:
+            row_id: A value from ``explain_batch``'s ``ids`` (or the row's
+                integer index when ``ids`` was not given).
+
+        Returns:
+            The matching records, in their original order; ``[]`` if
+            ``row_id`` is not present in this result.
+        """
         return [r for r in self.records if r.id == row_id]
 
     def save(self, path: str | os.PathLike[str]) -> None:
+        """Write this result to a portable JSON file, reloadable with ``load``.
+
+        Every field is encoded explicitly (NaN/Infinity-safe floats via
+        ``encode_floats``), including ``region`` when set, so a round trip
+        through ``save``/``load`` is lossless.
+
+        Args:
+            path: Destination file path; overwritten if it already exists.
+        """
         data = {
             "feature_names": list(self.feature_names),
             "diversity": self.diversity,
@@ -116,6 +201,19 @@ class BatchResult:
 
     @classmethod
     def load(cls, path: str | os.PathLike[str]) -> BatchResult:
+        """Read a ``BatchResult`` previously written by ``save``.
+
+        A file saved without ``region=True``, or by a version of treecf
+        before regions existed, loads with every record's ``region`` set to
+        ``None``; a file saved before coalition support loads with every
+        record's ``coalition`` set to ``None``.
+
+        Args:
+            path: Path to a file written by ``save``.
+
+        Returns:
+            The reconstructed ``BatchResult``.
+        """
         from treecf.regions import RecourseRegion
 
         with open(path, encoding="utf-8") as fh:
@@ -170,7 +268,20 @@ class BatchResult:
         )
 
     def to_frame(self) -> Any:
-        """One row per (id, k), wide ``cf_<feature>`` columns (pandas, lazy import)."""
+        """One row per (id, k), wide ``cf_<feature>`` columns (pandas, lazy import).
+
+        Every ``BatchRecord`` field except ``x_cf``/``changes``/``region``
+        becomes its own column; ``x_cf`` is spread into one ``cf_<feature>``
+        column per model feature (``NaN`` for an infeasible record, or an
+        unchanged feature's factual-equal value); ``changes`` is summarized as
+        a ``changed_features`` column (sorted feature names).
+
+        Returns:
+            A pandas ``DataFrame`` with one row per record.
+
+        Raises:
+            TreecfError: If pandas is not installed.
+        """
         try:
             import pandas as pd
         except ImportError as exc:  # pragma: no cover - exercised without pandas

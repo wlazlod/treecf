@@ -1,6 +1,8 @@
 """Canonical constraint objects. Frozen dataclasses; validation at compile time.
 
-M1 subset: Freeze, Monotone, Range. Linear, Implies, OneHot, AllowMissing arrive in M2.
+Pass these (or a ``constraint()`` string) to ``Explainer(..., constraints=[...])``.
+See [Constraints](concepts/constraints.md) for what each one compiles to and
+how they compose.
 """
 
 from __future__ import annotations
@@ -10,14 +12,24 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class Freeze:
-    """The feature is immutable: the counterfactual keeps the factual value."""
+    """The feature is immutable: the counterfactual keeps the factual value.
+
+    Attributes:
+        feature: The feature name to freeze.
+    """
 
     feature: str
 
 
 @dataclass(frozen=True)
 class Monotone:
-    """The feature may only move in one direction from the factual value."""
+    """The feature may only move in one direction from the factual value.
+
+    Attributes:
+        feature: The feature name to constrain.
+        direction: ``"increase"`` (the counterfactual value must be
+            ``>=`` the factual) or ``"decrease"`` (``<=`` the factual).
+    """
 
     feature: str
     direction: str  # "increase" | "decrease"
@@ -25,7 +37,13 @@ class Monotone:
 
 @dataclass(frozen=True)
 class Range:
-    """Hard domain bounds for the counterfactual value (inclusive)."""
+    """Hard domain bounds for the counterfactual value (inclusive).
+
+    Attributes:
+        feature: The feature name to bound.
+        lo: Lower bound, inclusive.
+        hi: Upper bound, inclusive.
+    """
 
     feature: str
     lo: float
@@ -39,6 +57,22 @@ class Linear:
     ``missing_policy`` resolves the constraint when a referenced feature is NaN
     in the counterfactual: "satisfied" (vacuously true, the default),
     "violated"/"forbid_missing" (the counterfactual may not use NaN there).
+    The exact backend supports single-feature and the canonical two-feature
+    order-pair shape exactly; any other multi-feature shape raises
+    ``ConstraintValidationError`` naming ``backend="genetic"`` as the
+    fallback — see
+    [Certification](concepts/certification.md#what-the-exact-backend-does-not-certify-yet).
+
+    Attributes:
+        coefficients: ``{feature: coefficient}`` for every feature in the
+            sum; at least one entry.
+        op: ``"<="``, ``">="``, or ``"=="``.
+        rhs: The right-hand-side constant.
+        missing_policy: ``"satisfied"`` (the default — the constraint is
+            vacuously satisfied when a referenced feature is NaN) or
+            ``"violated"``/``"forbid_missing"`` (a NaN there fails the
+            constraint, so the counterfactual may not use NaN on a referenced
+            feature).
     """
 
     coefficients: dict[str, float]
@@ -49,7 +83,13 @@ class Linear:
 
 @dataclass(frozen=True)
 class Equals:
-    """Binary-feature equality (used standalone or inside Implies)."""
+    """Binary-feature equality (used standalone or inside ``Implies``).
+
+    Attributes:
+        feature: The feature name to compare.
+        value: The value ``feature`` must equal (typically ``0.0``/``1.0``
+            for a binary indicator).
+    """
 
     feature: str
     value: float
@@ -57,7 +97,12 @@ class Equals:
 
 @dataclass(frozen=True)
 class Implies:
-    """If `condition` holds then `consequence` must hold; binary features only (v0.1)."""
+    """If ``condition`` holds then ``consequence`` must hold; binary features only.
+
+    Attributes:
+        condition: The antecedent equality.
+        consequence: The equality ``condition`` requires when it holds.
+    """
 
     condition: Equals
     consequence: Equals
@@ -65,7 +110,11 @@ class Implies:
 
 @dataclass(frozen=True)
 class OneHot:
-    """The listed binary columns sum to exactly one."""
+    """The listed binary columns sum to exactly one.
+
+    Attributes:
+        features: The mutually exclusive binary feature names; at least two.
+    """
 
     features: tuple[str, ...]
 
@@ -75,7 +124,14 @@ class AllowMissing:
     """NaN is a feasible counterfactual value for this feature.
 
     ``delta_miss`` prices the value<->NaN transition; pass ``delta_from_miss``
-    for an asymmetric NaN->value cost (defaults to ``delta_miss``).
+    for an asymmetric NaN->value cost (defaults to ``delta_miss``). See
+    [Missing values](concepts/missing-values.md).
+
+    Attributes:
+        feature: The feature name NaN is allowed on.
+        delta_miss: Distance cost of a value-to-NaN change on this feature.
+        delta_from_miss: Distance cost of a NaN-to-value change on this
+            feature; defaults to ``delta_miss`` when ``None``.
     """
 
     feature: str

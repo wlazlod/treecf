@@ -30,6 +30,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   certified infeasibility, and recourse regions (updates the PyPI project page on the next
   release).
 
+### Docs
+
+- Every public API object rendered on the API reference now documents its parameters
+  (with default semantics, not just default values), return shape, and deliberate raises
+  to the same depth, with cross-references to the relevant concepts pages; several
+  objects that previously had no docstring at all (`Target.raw`/`bands`,
+  `BatchResult.for_id`/`save`/`load`, `suggest_constraints` and its result types,
+  `Plausibility.isolation_forest`/`anomaly_score`) were entirely absent from the rendered
+  docs and are now covered.
+
 ## [0.2.0] - 2026-08-14
 
 ### Added
