@@ -15,20 +15,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-08-15
+
 ### Added
 
+- **Interruptibility**: a `Ctrl-C` during an exact search, a certified-region growth, or a
+  batch genetic solve now raises `KeyboardInterrupt` promptly instead of waiting for the
+  whole search to finish. The Rust core polls for it from inside its released GIL (about
+  every 2^18 nodes for the exact search); the pure-Python exact fallback already raised
+  promptly, since Python delivers signals between bytecode instructions. Reliable only when
+  the call happens on the main thread. Nothing is returned on interrupt -- whatever
+  incumbent or partially grown region existed is discarded.
 - The exact backend now always warns when it returns a degraded result
   (`solver_stats["completed"] is False`): a `TreecfWarning` names whether the search
   genuinely ran out of budget or instead withdrew its optimality certificate through a
   conservative constraint repair without touching the budget -- the two causes are never
-  conflated. `Target.bands`, `explain_coalitions`, and `explain_batch` collapse every
+  conflated, and the message includes a lower-bound/gap parenthetical when one is
+  available, plus an unseeded-warm-start clause when the incumbent came from an unseeded
+  warm pass. `Target.bands`, `explain_coalitions`, and `explain_batch` collapse every
   degraded solve in one call into a single aggregate warning instead of one per solve.
+- `explain_batch(..., backend="exact")` is now opt-in behind `allow_exact_batch=True`:
+  without it, raises `ValueError` naming a worst-case wall-time estimate (rows × plans ×
+  `time_budget_s`) instead of running unbounded. Opting in also replaces `warm_start`'s
+  per-row (or, in `diversity="seeds"` mode, per-attempt) genetic warm passes with a single
+  vectorized warm pass shared across the whole batch -- in seeds mode this means every
+  attempt of a row now shares one incumbent instead of each attempt warm-starting its own
+  (with `n_per_example=1` the result still matches a sequential `explain(...,
+  backend="exact")` call exactly).
 
 ### Changed
 
 - README and the package's one-line description refreshed to cover the exact backend,
   certified infeasibility, and recourse regions (updates the PyPI project page on the next
   release).
+- No result of any non-interrupted call changes in this release, and no fixtures were
+  regenerated: the full pre-existing test suite passes unchanged.
+
+### Fixed
+
+- `Ctrl-C` latency during an exact search, region growth, or batch genetic solve used to
+  equal however much of the search remained; it is now near-immediate (see
+  Interruptibility above).
 
 ### Docs
 
@@ -39,6 +66,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `BatchResult.for_id`/`save`/`load`, `suggest_constraints` and its result types,
   `Plausibility.isolation_forest`/`anomaly_score`) were entirely absent from the rendered
   docs and are now covered.
+- README quick-look comment recalibrated to name the warned-degrade case alongside
+  `proof="optimal"` and a certified "no"; new [Certification](docs/concepts/certification.md)
+  sections cover interruption and the always-on degraded-result warning.
 
 ## [0.2.0] - 2026-08-14
 
