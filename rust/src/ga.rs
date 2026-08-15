@@ -5,6 +5,10 @@
 //! Rayon parallelizes only RNG-free stages (fitness/check/repair), so results
 //! are identical across thread counts by construction — the audit showed child
 //! creation is 1-4 % of wall time, so sequential variation costs little.
+//! `solve_genetic_batch` fans its tasks out a chunk at a time rather than all
+//! at once; that argument is untouched, since each task carries its own seed
+//! and reads nothing from its neighbours, so which tasks travel together and
+//! on which thread cannot change any of their answers.
 
 use std::time::Instant;
 
@@ -14,7 +18,13 @@ use rand_distr::{Distribution, Normal};
 use rand_pcg::Pcg64Mcg;
 
 use crate::constraints::Constraints;
+use crate::interrupt::{InterruptProbe, SearchOutcome};
 use crate::ir::Ensemble;
+
+/// How many batch tasks are fanned out between two interrupt polls. Big enough
+/// that the rayon fan-out still has plenty to chew on, small enough that a
+/// large batch comes back to the calling thread often.
+const SIGNAL_CHECK_CHUNK: usize = 256;
 
 pub struct GaParams {
     pub population: usize,
@@ -241,6 +251,11 @@ pub fn solve_genetic(
 /// Independent GA searches for a batch of `(row_index, seed)` tasks, fanned
 /// out with rayon. Every task is independently seeded, so the output is
 /// thread-count-independent by construction; order follows `tasks`.
+///
+/// The fan-out runs a chunk of `SIGNAL_CHECK_CHUNK` tasks at a time and asks
+/// `probe` on the calling thread before each chunk. Answering yes drops the
+/// chunks already finished and returns `SearchOutcome::Interrupted`; answering
+/// no gives the same vector, task for task, as one undivided fan-out.
 #[allow(clippy::too_many_arguments)]
 pub fn solve_genetic_batch(
     ens: &Ensemble,
@@ -255,30 +270,39 @@ pub fn solve_genetic_batch(
     background: Option<(&[f64], usize)>,
     plausibility: Option<(&Ensemble, f64)>,
     params: &GaParams,
-) -> Vec<GaResult> {
+    probe: InterruptProbe<'_>,
+) -> SearchOutcome<Vec<GaResult>> {
     use rayon::prelude::*;
     let p = ens.n_features;
     // Warm the cell caches up front so parallel tasks don't build them twice.
     let _ = ens.feature_cells();
-    tasks
-        .par_iter()
-        .map(|&(row, seed)| {
-            solve_genetic(
-                ens,
-                &xs[row * p..(row + 1) * p],
-                lo_t,
-                hi_t,
-                cons,
-                sigma,
-                weights,
-                lam,
-                background,
-                plausibility,
-                Some(seed),
-                params,
-            )
-        })
-        .collect()
+    let mut results: Vec<GaResult> = Vec::with_capacity(tasks.len());
+    for chunk in tasks.chunks(SIGNAL_CHECK_CHUNK) {
+        if probe() {
+            return SearchOutcome::Interrupted;
+        }
+        let done: Vec<GaResult> = chunk
+            .par_iter()
+            .map(|&(row, seed)| {
+                solve_genetic(
+                    ens,
+                    &xs[row * p..(row + 1) * p],
+                    lo_t,
+                    hi_t,
+                    cons,
+                    sigma,
+                    weights,
+                    lam,
+                    background,
+                    plausibility,
+                    Some(seed),
+                    params,
+                )
+            })
+            .collect();
+        results.extend(done);
+    }
+    SearchOutcome::Done(results)
 }
 
 fn pin_fixed(pop: &mut [f64], n_rows: usize, p: usize, fixed: &[bool], x: &[f64]) {
@@ -516,7 +540,7 @@ mod tests {
         let cons = empty_constraints(2);
         let xs = [0.0, 0.0, -1.0, 2.0];
         let tasks = [(0usize, 1u64), (0, 2), (1, 3), (1, 1)];
-        let batch = solve_genetic_batch(
+        let outcome = solve_genetic_batch(
             &ens,
             &xs,
             &tasks,
@@ -529,7 +553,11 @@ mod tests {
             None,
             None,
             &params(),
+            &mut || false,
         );
+        let SearchOutcome::Done(batch) = outcome else {
+            unreachable!("no-op probe never interrupts")
+        };
         for (result, &(row, seed)) in batch.iter().zip(&tasks) {
             let single = solve_genetic(
                 &ens,
@@ -544,6 +572,96 @@ mod tests {
                 None,
                 Some(seed),
                 &params(),
+            );
+            assert_eq!(result.generations, single.generations);
+            assert_eq!(result.x_cf, single.x_cf);
+        }
+    }
+
+    /// The batch asks before it starts, so a probe that says stop right away
+    /// costs one question and no search at all.
+    #[test]
+    fn batch_stops_before_the_first_chunk_when_the_probe_says_stop() {
+        let ens = stump();
+        let cons = empty_constraints(2);
+        let xs = [0.0, 0.0];
+        let tasks = [(0usize, 1u64), (0, 2)];
+        let mut polls = 0usize;
+        let outcome = solve_genetic_batch(
+            &ens,
+            &xs,
+            &tasks,
+            0.5,
+            f64::INFINITY,
+            &cons,
+            &[1.0, 1.0],
+            &[1.0, 1.0],
+            0.05,
+            None,
+            None,
+            &params(),
+            &mut || {
+                polls += 1;
+                true
+            },
+        );
+        assert!(matches!(outcome, SearchOutcome::Interrupted));
+        assert_eq!(polls, 1);
+    }
+
+    /// Chunking is a polling schedule and nothing else: 300 tasks are two
+    /// chunks and therefore two questions, and every task still comes back
+    /// with exactly what its own single solve produces.
+    #[test]
+    fn batch_polls_once_per_chunk_and_answers_task_for_task() {
+        let ens = stump();
+        let cons = empty_constraints(2);
+        let xs = [0.0, 0.0, -1.0, 2.0];
+        let tasks: Vec<(usize, u64)> = (0..300).map(|i| (i % 2, i as u64 + 1)).collect();
+        let small = GaParams {
+            population: 8,
+            max_generations: 3,
+            stall_generations: 2,
+            ..params()
+        };
+        let mut polls = 0usize;
+        let outcome = solve_genetic_batch(
+            &ens,
+            &xs,
+            &tasks,
+            0.5,
+            f64::INFINITY,
+            &cons,
+            &[1.0, 1.0],
+            &[1.0, 1.0],
+            0.05,
+            None,
+            None,
+            &small,
+            &mut || {
+                polls += 1;
+                false
+            },
+        );
+        let SearchOutcome::Done(batch) = outcome else {
+            unreachable!("this probe never says stop")
+        };
+        assert_eq!(polls, 2);
+        assert_eq!(batch.len(), tasks.len());
+        for (result, &(row, seed)) in batch.iter().zip(&tasks) {
+            let single = solve_genetic(
+                &ens,
+                &xs[row * 2..(row + 1) * 2],
+                0.5,
+                f64::INFINITY,
+                &cons,
+                &[1.0, 1.0],
+                &[1.0, 1.0],
+                0.05,
+                None,
+                None,
+                Some(seed),
+                &small,
             );
             assert_eq!(result.generations, single.generations);
             assert_eq!(result.x_cf, single.x_cf);

@@ -1,6 +1,6 @@
 """Certified recourse regions: widen a verified counterfactual into a sound box.
 
-A :class:`RecourseRegion` is a per-feature interval around one already-verified
+A ``RecourseRegion`` is a per-feature interval around one already-verified
 counterfactual ``x_cf``: every point inside it -- not just ``x_cf`` itself --
 is provably still in the target interval, still plausible (when configured),
 and still constraint-feasible. That makes the region a *certified*
@@ -63,7 +63,20 @@ class RecourseRegion:
     sound box may exist) nor monotone in the target interval (a strictly
     narrower target can still produce a strictly wider region on some
     feature: growth is greedy and order-dependent, so a feature that is
-    forced to stop early frees room a later feature grows into).
+    forced to stop early frees room a later feature grows into). See
+    [Certification](concepts/certification.md#regions-certified-not-maximal-not-monotone).
+
+    Attributes:
+        lo: Lower bound per feature, same order as the model's features;
+            equal to ``hi`` at a degenerate (never-widened) coordinate.
+        hi: Upper bound per feature, same order as the model's features.
+        feature_intervals: ``{feature: (lo, hi)}`` for every non-degenerate
+            feature only, for display (``describe()`` renders these as
+            phrases).
+        certified: Always ``True`` in this release — every region returned
+            by ``Explainer.recourse_region``/``explain(..., region=True)`` is
+            a sound certificate; the field is reserved for a future relaxed
+            mode.
     """
 
     lo: FloatArray
@@ -72,7 +85,19 @@ class RecourseRegion:
     certified: bool  # always True in this release; the field is reserved
 
     def contains(self, x: FloatArray) -> bool:
-        """Whether ``x`` lies inside the region, coordinate by coordinate."""
+        """Whether ``x`` lies inside the region, coordinate by coordinate.
+
+        A degenerate coordinate (``lo == hi``, including NaN) requires ``x``
+        to match it exactly; every other coordinate requires
+        ``lo <= x[j] <= hi[j]``.
+
+        Args:
+            x: A feature vector, same order and length as the region.
+
+        Returns:
+            ``True`` iff every coordinate of ``x`` satisfies the region's
+            bound.
+        """
         for j in range(len(self.lo)):
             xj = float(x[j])
             if math.isnan(self.lo[j]):
@@ -90,6 +115,9 @@ class RecourseRegion:
         infinite, two-sided (``"in [lo, hi]"``) otherwise, and
         ``"unconstrained"`` when both endpoints are infinite; values
         formatted ``"{:.3g}"``.
+
+        Returns:
+            ``{feature: phrase}`` for every key of ``feature_intervals``.
         """
         out: dict[str, str] = {}
         for name, (lo, hi) in self.feature_intervals.items():

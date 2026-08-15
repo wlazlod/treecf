@@ -15,11 +15,17 @@ use crate::exact::domains::{
 use crate::exact::orderpairs::{achievable_bounds, boundary_candidates, intersect_cell};
 use crate::exact::propagation::{PropFrame, Propagation};
 use crate::exact::ValuePolicy;
+use crate::interrupt::{InterruptProbe, SearchOutcome};
 use crate::ir::Ensemble;
 
 /// The tolerance `check_matrix` allows a linear constraint; an order pair counts
 /// as broken exactly when the arbiter would reject it.
 const LINEAR_SLACK: f64 = 1e-9;
+
+/// How many expanded nodes between two interrupt polls. Asking is cheap but not
+/// free, and a search that gets nowhere near this many nodes finishes fast
+/// enough that nobody reaches for the keyboard.
+const SIGNAL_CHECK_INTERVAL: u64 = 1 << 18;
 
 /// The exact set of counters `solve_exact` reports — the seven keys of Python's
 /// `_stats`. `nodes_pruned_score` counts branches the ensemble can no longer
@@ -661,7 +667,13 @@ fn stats(
 /// `completed` false only means the search never settled the whole space.
 ///
 /// `Err` mirrors Python's `ConstraintValidationError` for a multi-feature Linear
-/// outside the canonical order-pair shape.
+/// outside the canonical order-pair shape — it stays validation-only, so a
+/// caller can keep telling a bad constraint apart from a stopped search.
+///
+/// `probe` is asked every `SIGNAL_CHECK_INTERVAL` expanded nodes whether to
+/// stop. Answering yes throws the search away, incumbent included, and returns
+/// `SearchOutcome::Interrupted`; answering no leaves every returned number
+/// exactly as it would be without a probe at all.
 #[allow(clippy::too_many_arguments)]
 pub fn solve_exact(
     ens: &Ensemble,
@@ -675,7 +687,8 @@ pub fn solve_exact(
     plausibility: Option<(&Ensemble, f64)>,
     params: &ExactParams,
     incumbent: Option<(f64, &[f64])>,
-) -> Result<ExactResult, String> {
+    probe: InterruptProbe<'_>,
+) -> Result<SearchOutcome<ExactResult>, String> {
     let start = Instant::now();
     let order_pairs = validate(cons)?;
     let (lo_t, hi_t) = interval;
@@ -685,13 +698,13 @@ pub fn solve_exact(
 
     // (a) The factual itself: nothing is ever cheaper than not moving at all.
     if accepts(ens, if_ens, min_total_path, cons, x, lo_t, hi_t, x) {
-        return Ok(ExactResult {
+        return Ok(SearchOutcome::Done(ExactResult {
             x_cf: Some(x.to_vec()),
             proof: "optimal",
             stats: stats(0, 0, 0, 0.0, gap, true, false),
             snapped: Vec::new(),
             distance: Some(0.0),
-        });
+        }));
     }
 
     let ensembles: Vec<&Ensemble> = match if_ens {
@@ -704,13 +717,13 @@ pub fn solve_exact(
     if order.iter().any(|&j| domains[j].is_empty()) {
         // Contradictory constraints left a feature with no legal value at all:
         // nothing to search, and nothing can be feasible.
-        return Ok(ExactResult {
+        return Ok(SearchOutcome::Done(ExactResult {
             x_cf: None,
             proof: "optimal",
             stats: stats(0, 0, 0, f64::INFINITY, gap, true, false),
             snapped: Vec::new(),
             distance: None,
-        });
+        }));
     }
     let h_suffix = h_suffix(&order, &domains);
 
@@ -891,6 +904,12 @@ pub fn solve_exact(
         {
             completed = false;
             break;
+        }
+        // Every node reaching this line is expanded below, so each count is
+        // asked about at most once and a search of fewer than
+        // SIGNAL_CHECK_INTERVAL nodes is never asked at all.
+        if nodes_expanded > 0 && nodes_expanded % SIGNAL_CHECK_INTERVAL == 0 && probe() {
+            return Ok(SearchOutcome::Interrupted);
         }
 
         nodes_expanded += 1;
@@ -1081,7 +1100,7 @@ pub fn solve_exact(
         }
     }
 
-    Ok(ExactResult {
+    Ok(SearchOutcome::Done(ExactResult {
         distance: incumbent_row.as_ref().map(|_| incumbent_cost),
         x_cf: incumbent_row,
         proof,
@@ -1095,7 +1114,7 @@ pub fn solve_exact(
             warm_start_used,
         ),
         snapped,
-    })
+    }))
 }
 
 #[cfg(test)]
@@ -1103,6 +1122,95 @@ mod tests {
     use super::*;
     use crate::constraints::{LinearC, LIN_LE, POLICY_SATISFIED};
     use crate::exact::test_support::*;
+
+    // -------------------------------------------------------- interrupt probe ---
+
+    /// A search that stays under the polling interval is never asked anything,
+    /// so a probe that would have said stop changes nothing: the answer is the
+    /// same bits the plain solve gives.
+    #[test]
+    fn a_short_search_is_never_asked_and_answers_the_same_bits() {
+        let ens = stumps(&[(0, 1.0, true, 0.0, 1.0), (1, 0.5, true, 0.0, 0.5)], 2);
+        let cons = cons_base(2);
+        let x = [0.0, 0.0];
+        let plain = solve(
+            &ens,
+            &x,
+            (1.0, 2.0),
+            &cons,
+            0.0,
+            &no_policies(2),
+            &ExactParams::default(),
+            None,
+        );
+        let mut polls = 0usize;
+        let outcome = solve_probed(
+            &ens,
+            &x,
+            (1.0, 2.0),
+            &cons,
+            0.0,
+            &no_policies(2),
+            &ExactParams::default(),
+            None,
+            &mut || {
+                polls += 1;
+                true // would stop the search — if it were ever asked
+            },
+        );
+        let SearchOutcome::Done(probed) = outcome else {
+            panic!("a search of a few nodes must not be interrupted")
+        };
+        assert_eq!(polls, 0);
+        assert!(probed.stats.nodes_expanded > 0);
+        assert_eq!(
+            bits_of(probed.x_cf.as_ref().unwrap()),
+            bits_of(plain.x_cf.as_ref().unwrap())
+        );
+        assert_eq!(
+            probed.distance.unwrap().to_bits(),
+            plain.distance.unwrap().to_bits()
+        );
+        assert_eq!(probed.proof, plain.proof);
+        assert_eq!(probed.stats, plain.stats);
+        assert_eq!(probed.snapped, plain.snapped);
+    }
+
+    /// Twenty levers, each worth one point, and a target halfway between two
+    /// whole numbers: no assignment can ever land in it, so no incumbent is
+    /// found, nothing is cut on cost, and the search runs well past the
+    /// polling interval. The warm start it was handed is a result it could
+    /// have returned — a probe that says stop drops that too and reports only
+    /// that it stopped.
+    #[test]
+    fn a_long_search_drops_even_its_warm_start_when_the_probe_says_stop() {
+        let specs: Vec<(i32, f64, bool, f64, f64)> =
+            (0..20).map(|j| (j, 1.0, true, 0.0, 1.0)).collect();
+        let ens = stumps(&specs, 20);
+        let cons = cons_base(20);
+        let x = vec![0.0; 20];
+        let params = ExactParams {
+            time_budget_s: 1e9, // the probe, not the clock, must end this one
+            ..ExactParams::default()
+        };
+        let mut polls = 0usize;
+        let outcome = solve_probed(
+            &ens,
+            &x,
+            (10.5, 10.5),
+            &cons,
+            0.0,
+            &no_policies(20),
+            &params,
+            Some((1e12, x.as_slice())), // too dear to prune anything with
+            &mut || {
+                polls += 1;
+                true
+            },
+        );
+        assert!(matches!(outcome, SearchOutcome::Interrupted));
+        assert_eq!(polls, 1);
+    }
 
     // ---------------------------------------------------- ensemble bounds ---
 
@@ -1760,7 +1868,7 @@ mod tests {
         let ens = stumps(&[(0, 1.0, true, 0.0, 1.0)], 2);
         let if_ens = stumps(&[(1, 0.5, true, 2.0, 5.0)], 2);
         let cons = cons_base(2);
-        let result = solve_exact(
+        let outcome = solve_exact(
             &ens,
             &[0.0, 0.0],
             (1.0, 2.0),
@@ -1772,8 +1880,12 @@ mod tests {
             Some((&if_ens, 4.0)),
             &ExactParams::default(),
             None,
+            &mut || false,
         )
         .unwrap();
+        let SearchOutcome::Done(result) = outcome else {
+            unreachable!("no-op probe never interrupts")
+        };
         assert_eq!(
             bits_of(result.x_cf.as_ref().unwrap()),
             vec![0x3ff0000000000000, 0x3fe0000000000000]

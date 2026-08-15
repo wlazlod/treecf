@@ -17,6 +17,7 @@ dist/
 .hypothesis/
 .coverage
 htmlcov/
+.claude/
 
 # Docs
 site/
@@ -26,15 +27,6 @@ site/
 .vscode/
 .DS_Store
 
-# Claude Code local settings and project-memory binding layer (runtime-only)
-.claude/settings.local.json
-.claude/project-memory/
-
-# Local-only working documents
-/CFE_SPEC.md
-/CLAUDE.md
-/TREECF_HEURISTIC_SPEC.md
-/RUST_MIGRATION_AUDIT.md
 rust/target/
 .cache/
 

@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import math
+import time
 import warnings
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 import numpy.typing as npt
@@ -59,7 +60,21 @@ def _validate_coalitions(
 
 @dataclass(frozen=True)
 class Grid:
-    """Value policy: snap to ``anchor + k * step``."""
+    """Value policy: snap a changed feature to ``anchor + k * step`` for integer ``k``.
+
+    Pass as a ``value_policy`` entry (``Explainer(..., value_policy={"tenor_months":
+    Grid(step=6.0)})``) to keep a feature on a fixed lattice (loan tenors in
+    6-month increments, prices in 5-cent ticks, and similar). The exact backend
+    treats the grid as a hard constraint on its own candidates; the genetic
+    backend snaps its winning row afterward, reverting the snap if it would break
+    feasibility — see
+    [Certification — value policies](concepts/certification.md#value-policies-under-certification).
+
+    Attributes:
+        step: Spacing between adjacent grid points. Must be positive.
+        anchor: Offset of the grid from zero; grid points are
+            ``anchor + k * step`` for integer ``k``. Defaults to ``0.0``.
+    """
 
     step: float
     anchor: float = 0.0
@@ -80,7 +95,40 @@ class Counterfactual:
     cheaper row exists, ``"optimal_within_gap"`` when ``gap > 0`` and it only
     proved none exists more than that relative fraction cheaper, and — more
     rarely — ``"heuristic"`` for a row it is not claiming is cheapest: see
-    ``Explainer.explain`` for when that happens.
+    ``Explainer.explain`` for when that happens. See
+    [Certification](concepts/certification.md) for the full proof taxonomy.
+
+    Attributes:
+        x_cf: The full counterfactual feature vector, same order and length as
+            the factual; unchanged features keep the factual's own value.
+        changes: ``{feature: (factual_value, counterfactual_value)}`` for every
+            feature that actually differs (including a transition to or from
+            ``NaN``); unchanged features are omitted.
+        distance: The weighted, normalized sum of per-feature changes
+            (``sum(weight * |delta| / sigma)``, with ``AllowMissing``'s
+            ``delta_miss``/``delta_from_miss`` pricing any NaN transition),
+            excluding the sparsity term. When ``sparsity_weight > 0`` the
+            search minimizes ``distance + sparsity_weight * n_changed``, so
+            ``distance`` alone does not reproduce the search's own ranking.
+        n_changed: ``len(changes)`` — the number of features actually changed.
+        score_raw: The model's raw score at ``x_cf`` (pre-link, i.e. margin for
+            a sigmoid-link model).
+        score_prob: ``sigmoid(score_raw)`` for a sigmoid-link model, otherwise
+            ``None``.
+        proof: The optimality claim this result makes; see above.
+        solver_stats: Backend-specific diagnostics. Populated by the exact
+            backend (``nodes_expanded``, ``nodes_pruned_score``,
+            ``nodes_pruned_cost``, ``lower_bound``, ``gap``, ``completed``,
+            ``warm_start_used``); empty or backend-specific for genetic/python.
+        snapped: ``{feature: bool}`` for every feature under a ``value_policy``
+            that also changed — ``True`` when the genetic backend's post-hoc
+            snap held, ``False`` when it was reverted (or never applied) to keep
+            the result feasible. Empty when no changed feature carries a policy,
+            or on the exact backend (policies are baked into its own search and
+            never post-hoc snapped).
+        region: The certified box around ``x_cf``, set only when the search ran
+            with ``region=True`` (``Explainer.explain``/``explain_batch``/
+            ``explain_coalitions``); ``None`` otherwise.
     """
 
     x_cf: FloatArray
@@ -105,7 +153,17 @@ class Infeasible:
     gave up an optimality certificate along the way — nothing is proven about
     whether a counterfactual exists at all. ``"certified"`` is exact-backend
     only: every assignment the searched grid allows was tried and none was
-    feasible, so ``reason`` names the node count behind that proof.
+    feasible, so ``reason`` names the node count behind that proof. See
+    [Certification](concepts/certification.md) for the full proof taxonomy.
+
+    Attributes:
+        reason: Human-readable explanation of why no counterfactual was
+            returned; names the node count behind a ``"certified"`` proof, or
+            describes the exhaustion/repair cause for ``"search_exhausted"``.
+        proof: The claim this non-result makes; see above.
+        solver_stats: Backend-specific diagnostics, populated the same way as
+            ``Counterfactual.solver_stats`` for the exact backend; empty for
+            genetic/python.
     """
 
     reason: str
@@ -147,12 +205,160 @@ def _resolve_exact_kwargs(
     return resolved_warm_start, resolved_node_budget, resolved_gap
 
 
+@dataclass(frozen=True)
+class _Degradation:
+    """One exact-backend result with ``stats["completed"] is False``, collected
+    instead of warned immediately when a caller aggregates over several solves
+    (``Target.bands``, ``explain_coalitions``, ``explain_batch``)."""
+
+    kind: str  # "exhausted" | "withdrawn"
+    message: str  # standalone warning body; the seed clause is applied separately
+    unseeded: bool  # seed clause applies (seed is None and warm_start_used)
+
+
+_SEED_CLAUSE = (
+    " Warm start was unseeded; rerunning may return a different heuristic result — "
+    "pass seed= for reproducibility."
+)
+
+
+def _gap_parenthetical(distance: float | None, lower_bound: float) -> str:
+    """`` (lower bound X, gap <= Y%)``, or ``""`` when there is no row, or the
+    lower bound is absent, non-positive, or non-finite."""
+    if distance is None or not math.isfinite(lower_bound) or lower_bound <= 0.0:
+        return ""
+    displayed_gap = (distance - lower_bound) / lower_bound
+    return f" (lower bound {lower_bound:.4g}, gap ≤ {displayed_gap:.1%})"
+
+
+def _exhausted_message(
+    nodes_expanded: int, has_row: bool, distance: float | None, lower_bound: float
+) -> str:
+    if has_row:
+        return (
+            f"exact search exhausted its budget after {nodes_expanded:,} nodes; the "
+            "result is the best found, not proven optimal"
+            f"{_gap_parenthetical(distance, lower_bound)}; raise node_budget/time_budget_s "
+            "or set gap= to accept a proven tolerance."
+        )
+    return (
+        f"exact search exhausted its budget after {nodes_expanded:,} nodes without "
+        "finding a feasible counterfactual; this is NOT a certified infeasibility — "
+        "raise budgets or use backend='genetic'."
+    )
+
+
+def _withdrawn_message(has_row: bool, distance: float | None, lower_bound: float) -> str:
+    if has_row:
+        return (
+            "exact search withdrew its optimality certificate after a conservative "
+            "constraint repair without exhausting its budget; the result is verified "
+            f"but not proven cheapest{_gap_parenthetical(distance, lower_bound)}."
+        )
+    return (
+        "exact search withdrew its optimality certificate after a conservative "
+        "constraint repair without exhausting its budget; no feasible counterfactual "
+        "was found, and this is NOT a certified infeasibility."
+    )
+
+
+def _degradation_for(
+    res: ExactResult, node_budget: int, time_budget_s: float, elapsed: float, seed: int | None
+) -> _Degradation:
+    """Classify one degraded exact-search result (``stats["completed"] is False``).
+
+    Elapsed time is measured around the whole solver call, including the
+    Python<->Rust marshaling overhead — that overhead only ever pushes
+    ``elapsed`` up, so it only ever biases the classification toward
+    "exhausted", never toward the unearned "conservative withdrawal" reading.
+    """
+    stats = res.stats
+    nodes_expanded = cast(int, stats["nodes_expanded"])
+    lower_bound = cast(float, stats["lower_bound"])
+    exhausted = nodes_expanded >= node_budget or elapsed >= time_budget_s
+    has_row = res.x_cf is not None
+    unseeded = seed is None and bool(stats["warm_start_used"])
+    if exhausted:
+        kind = "exhausted"
+        message = _exhausted_message(nodes_expanded, has_row, res.distance, lower_bound)
+    else:
+        kind = "withdrawn"
+        message = _withdrawn_message(has_row, res.distance, lower_bound)
+    return _Degradation(kind=kind, message=message, unseeded=unseeded)
+
+
+def _degraded_summary(
+    degraded: list[_Degradation], affected: int, total: int, unit: str
+) -> str | None:
+    """Message body for one aggregate degraded-result warning, or ``None`` when
+    nothing degraded. Counts stay broken down by kind so the aggregate never
+    claims exhaustion for a withdrawn result, or the reverse. The caller emits
+    the actual ``warnings.warn`` itself, so its own stacklevel stays accurate."""
+    if not degraded:
+        return None
+    counts: dict[str, int] = {}
+    for d in degraded:
+        counts[d.kind] = counts.get(d.kind, 0) + 1
+    summary = "; ".join(f"{kind}: {n} solve{'s' if n != 1 else ''}" for kind, n in counts.items())
+    unseeded = any(d.unseeded for d in degraded)
+    return (
+        f"exact search returned a degraded result in {affected}/{total} {unit} "
+        f"({summary}); see each result's own proof/solver_stats for which case applies."
+        + (_SEED_CLAUSE if unseeded else "")
+    )
+
+
 class Explainer:
     """Counterfactual explainer for a tree-ensemble model.
 
-    ``model`` may be a native model object, a dump file path/dict, or an
-    ``EnsembleIR``. ``background`` fits the distance normalizers;
-    alternatively pass ``normalizers`` explicitly (array or name->sigma dict).
+    Parses the model, compiles the constraints, and fits the distance
+    normalizers once at construction, so repeated ``explain``/``explain_batch``/
+    ``explain_coalitions`` calls reuse that work.
+
+    Args:
+        model: A native model object (XGBoost/LightGBM/CatBoost/sklearn
+            ensemble), a JSON dump file path or dict, or an already-parsed
+            ``EnsembleIR``. See [Models and the IR](concepts/models.md) for
+            which native types are supported.
+        background: Sample used to fit the per-feature distance normalizers
+            (``sigma``, one per feature). Required unless ``normalizers`` is
+            given instead; ignored when it is.
+        constraints: Constraint objects (``Freeze``, ``Range``, ``Monotone``,
+            ``Linear``, ``Implies``, ``OneHot``, ``AllowMissing``, or a string
+            parsed by ``constraint()``) compiled and validated immediately.
+            Defaults to no constraints. See [Constraints](concepts/constraints.md).
+        weights: Per-feature multiplier on distance cost, ``{feature: weight}``;
+            a feature not listed defaults to ``1.0``. Use to make some levers
+            relatively cheaper or more expensive than the normalized default.
+        normalizers: Per-feature distance scale ``sigma``, either an array
+            aligned to the model's feature order or a ``{feature: sigma}``
+            dict. Pass this instead of ``background`` to reuse known scales
+            (e.g. across several explainers on the same features).
+        value_policy: Per-feature snapping rule, ``{feature: policy}``, where
+            a policy is ``"raw"`` (no snapping; the default for a feature not
+            listed), ``"integer"`` (round to the nearest feasible integer), a
+            ``Grid(step, anchor=0.0)`` (snap to a fixed lattice), or a callable
+            ``float -> float``. The exact backend treats a policy as a hard
+            constraint on its candidates; the genetic backend snaps its
+            winning row afterward and reverts the snap if it would break
+            feasibility (``Counterfactual.snapped`` records which happened) —
+            see [Certification](concepts/certification.md#value-policies-under-certification).
+        plausibility: Optional hard isolation-forest bound keeping every
+            returned counterfactual inside the data manifold (see
+            ``Plausibility.isolation_forest``). Cannot be combined with
+            ``AllowMissing``, and ``explain``/``explain_batch``/
+            ``explain_coalitions`` reject a factual containing NaN once it is
+            set (isolation forests define no NaN routing) — see
+            [Plausibility](concepts/plausibility.md).
+
+    Raises:
+        TreecfError: If neither ``background`` nor ``normalizers`` is given, if
+            ``normalizers`` omits a feature or resolves to a non-positive
+            scale, if ``value_policy`` names an unknown feature or an
+            unrecognized string policy, or if ``plausibility`` is given
+            together with ``AllowMissing`` or a mismatched feature space.
+        ConstraintValidationError: If ``constraints`` contains a malformed or
+            self-contradictory constraint.
     """
 
     _rust_cache: dict[str, object]  # marshaled Rust objects, filled on first solve
@@ -208,6 +414,21 @@ class Explainer:
     ) -> Counterfactual | Infeasible | dict[str, object]:
         """Search for a counterfactual (or one per band for ``Target.bands``).
 
+        ``x`` is the factual instance (one row, aligned to the model's feature
+        order); ``target`` bounds the model output the counterfactual must
+        reach. ``time_budget_s`` caps wall time per solve (per band, when
+        ``target`` is a ``Target.bands`` ladder); ``math.inf`` is accepted
+        and removes the time cut, letting an exact search run until it
+        proves its answer (Ctrl-C still aborts promptly). ``sparsity_weight`` makes
+        the search minimize ``distance + sparsity_weight * n_changed``
+        instead of plain ``distance``, trading a cheaper plan that touches
+        more features against a sparser one that costs more per feature; the
+        returned ``Counterfactual.distance`` itself always excludes the
+        sparsity term. ``0.0`` (the default) does not penalize sparsity at
+        all. ``seed`` fixes the genetic search's (and, on the
+        exact backend, the warm start's) randomness for reproducibility;
+        ``None`` draws a fresh one each call.
+
         ``backend="genetic"`` runs the bundled Rust engine (default);
         ``backend="python"`` runs the reference numpy implementation of the
         same algorithm; ``backend="exact"`` runs a branch-and-bound search
@@ -235,17 +456,44 @@ class Explainer:
         repair of some constraint shapes can withdraw the optimality
         certificate honestly rather than claim a cheapest row it did not
         prove — the row itself is still real and verified, only the
-        "cheapest possible" claim is dropped.
+        "cheapest possible" claim is dropped. Whenever the exact search
+        returns any result with ``solver_stats["completed"] is False`` — for
+        that reason or because the budget genuinely ran out — a
+        ``TreecfWarning`` names which of the two happened, never the
+        other one. ``Target.bands``, ``explain_coalitions``, and
+        ``explain_batch`` collapse this into one aggregate warning per call
+        instead of one per solve.
 
-        If the factual itself violates a constraint, a :class:`TreecfWarning`
+        If the factual itself violates a constraint, a ``TreecfWarning``
         is emitted: the returned plan will include changes made solely to
         satisfy the constraint set.
 
         ``region=True`` widens every successful ``Counterfactual`` into a
-        certified :class:`~treecf.regions.RecourseRegion` (``cf.region``) —
+        certified ``RecourseRegion`` (``cf.region``) —
         works with any backend, genetic included. Costs one oracle call per
         attempted per-feature, per-direction expansion; see
         ``Explainer.recourse_region``.
+
+        Returns:
+            A single ``Counterfactual`` or ``Infeasible`` when ``target`` is a
+            plain interval (``Target.raw``/``probability``/``calibrated``); a
+            ``{band_name: Counterfactual | Infeasible}`` dict, one entry per
+            band in solved order, when ``target`` is a ``Target.bands``
+            ladder. ``Infeasible`` means the search found no verified
+            counterfactual — see ``Infeasible.proof`` for whether that is a
+            certified impossibility or just an unsuccessful search.
+
+        Raises:
+            ValueError: If ``warm_start``, ``node_budget``, or ``gap`` is
+                given a non-default value together with a ``backend`` other
+                than ``"exact"``.
+            TreecfError: If ``backend`` is not one of ``"genetic"``,
+                ``"python"``, or ``"exact"``, or if ``plausibility`` is
+                configured on this explainer and ``x`` contains NaN.
+            ConstraintValidationError: If ``backend="exact"`` and this
+                explainer's constraints include an unsupported multi-feature
+                ``Linear`` shape, or a callable ``value_policy``; the message
+                names ``backend="genetic"`` as the fallback.
         """
         return self._explain(
             x, target, backend, time_budget_s, sparsity_weight, seed, warn_factual=True,
@@ -266,9 +514,17 @@ class Explainer:
         node_budget: int | None = None,
         gap: float | None = None,
         region: bool = False,
+        degraded: list[_Degradation] | None = None,
+        incumbent: tuple[float, FloatArray] | None = None,
     ) -> Counterfactual | Infeasible | dict[str, object]:
         """``explain`` body; ``explain_batch`` calls it with ``warn_factual=False``
-        after emitting its own aggregate warning."""
+        after emitting its own aggregate warning. ``degraded`` collects exact-backend
+        degradations for an external caller's own aggregate instead of warning
+        immediately; ignored (a fresh local collector is used instead) when
+        ``target.bands_spec`` is set, since batch/coalitions never pass bands through.
+        ``incumbent`` forwards to ``_explain_exact`` for the single-interval case only
+        (``target.bands_spec`` rows never receive one — batch, the only caller that
+        passes one, already rejects bands)."""
         x = np.asarray(x, dtype=np.float64)
         if warn_factual:
             violations = self.compiled.factual_violations(x)
@@ -291,11 +547,14 @@ class Explainer:
 
         if target.bands_spec is not None:
             results: dict[str, object] = {}
-            for name, interval in target.band_intervals(self.ir.link).items():
+            band_degraded: list[_Degradation] = []
+            intervals = target.band_intervals(self.ir.link)
+            for name, interval in intervals.items():
                 outcome = (
                     self._explain_exact(
                         x, interval, time_budget_s, resolved_warm_start,
                         resolved_node_budget, resolved_gap, sparsity_weight, seed,
+                        degraded=band_degraded,
                     )
                     if backend == "exact"
                     else self._explain_genetic(
@@ -305,12 +564,18 @@ class Explainer:
                 if region and isinstance(outcome, Counterfactual):
                     outcome = replace(outcome, region=self._region_for(x, outcome.x_cf, interval))
                 results[name] = outcome
+            message = _degraded_summary(band_degraded, len(band_degraded), len(intervals), "bands")
+            if message is not None:
+                warnings.warn(
+                    message, TreecfWarning, stacklevel=3  # _explain <- explain <- user code
+                )
             return results
         interval = target.raw_interval(self.ir.link)
         result = (
             self._explain_exact(
                 x, interval, time_budget_s, resolved_warm_start,
                 resolved_node_budget, resolved_gap, sparsity_weight, seed,
+                incumbent=incumbent, degraded=degraded,
             )
             if backend == "exact"
             else self._explain_genetic(
@@ -338,16 +603,24 @@ class Explainer:
         node_budget: int | None = None,
         gap: float | None = None,
         region: bool = False,
+        allow_exact_batch: bool = False,
     ) -> Any:
         """Mass-produce counterfactuals for a dataset; see ``treecf.batch``.
 
+        ``X`` is the factual dataset (one row per instance, aligned to the
+        model's feature order); ``ids`` labels each row (defaults to its
+        integer index) and must have one entry per row of ``X``.
         ``n_per_example`` alternatives per row via ``diversity="seeds"`` (distinct
         change-sets from different seeds, best-effort) or ``"lever-blocking"``
         (freeze each plan's biggest lever; also records essential levers).
         ``diversity="coalitions"`` instead produces one plan per named feature
         group in ``coalitions`` per row (``n_per_example`` unused; see
-        ``explain_coalitions``). The returned ``BatchResult`` supports
-        save/load/for_id/to_frame.
+        ``explain_coalitions`` for ``coalitions``/``include_full`` semantics,
+        which are only valid in this mode). The returned ``BatchResult`` supports
+        save/load/for_id/to_frame. ``time_budget_s``, ``sparsity_weight``, and
+        ``seed`` carry the same meaning as in ``Explainer.explain``, applied
+        per solve (``seed`` is combined with each row's index to derive a
+        distinct per-row seed).
 
         Solves run in parallel inside the Rust engine; ``time_budget_s`` is
         per solve, so a solve that hits its wall-clock budget while sharing
@@ -357,11 +630,44 @@ class Explainer:
         ``backend="exact"`` has no vectorized population to parallelize, so
         this loops the single-instance exact solve per row (and per plan, for
         lever-blocking) sequentially — expect roughly linear-in-rows wall
-        time rather than the Rust engine's parallel wave scheduling.
-        ``warm_start``/``node_budget``/``gap`` thread through to every one of
-        those solves; see ``Explainer.explain``. ``region=True`` attaches a
-        certified ``RecourseRegion`` (``BatchRecord.region``) to every
-        feasible record, at the same one-oracle-call-per-expansion cost.
+        time rather than the Rust engine's parallel wave scheduling, and each
+        row still gets the full, undiminished ``time_budget_s``. Because that
+        wall time is easy to underestimate, ``backend="exact"`` here is
+        opt-in: without ``allow_exact_batch=True`` this raises ``ValueError``
+        naming an estimate (rows × plans × ``time_budget_s``, hours-formatted)
+        instead of silently running -- a floor, not a ceiling, since
+        ``diversity="seeds"`` can retry each plan up to 3x on a seed
+        collision; passing it through with any other backend also raises
+        ``ValueError``. Opting in additionally
+        replaces ``warm_start``'s N sequential per-row (or, in seeds mode,
+        per-attempt) genetic warm passes with a single vectorized one across
+        every row — see ``treecf.batch.explain_batch`` for exactly which
+        modes it covers and which keep 0.2.0's per-solve behavior.
+        ``node_budget``/``gap`` thread through to every solve unchanged; see
+        ``Explainer.explain``. A ``KeyboardInterrupt`` during any batch solve
+        discards whatever the batch has not yet finished — there is no
+        partial ``BatchResult``. ``region=True`` attaches a certified
+        ``RecourseRegion`` (``BatchRecord.region``) to every feasible record,
+        at the same one-oracle-call-per-expansion cost.
+
+        Returns:
+            A ``BatchResult`` holding one ``BatchRecord`` per (row, plan) pair
+            — infeasible rows/plans get a record with ``feasible=False`` and
+            no ``x_cf`` rather than being omitted.
+
+        Raises:
+            TreecfError: If ``target`` is a ``Target.bands`` ladder, if
+                ``diversity`` is not ``"seeds"``, ``"lever-blocking"``, or
+                ``"coalitions"``, if ``coalitions``/``include_full`` is given
+                outside ``diversity="coalitions"`` (or omitted inside it), or
+                if ``ids`` does not have one entry per row of ``X``.
+            ValueError: If ``warm_start``, ``node_budget``, or ``gap`` is
+                given a non-default value together with a ``backend`` other
+                than ``"exact"``; if ``backend="exact"`` is requested without
+                ``allow_exact_batch=True`` (message names the wall time
+                estimate, a floor rather than a ceiling); or if
+                ``allow_exact_batch=True`` is passed with a ``backend`` other
+                than ``"exact"``.
         """
         from treecf.batch import explain_batch
 
@@ -371,6 +677,7 @@ class Explainer:
             sparsity_weight=sparsity_weight, seed=seed,
             coalitions=coalitions, include_full=include_full,
             warm_start=warm_start, node_budget=node_budget, gap=gap, region=region,
+            allow_exact_batch=allow_exact_batch,
         )
 
     def explain_coalitions(
@@ -390,16 +697,36 @@ class Explainer:
     ) -> dict[str, Counterfactual | Infeasible]:
         """One counterfactual per named feature coalition (opt-in mode).
 
-        Each coalition is solved with every feature *outside* it frozen, so a
-        plan only ever asks for changes within one group — grouped recourse
-        instead of one plan that mixes unrelated levers. Coalitions may
-        overlap; features in no coalition are never modified; an
-        ``Infeasible`` for a coalition means that group alone cannot reach
+        ``x``/``target``/``backend``/``time_budget_s``/``sparsity_weight``/
+        ``seed`` carry the same meaning as in ``Explainer.explain``, applied
+        once per coalition. ``coalitions`` maps a group name to the features
+        it may change; each coalition is solved with every feature *outside*
+        it frozen, so a plan only ever asks for changes within one group —
+        grouped recourse instead of one plan that mixes unrelated levers.
+        Coalitions may overlap; features in no coalition are never modified;
+        an ``Infeasible`` for a coalition means that group alone cannot reach
         the target. ``include_full=True`` prepends an unrestricted baseline
         under the reserved key ``"(all levers)"``. One solve per coalition
         (milliseconds each); this mode is optional and never the default.
-        ``warm_start``/``node_budget``/``gap`` thread through to every
-        coalition's solve; see ``Explainer.explain``.
+        ``warm_start``/``node_budget``/``gap``/``region`` thread through to every
+        coalition's solve; see ``Explainer.explain``. A degraded exact result
+        (``solver_stats["completed"] is False``) in any coalition's solve is
+        collapsed into one aggregate ``TreecfWarning`` for the whole call,
+        rather than one per coalition.
+
+        Returns:
+            ``{coalition_name: Counterfactual | Infeasible}``, one entry per
+            key of ``coalitions`` plus ``"(all levers)"`` when
+            ``include_full=True``, in that insertion order.
+
+        Raises:
+            TreecfError: If ``target`` is a ``Target.bands`` ladder, if
+                ``coalitions`` is empty, names a coalition with no members, or
+                references an unknown feature, or if ``include_full=True`` and
+                a coalition is named ``"(all levers)"`` (the reserved key).
+            ValueError: If ``warm_start``, ``node_budget``, or ``gap`` is
+                given a non-default value together with a ``backend`` other
+                than ``"exact"``.
         """
         if target.bands_spec is not None:
             raise TreecfError(
@@ -407,16 +734,22 @@ class Explainer:
             )
         normalized = _validate_coalitions(coalitions, self.ir.feature_names, include_full)
         results: dict[str, Counterfactual | Infeasible] = {}
+        degraded: list[_Degradation] = []
         if include_full:
             results[_ALL_LEVERS] = self._explain_one(
                 x, target, backend, time_budget_s, sparsity_weight, seed,
                 warm_start=warm_start, node_budget=node_budget, gap=gap, region=region,
+                degraded=degraded,
             )
         for name, clone in self._coalition_explainers(normalized).items():
             results[name] = clone._explain_one(
                 x, target, backend, time_budget_s, sparsity_weight, seed,
                 warm_start=warm_start, node_budget=node_budget, gap=gap, region=region,
+                degraded=degraded,
             )
+        message = _degraded_summary(degraded, len(degraded), len(results), "coalitions")
+        if message is not None:
+            warnings.warn(message, TreecfWarning, stacklevel=2)  # explain_coalitions <- user code
         return results
 
     def _explain_one(
@@ -432,12 +765,15 @@ class Explainer:
         node_budget: int | None = None,
         gap: float | None = None,
         region: bool = False,
+        degraded: list[_Degradation] | None = None,
+        incumbent: tuple[float, FloatArray] | None = None,
     ) -> Counterfactual | Infeasible:
         """`explain` for a single-interval target, with the bands arm ruled out."""
         result = self._explain(
             x, target, backend, time_budget_s, sparsity_weight, seed,
             warn_factual=warn_factual,
             warm_start=warm_start, node_budget=node_budget, gap=gap, region=region,
+            degraded=degraded, incumbent=incumbent,
         )
         assert not isinstance(result, dict)  # bands are rejected by the callers
         return result
@@ -571,6 +907,8 @@ class Explainer:
         gap: float,
         sparsity_weight: float,
         seed: int | None,
+        incumbent: tuple[float, FloatArray] | None = None,
+        degraded: list[_Degradation] | None = None,
     ) -> Counterfactual | Infeasible:
         """Exact-backend counterfactual for one target interval.
 
@@ -581,6 +919,13 @@ class Explainer:
         backend's own objective and handed to ``solve_exact`` as an
         incumbent — the exact search still runs with the full, undiminished
         ``time_budget_s`` afterwards.
+
+        ``incumbent``, when given, is used as that starting incumbent
+        directly and this method's own internal warm pass never runs (the
+        pass only runs when ``incumbent is None and warm_start``) — used by
+        ``explain_batch``'s opt-in exact path, which computes one incumbent
+        per row in a single vectorized genetic pass instead of every row (or,
+        in seeds mode, every attempt) running its own.
 
         The search itself dispatches rust-first: when the `_treecf_core`
         extension is importable, ``exact_rust.solve_exact_rust`` runs instead
@@ -595,12 +940,16 @@ class Explainer:
         validation (an unsupported multi-feature ``Linear`` shape, or a
         callable ``value_policy``) propagates unchanged; it already names
         ``backend="genetic"`` as the fallback.
+
+        When the returned ``stats["completed"] is False``, ``degraded`` (when
+        given) collects a ``_Degradation`` instead of warning here
+        directly, for an external caller's own aggregate warning; ``None``
+        (the default) warns immediately.
         """
         from treecf.backends._exact_domains import _cost_of_row
         from treecf.backends.exact_rust import _rust_available, solve_exact_rust
 
-        incumbent: tuple[float, FloatArray] | None = None
-        if warm_start:
+        if incumbent is None and warm_start:
             warm_budget = min(time_budget_s * 0.25, 2.0)
             warm = self._explain_genetic(
                 x, interval, warm_budget, sparsity_weight, seed, rust=True
@@ -612,6 +961,12 @@ class Explainer:
                 )
                 incumbent = (cost, warm.x_cf)
 
+        # Wraps only the solver call: any Python<->Rust marshaling overhead this
+        # measurement picks up can only push `elapsed` up, which only ever
+        # biases the exhaustion classifier below toward "exhausted" -- the
+        # honest direction, never toward the stronger "conservative
+        # withdrawal" reading it has not earned.
+        start = time.monotonic()
         if _rust_available():
             res = solve_exact_rust(
                 self.ir,
@@ -647,6 +1002,19 @@ class Explainer:
                 time_budget_s=time_budget_s,
                 incumbent=incumbent,
             )
+        elapsed = time.monotonic() - start
+
+        if res.stats["completed"] is False:
+            degradation = _degradation_for(res, node_budget, time_budget_s, elapsed, seed)
+            if degraded is None:
+                warnings.warn(
+                    degradation.message + (_SEED_CLAUSE if degradation.unseeded else ""),
+                    TreecfWarning,
+                    stacklevel=4,  # _explain_exact <- _explain <- explain/_explain_one <- caller
+                )
+            else:
+                degraded.append(degradation)
+
         if res.x_cf is None:
             # Certification is read from stats["completed"], never from
             # res.proof: proof carries no meaning on an infeasible result
@@ -832,15 +1200,28 @@ class Explainer:
     ) -> RecourseRegion:
         """Certify a per-feature box around an already-verified counterfactual.
 
-        ``x_cf`` must independently pass the same float-space re-check
+        ``x`` is the original factual and ``x_cf`` the counterfactual to widen
+        (typically ``Counterfactual.x_cf`` from a prior ``explain`` call);
+        ``target`` is the single interval ``x_cf`` was solved against. ``x_cf``
+        must independently pass the same float-space re-check
         ``explain`` runs on its own results; a row that fails it raises
         ``TreecfError`` naming the reason, since there is nothing sound to
         widen. Works for a counterfactual from any backend. Costs one oracle
         call — a full interval-tree walk of every ensemble tree — per
         attempted per-feature, per-direction expansion; see
-        ``treecf.regions.RecourseRegion``. The returned region is certified
+        ``RecourseRegion``. The returned region is certified
         but neither maximal nor monotone in ``target``: a strictly narrower
-        target can still grow a strictly wider region on some feature.
+        target can still grow a strictly wider region on some feature. See
+        [Certification](concepts/certification.md#regions-certified-not-maximal-not-monotone).
+
+        Returns:
+            The certified ``RecourseRegion`` around ``x_cf``.
+
+        Raises:
+            TreecfError: If ``target`` is a ``Target.bands`` ladder (pass the
+                single band's own interval instead), or if ``x_cf`` fails the
+                float-space re-check against ``x``/``target`` — the message
+                names the specific check that failed.
         """
         x = np.asarray(x, dtype=np.float64)
         x_cf = np.asarray(x_cf, dtype=np.float64)

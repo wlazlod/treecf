@@ -26,6 +26,45 @@ _EVIDENCE_ROWS = 5
 
 @dataclass(frozen=True)
 class SuggestedConstraint:
+    """One candidate invariant mined from a background sample, for human review.
+
+    ``suggest_constraints`` never applies a suggestion itself; the workflow is
+    to inspect ``as_code()``/``rationale``/``evidence``, decide which
+    suggestions are real domain rules, and pass their ``constraint`` objects
+    to ``Explainer(..., constraints=[...])`` explicitly. See
+    [Constraints — mining candidates from
+    data](concepts/constraints.md#mining-candidates-from-data).
+
+    Attributes:
+        constraint: The compiled constraint object this suggestion proposes,
+            or ``None`` for an advisory ``kind`` (``"missing_link"``,
+            ``"integer"``, ``"range"``) that has no direct constraint-object
+            form — read ``rationale`` for what to do about it instead.
+        kind: ``"order"`` (``a <= b`` on every co-present row), ``"equality"``
+            (``a == b``, usually a redundant feature), ``"implication"``
+            (``a=1 => b=1`` on binary features), ``"onehot"`` (mutually
+            exclusive binary group), ``"missing_link"`` (``miss(a) => miss(b)``
+            or ``<=>``), ``"integer"`` (integer-valued column, a
+            ``value_policy`` candidate), or ``"range"`` (observed 1–99th
+            percentile band, only when ``include_ranges=True``).
+        support: Fraction of checked rows the invariant held on, in
+            ``[0, 1]``; ``1.0`` for every kind except ``"order"``, which can
+            be suggested down to ``min_support``.
+        n_rows_checked: Number of rows the check was evaluated over; what
+            counts as checkable depends on ``kind`` — co-present rows for
+            ``"order"``/``"equality"``, rows where the antecedent holds and
+            the consequent feature is present for ``"implication"``, rows
+            where ``a`` is missing for ``"missing_link"``, present rows for
+            ``"integer"``/``"range"``.
+        n_violations: Number of those rows that violated the invariant;
+            ``0`` for every kind except ``"order"``.
+        evidence: Up to 5 violating rows, ``{"row": index, "values": (a, b)}``
+            — populated for ``"order"`` suggestions only.
+        rationale: Human-readable justification: shared name tokens for
+            ``"order"``, or the advisory text for kinds with no
+            ``constraint``.
+    """
+
     constraint: Constraint | None  # None for advisory kinds (missing_link, integer)
     kind: str  # "order" | "equality" | "implication" | "onehot" | "missing_link" | "integer"
     support: float
@@ -35,6 +74,13 @@ class SuggestedConstraint:
     rationale: str = ""
 
     def as_code(self) -> str:
+        """This suggestion rendered as a copy-pasteable Python snippet.
+
+        Returns:
+            A ``constraint(...)``/``Implies(...)``/``OneHot(...)`` call (or,
+            for kinds with no direct constraint form, a ``#``-commented
+            description) followed by a ``# support=..., n=...`` trailer.
+        """
         tail = f"  # support={self.support:.4f}, n={self.n_rows_checked}"
         if self.kind == "order" and isinstance(self.constraint, Linear):
             coeffs = self.constraint.coefficients
@@ -58,6 +104,26 @@ class SuggestedConstraint:
 
 @dataclass(frozen=True)
 class DataQualityFinding:
+    """A near-invariant that fell short of ``min_support`` — likely an ETL defect.
+
+    Reported separately from ``SuggestedConstraint`` because support in
+    ``[report_threshold, min_support)`` usually means a rule that should be
+    universal is being violated by a small number of dirty rows, not that the
+    rule is genuinely conditional — worth fixing upstream rather than
+    encoding the exception as a constraint.
+
+    Attributes:
+        kind: Always ``"near_invariant"`` in this release.
+        description: Human-readable summary, e.g. ``"a <= b holds on 99.95%
+            of rows — likely an ETL defect"``.
+        support: Fraction of checked rows the near-invariant held on, in
+            ``[report_threshold, min_support)``.
+        n_rows_checked: Number of rows where both referenced features were
+            present.
+        n_violations: Number of those rows that violated the near-invariant.
+        evidence: Up to 5 violating rows, ``{"row": index, "values": (a, b)}``.
+    """
+
     kind: str  # "near_invariant"
     description: str
     support: float
@@ -68,6 +134,19 @@ class DataQualityFinding:
 
 @dataclass(frozen=True)
 class SuggestionSet:
+    """Result of ``suggest_constraints``: ranked suggestions plus data-quality findings.
+
+    Indexable and iterable directly over ``suggestions`` (``for s in
+    result``, ``result[:20]``, ``len(result)``); ``findings`` is a separate
+    field, not part of that iteration.
+
+    Attributes:
+        suggestions: Candidate constraints, ranked by support then rationale
+            strength, trimmed to ``top_k``.
+        findings: Near-invariants below ``min_support`` but at or above
+            ``report_threshold`` — not ranked or trimmed.
+    """
+
     suggestions: tuple[SuggestedConstraint, ...]
     findings: tuple[DataQualityFinding, ...]
 
@@ -91,6 +170,44 @@ def suggest_constraints(
     report_threshold: float = 0.999,
     include_ranges: bool = False,
 ) -> SuggestionSet:
+    """Mine candidate invariants from a background sample, for human review.
+
+    Scans ``X`` for pairwise orders and equalities, binary implications
+    (``a=1 => b=1``), one-hot groups, missingness links (``miss(a) =>
+    miss(b)``), and integer-valuedness; optionally also observed 1st/99th
+    percentile ranges. Mined constraints are sample invariants, not domain
+    truths — ``min_support=1.0`` on a finite sample can be coincidence — so
+    nothing here is ever auto-applied; inspect ``result[i].as_code()`` and
+    pass the ones you accept to ``Explainer(..., constraints=[...])``
+    yourself. See
+    [Constraints — mining candidates from
+    data](concepts/constraints.md#mining-candidates-from-data).
+
+    Args:
+        X: Background sample, one row per instance, aligned to
+            ``feature_names`` (or the model's own feature order, if that is
+            how ``feature_names`` was derived).
+        feature_names: Column names for ``X``; defaults to ``["f0", "f1",
+            ...]`` when omitted.
+        min_support: Minimum fraction of co-present rows a pairwise order
+            must hold on to be suggested (``"order"`` kind only; every other
+            kind requires exact ``1.0`` support). Defaults to ``1.0`` (only
+            invariants with zero observed violations).
+        top_k: Maximum number of suggestions to return, after ranking by
+            support and rationale strength; findings are not subject to this
+            limit.
+        report_threshold: Minimum support for a near-invariant (one below
+            ``min_support``) to be reported as a ``DataQualityFinding``
+            instead of silently dropped.
+        include_ranges: When ``True``, also emit one advisory ``"range"``
+            suggestion per feature with its observed 1st/99th percentile band
+            (padded by 10%); these carry ``constraint=None``.
+
+    Returns:
+        A ``SuggestionSet`` with ``suggestions`` (candidate constraints,
+        ranked and trimmed to ``top_k``) and ``findings`` (near-invariants
+        that fell short of ``min_support``).
+    """
     X = np.asarray(X, dtype=np.float64)
     n, p = X.shape
     names = list(feature_names) if feature_names is not None else [f"f{i}" for i in range(p)]

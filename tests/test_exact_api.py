@@ -12,6 +12,7 @@ from treecf import (
     Grid,
     Infeasible,
     Target,
+    TreecfWarning,
     constraint,
 )
 from treecf.ir.model import EnsembleIR, Link, Node, SplitOp, Tree
@@ -98,10 +99,11 @@ class TestWarmStart:
         genetic = exp.explain(X0, target, backend="genetic", seed=0)
         assert isinstance(genetic, Counterfactual)
 
-        exact = exp.explain(
-            X0, target, backend="exact", seed=0,
-            warm_start=True, node_budget=1, time_budget_s=5.0,
-        )
+        with pytest.warns(TreecfWarning, match="exhausted"):
+            exact = exp.explain(
+                X0, target, backend="exact", seed=0,
+                warm_start=True, node_budget=1, time_budget_s=5.0,
+            )
         assert isinstance(exact, Counterfactual)
         assert np.array_equal(exact.x_cf, genetic.x_cf, equal_nan=True)
         assert exact.proof == "heuristic"
@@ -110,10 +112,11 @@ class TestWarmStart:
 
     def test_warm_start_false_skips_the_genetic_pass(self, exp: Explainer) -> None:
         target = Target.raw(op=">=", value=1.5)
-        result = exp.explain(
-            X0, target, backend="exact", seed=0,
-            warm_start=False, node_budget=1, time_budget_s=5.0,
-        )
+        with pytest.warns(TreecfWarning, match="exhausted"):
+            result = exp.explain(
+                X0, target, backend="exact", seed=0,
+                warm_start=False, node_budget=1, time_budget_s=5.0,
+            )
         assert isinstance(result, Infeasible)
         assert result.solver_stats["warm_start_used"] is False
 
@@ -202,7 +205,7 @@ def test_explain_coalitions_backend_exact(exp: Explainer) -> None:
 def test_explain_batch_exact_matches_per_row_explain(exp: Explainer) -> None:
     target = Target.raw(op=">=", value=0.9)  # unique cheapest solution: "a" alone
     X = np.zeros((2, 3))
-    batch = exp.explain_batch(X, target, backend="exact", seed=0)
+    batch = exp.explain_batch(X, target, backend="exact", seed=0, allow_exact_batch=True)
     assert len(batch) == 2
     for i, row in enumerate(X):
         single = exp.explain(row, target, backend="exact", seed=0)

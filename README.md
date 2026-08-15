@@ -59,7 +59,7 @@ exp = Explainer(
 )
 res = exp.explain(x, target=Target.probability(range=(0.0, 0.04)), seed=0)
 
-proved = exp.explain(x, target=t, backend="exact")       # proof="optimal" or a certified "no"
+proved = exp.explain(x, target=t, backend="exact")      # proof="optimal", a certified "no", or a warned degrade
 boxed = exp.explain(x, target=t, region=True)            # res.region.describe() -> "utilization <= 0.4"
 ```
 

@@ -24,7 +24,7 @@ from treecf._json import decode_floats, encode_floats
 from treecf.ir.evaluate import raw_score_batch_prepared
 
 if TYPE_CHECKING:
-    from treecf.api import Counterfactual, Explainer, Infeasible
+    from treecf.api import Counterfactual, Explainer, Infeasible, _Degradation
     from treecf.backends.genetic import GeneticResult
     from treecf.regions import RecourseRegion
     from treecf.targets import Target
@@ -36,7 +36,55 @@ _SEED_ATTEMPT_FACTOR = 3  # try up to 3k seeds per row when hunting k distinct p
 
 @dataclass(frozen=True)
 class BatchRecord:
-    """One counterfactual (or the infeasibility marker) for one dataset row."""
+    """One counterfactual (or the infeasibility marker) for one dataset row.
+
+    Fields mirror ``Counterfactual`` (``x_cf``, ``changes``, ``distance``,
+    ``n_changed``, ``score_raw``, ``score_prob``, ``region``), plus batch
+    bookkeeping: ``id`` and ``k`` place the record in the dataset, and
+    ``feasible`` distinguishes a real plan from the infeasibility marker.
+
+    Attributes:
+        id: The row identifier this record belongs to (an element of
+            ``explain_batch``'s ``ids``, or the row's integer index when
+            ``ids`` was not given).
+        k: Rank of this plan among the row's feasible alternatives,
+            ``0``-based, ascending by distance (``0`` is always the
+            cheapest). For a wholly infeasible row (``diversity="seeds"``/
+            ``"lever-blocking"``), the single infeasibility marker gets
+            ``k=0``; for ``diversity="coalitions"``, an infeasible
+            coalition's marker instead continues the same row's ascending
+            sequence after its feasible plans, so each coalition still gets
+            a distinct ``k``.
+        feasible: ``False`` marks the infeasibility marker for a row (or
+            coalition) that produced no plan; ``x_cf``/``changes``/
+            ``distance``/``n_changed``/``score_raw``/``score_prob`` are then
+            ``None``/``{}`` rather than real values.
+        x_cf: The full counterfactual feature vector, or ``None`` when
+            ``feasible`` is ``False``.
+        changes: ``{feature: (factual_value, counterfactual_value)}`` for
+            every feature that differs; ``{}`` when ``feasible`` is ``False``.
+        distance: The weighted, normalized sum of per-feature changes,
+            excluding the sparsity term (see ``Counterfactual.distance``), or
+            ``None`` when ``feasible`` is ``False``.
+        n_changed: ``len(changes)``, or ``None`` when ``feasible`` is
+            ``False``.
+        score_raw: The model's raw score at ``x_cf``, or ``None`` when
+            ``feasible`` is ``False``.
+        score_prob: ``sigmoid(score_raw)`` for a sigmoid-link model, ``None``
+            for an identity-link model or when ``feasible`` is ``False``.
+        seed: The seed that produced this plan, set only for
+            ``diversity="seeds"``; ``None`` otherwise.
+        blocked_lever: The feature frozen to produce this plan, set only for
+            ``diversity="lever-blocking"`` alternatives (not the primary
+            plan, ``k=0``); ``None`` otherwise.
+        coalition: The coalition name this plan belongs to, set only for
+            ``diversity="coalitions"`` (including the reserved
+            ``"(all levers)"`` baseline when ``include_full=True``); ``None``
+            otherwise.
+        region: The certified box around ``x_cf``, set only when
+            ``explain_batch`` ran with ``region=True`` and ``feasible`` is
+            ``True``; ``None`` otherwise.
+    """
 
     id: object
     k: int
@@ -55,7 +103,26 @@ class BatchRecord:
 
 @dataclass(frozen=True)
 class BatchResult:
-    """Counterfactuals for a whole dataset, addressable by row id."""
+    """Counterfactuals for a whole dataset, addressable by row id.
+
+    Returned by ``Explainer.explain_batch``; supports ``len()``, iteration
+    over its ``records``, id lookup (``for_id``), a JSON round trip
+    (``save``/``load``), and a pandas view (``to_frame``).
+
+    Attributes:
+        feature_names: The model's feature names, in the order ``x_cf``
+            arrays are indexed by.
+        diversity: The ``diversity`` mode ``explain_batch`` ran with
+            (``"seeds"``, ``"lever-blocking"``, or ``"coalitions"``).
+        records: Every ``BatchRecord``, feasible and infeasible, across every
+            row and alternative/coalition; order matches the originating
+            ``explain_batch`` call.
+        essential_levers: ``{row_id: [feature, ...]}`` — for
+            ``diversity="lever-blocking"`` rows only, the features whose
+            freezing made every alternative infeasible (so the primary plan
+            has no substitute for that lever). Empty for other diversity
+            modes.
+    """
 
     feature_names: tuple[str, ...]
     diversity: str
@@ -69,9 +136,28 @@ class BatchResult:
         return iter(self.records)
 
     def for_id(self, row_id: object) -> list[BatchRecord]:
+        """Every record (all alternatives/coalitions) for one dataset row.
+
+        Args:
+            row_id: A value from ``explain_batch``'s ``ids`` (or the row's
+                integer index when ``ids`` was not given).
+
+        Returns:
+            The matching records, in their original order; ``[]`` if
+            ``row_id`` is not present in this result.
+        """
         return [r for r in self.records if r.id == row_id]
 
     def save(self, path: str | os.PathLike[str]) -> None:
+        """Write this result to a portable JSON file, reloadable with ``load``.
+
+        Every field is encoded explicitly (NaN/Infinity-safe floats via
+        ``encode_floats``), including ``region`` when set, so a round trip
+        through ``save``/``load`` is lossless.
+
+        Args:
+            path: Destination file path; overwritten if it already exists.
+        """
         data = {
             "feature_names": list(self.feature_names),
             "diversity": self.diversity,
@@ -116,6 +202,19 @@ class BatchResult:
 
     @classmethod
     def load(cls, path: str | os.PathLike[str]) -> BatchResult:
+        """Read a ``BatchResult`` previously written by ``save``.
+
+        A file saved without ``region=True``, or by a version of treecf
+        before regions existed, loads with every record's ``region`` set to
+        ``None``; a file saved before coalition support loads with every
+        record's ``coalition`` set to ``None``.
+
+        Args:
+            path: Path to a file written by ``save``.
+
+        Returns:
+            The reconstructed ``BatchResult``.
+        """
         from treecf.regions import RecourseRegion
 
         with open(path, encoding="utf-8") as fh:
@@ -170,7 +269,20 @@ class BatchResult:
         )
 
     def to_frame(self) -> Any:
-        """One row per (id, k), wide ``cf_<feature>`` columns (pandas, lazy import)."""
+        """One row per (id, k), wide ``cf_<feature>`` columns (pandas, lazy import).
+
+        Every ``BatchRecord`` field except ``x_cf``/``changes``/``region``
+        becomes its own column; ``x_cf`` is spread into one ``cf_<feature>``
+        column per model feature (``NaN`` for an infeasible record, or an
+        unchanged feature's factual-equal value); ``changes`` is summarized as
+        a ``changed_features`` column (sorted feature names).
+
+        Returns:
+            A pandas ``DataFrame`` with one row per record.
+
+        Raises:
+            TreecfError: If pandas is not installed.
+        """
         try:
             import pandas as pd
         except ImportError as exc:  # pragma: no cover - exercised without pandas
@@ -215,6 +327,7 @@ def explain_batch(
     node_budget: int | None = None,
     gap: float | None = None,
     region: bool = False,
+    allow_exact_batch: bool = False,
 ) -> BatchResult:
     """See ``Explainer.explain_batch``.
 
@@ -231,9 +344,39 @@ def explain_batch(
 
     ``backend="exact"`` has no vectorized population, so this loops the
     single-instance exact solve per row (and per plan, for lever-blocking)
-    sequentially instead of running the Rust engine's parallel waves.
-    ``warm_start``/``node_budget``/``gap`` configure that solve; they are
-    only valid together with ``backend="exact"`` (see ``Explainer.explain``).
+    sequentially instead of running the Rust engine's parallel waves -- each
+    row still gets the full, undiminished ``time_budget_s``. Because that
+    wall time is easy to underestimate, it requires ``allow_exact_batch=True``
+    to opt in explicitly: without it this raises ``ValueError`` naming an
+    estimate instead (``rows`` × ``plans`` × ``time_budget_s``, hours-formatted,
+    where ``plans`` is ``n_per_example`` for ``"seeds"``/``"lever-blocking"`` or
+    the coalition count for ``"coalitions"``) -- a floor, not a ceiling, since
+    ``diversity="seeds"`` can retry each plan up to
+    ``_SEED_ATTEMPT_FACTOR``x (3x) on a seed collision, pushing actual wall
+    time higher; passing ``allow_exact_batch=True`` with any other backend
+    also raises ``ValueError``. ``node_budget``/``gap`` thread through to
+    every one of those solves unchanged; see ``Explainer.explain``.
+
+    Opting in also replaces ``warm_start``'s (default ``True``) N sequential
+    per-row genetic warm passes with a single vectorized one across every row
+    (one ``Explainer._solve_batch`` call, ``min(time_budget_s * 0.25, 2.0)``)
+    -- for ``diversity="seeds"`` every attempt of a row shares that one
+    incumbent instead of each attempt warm-starting its own (so, unlike
+    0.2.0, a batch run with ``n_per_example > 1`` is not required to explore
+    as many distinct warm starts per row as an equivalent sequence of
+    ``explain`` calls would; with ``n_per_example=1`` the result matches a
+    sequential ``explain(..., backend="exact")`` call exactly). A row whose
+    warm draw is infeasible gets no incumbent and runs unwarmed -- there is
+    no per-row genetic fallback. For ``diversity="lever-blocking"`` only the
+    primary solve (the unrestricted plan) uses the shared incumbent; the
+    per-lever frozen clones keep 0.2.0's own per-solve ``warm_start`` (their
+    constraint set differs by one ``Freeze``, so the primary's incumbent does
+    not necessarily still verify for them). ``diversity="coalitions"``
+    likewise keeps 0.2.0's per-coalition-solver behavior throughout -- each
+    coalition's constraint set differs the same way. A ``KeyboardInterrupt``
+    during any of this discards whatever the batch has not yet finished --
+    there is no partial ``BatchResult``.
+
     ``region=True`` attaches a certified ``RecourseRegion`` to every feasible
     record's ``region`` field; ``BatchResult.save``/``load`` persist it
     (``lo``/``hi``/``feature_intervals``/``certified``, all explicit -- a
@@ -244,7 +387,7 @@ def explain_batch(
     importable, exactly as a single ``explain(..., region=True)`` call would
     run it) -- there is no batched/parallel region path.
     """
-    from treecf.api import _resolve_exact_kwargs
+    from treecf.api import _degraded_summary, _resolve_exact_kwargs
 
     if target.bands_spec is not None:
         raise TreecfError("Target.bands is not supported in explain_batch; loop bands explicitly")
@@ -257,8 +400,28 @@ def explain_batch(
     # Validated here too (not only inside `_explain`) because the rust
     # wave-parallel paths below (`_rows_by_seed_waves`, `_lever_primaries`)
     # never call `_explain` and would otherwise silently ignore the kwargs.
-    _resolve_exact_kwargs(backend, warm_start, node_budget, gap)
+    resolved_warm_start, _, _ = _resolve_exact_kwargs(backend, warm_start, node_budget, gap)
     X = np.asarray(X, dtype=np.float64)
+    if backend == "exact" and not allow_exact_batch:
+        if diversity == "coalitions":
+            assert coalitions is not None  # validated above
+            plans = len(coalitions) + (1 if include_full else 0)
+        else:
+            plans = n_per_example
+        hours = len(X) * plans * time_budget_s / 3600.0
+        raise ValueError(
+            "backend='exact' inside explain_batch loops the single-instance exact "
+            "solve sequentially, one solve per (row, plan) pair -- no vectorized "
+            f"population to parallelize -- estimated {len(X)} rows x {plans} plans x "
+            f"{time_budget_s:.4g}s time_budget_s each ~= {hours:.1f} hours at least "
+            "(diversity='seeds' can retry each plan up to 3x on a seed collision, "
+            "pushing this higher); pass allow_exact_batch=True to opt in explicitly. "
+            "Opting in also switches warm_start (default True) from one genetic pass "
+            "per row (or, in seeds mode, per attempt) to a single vectorized pass "
+            "across every row."
+        )
+    if allow_exact_batch and backend != "exact":
+        raise ValueError("allow_exact_batch is only valid with backend='exact'")
     row_ids: Sequence[object] = range(len(X)) if ids is None else list(ids)
     if len(row_ids) != len(X):
         raise TreecfError("ids must have one entry per row of X")
@@ -284,12 +447,18 @@ def explain_batch(
 
     records: list[BatchRecord] = []
     essential: dict[object, list[str]] = {}
+    # Per-row degraded-exact-result buckets, whatever the diversity mode; a
+    # row counts as affected once, however many of its solves degraded --
+    # the same "affected/total rows" shape `explain_batch`'s own
+    # factual-violation aggregate above uses.
+    row_degraded: list[list[_Degradation]] = [[] for _ in row_ids]
     if diversity == "coalitions":
         assert coalitions is not None  # narrowed by the validation above
         records = _rows_by_coalitions(
             explainer, X, target, row_ids, coalitions, include_full,
             backend, time_budget_s, sparsity_weight, seed=seed,
             warm_start=warm_start, node_budget=node_budget, gap=gap, region=region,
+            row_degraded=row_degraded,
         )
     elif diversity == "seeds" and backend in ("genetic", "genetic-rust"):
         # Same attempts, dedup, and stopping rule as `_row_by_seeds`, but each
@@ -301,19 +470,50 @@ def explain_batch(
         )
     else:
         primaries: list[Counterfactual | Infeasible] | None = None
+        # One row -> one incumbent (or None), the vectorized warm pass's
+        # output; None throughout means either warm_start=False or (below)
+        # this diversity mode not sharing an incumbent at all -- either way
+        # every row's own explain call runs unwarmed rather than falling back
+        # to a per-row genetic pass.
+        row_incumbents: list[tuple[float, FloatArray] | None] | None = None
         if diversity == "lever-blocking" and backend in ("genetic", "genetic-rust"):
             # All rows' primary solves share the constraints, so they run as
             # one parallel Rust call; the per-lever loop stays sequential.
             primaries = _lever_primaries(
                 explainer, X, target, time_budget_s, sparsity_weight, seed=seed
             )
+        elif backend == "exact":
+            # One vectorized warm pass replaces the per-row (seeds: per-attempt)
+            # internal warm starts `_row_by_seeds`/`_row_by_lever_blocking` would
+            # otherwise each run on their own; see `allow_exact_batch`'s docstring.
+            interval = target.raw_interval(explainer.ir.link)
+            row_seeds = (
+                [seed * 1_000_003 + i * 1_009 for i in range(len(X))]
+                if diversity == "seeds"
+                else [seed] * len(X)
+            )
+            row_incumbents = (
+                _batch_warm_incumbents(
+                    explainer, X, row_seeds, interval, time_budget_s, sparsity_weight
+                )
+                if resolved_warm_start
+                else [None] * len(X)
+            )
+            if diversity == "lever-blocking":
+                primaries = _exact_lever_primaries(
+                    explainer, X, target, time_budget_s, sparsity_weight,
+                    node_budget, gap, seed, row_incumbents, row_degraded,
+                )
         for i, row_id in enumerate(row_ids):
             if diversity == "seeds":
                 row_records = _row_by_seeds(
                     explainer, X[i], target, row_id, n_per_example,
                     backend, time_budget_s, sparsity_weight,
                     master_seed=seed * 1_000_003 + i * 1_009,
-                    warm_start=warm_start, node_budget=node_budget, gap=gap, region=region,
+                    warm_start=False if backend == "exact" else warm_start,
+                    node_budget=node_budget, gap=gap, region=region,
+                    degraded=row_degraded[i],
+                    incumbent=None if row_incumbents is None else row_incumbents[i],
                 )
             else:
                 row_records, row_essential = _row_by_lever_blocking(
@@ -321,9 +521,16 @@ def explain_batch(
                     backend, time_budget_s, sparsity_weight, seed=seed,
                     primary=None if primaries is None else primaries[i],
                     warm_start=warm_start, node_budget=node_budget, gap=gap, region=region,
+                    degraded=row_degraded[i],
                 )
                 essential[row_id] = row_essential
             records.extend(row_records)
+
+    degraded_all = [d for bucket in row_degraded for d in bucket]
+    affected_rows = sum(1 for bucket in row_degraded if bucket)
+    message = _degraded_summary(degraded_all, affected_rows, len(row_ids), "rows")
+    if message is not None:
+        warnings.warn(message, TreecfWarning, stacklevel=2)
 
     return BatchResult(
         feature_names=explainer.ir.feature_names,
@@ -488,6 +695,88 @@ def _lever_primaries(
     return outcomes
 
 
+def _batch_warm_incumbents(
+    explainer: Explainer,
+    X: FloatArray,
+    row_seeds: Sequence[int],
+    interval: tuple[float, float],
+    time_budget_s: float,
+    sparsity_weight: float,
+) -> list[tuple[float, FloatArray] | None]:
+    """One vectorized genetic warm pass for every row of an exact batch: a
+    single ``Explainer._solve_batch`` call at ``min(time_budget_s * 0.25,
+    2.0)``, replacing the N sequential per-row (or, in seeds mode,
+    per-attempt) warm passes ``warm_start=True`` would otherwise run one at a
+    time through ``_explain_exact``'s own internal pass. ``row_seeds[i]`` is
+    the seed row ``i``'s own internal warm pass would have used, so with a
+    single plan per row this reproduces a sequential
+    ``explain(..., backend="exact")`` call's incumbent exactly.
+
+    A row whose warm draw is infeasible, or fails float-space verification,
+    contributes ``None`` -- there is no per-row genetic fallback here; the
+    exact search for that row runs unwarmed, exactly as ``warm_start=False``
+    would.
+    """
+    from treecf.api import Counterfactual
+    from treecf.backends._exact_domains import _cost_of_row
+
+    if explainer.plausibility is not None and np.isnan(X).any():
+        raise TreecfError("plausibility with missing factual values is not supported")
+    warm_budget = min(time_budget_s * 0.25, 2.0)
+    tasks = [(i, row_seeds[i]) for i in range(len(X))]
+    results = explainer._solve_batch(X, tasks, interval, warm_budget, sparsity_weight)
+    incumbents: list[tuple[float, FloatArray] | None] = []
+    for i, result in enumerate(results):
+        if result.x_cf is None:
+            incumbents.append(None)
+            continue
+        candidate = explainer._finalize_candidate(X[i], result.x_cf, interval, result.stats)
+        if isinstance(candidate, Counterfactual) and (
+            explainer._verify(X[i], candidate.x_cf, interval) is None
+        ):
+            cost = _cost_of_row(
+                X[i], candidate.x_cf, explainer.sigma, explainer.weights, sparsity_weight,
+                explainer.compiled.allow_missing,
+            )
+            incumbents.append((cost, candidate.x_cf))
+        else:
+            incumbents.append(None)
+    return incumbents
+
+
+def _exact_lever_primaries(
+    explainer: Explainer,
+    X: FloatArray,
+    target: Target,
+    time_budget_s: float,
+    sparsity_weight: float,
+    node_budget: int | None,
+    gap: float | None,
+    seed: int,
+    row_incumbents: Sequence[tuple[float, FloatArray] | None],
+    row_degraded: list[list[_Degradation]],
+) -> list[Counterfactual | Infeasible]:
+    """Every row's lever-blocking primary exact solve, sequentially -- the
+    exact backend has no vectorized population to parallelize -- each
+    pre-seeded with its row's ``_batch_warm_incumbents`` incumbent instead of
+    running its own internal warm pass (``warm_start=False`` throughout, so a
+    ``None`` incumbent runs that row's primary unwarmed rather than falling
+    back to a per-row genetic pass). The per-lever frozen clones computed
+    afterwards by ``_row_by_lever_blocking`` are not covered here -- their
+    constraint set differs by one ``Freeze``, so this incumbent does not
+    necessarily still verify for them; they keep their own per-solve
+    ``warm_start``.
+    """
+    return [
+        explainer._explain_one(
+            X[i], target, "exact", time_budget_s, sparsity_weight, seed,
+            warn_factual=False, warm_start=False, node_budget=node_budget, gap=gap,
+            degraded=row_degraded[i], incumbent=row_incumbents[i],
+        )
+        for i in range(len(X))
+    ]
+
+
 def _rows_by_coalitions(
     explainer: Explainer,
     X: FloatArray,
@@ -503,6 +792,7 @@ def _rows_by_coalitions(
     node_budget: int | None = None,
     gap: float | None = None,
     region: bool = False,
+    row_degraded: list[list[_Degradation]] | None = None,
 ) -> list[BatchRecord]:
     """One record per named coalition per row (plus the optional baseline).
 
@@ -511,7 +801,9 @@ def _rows_by_coalitions(
     by row. Per row, feasible plans are ranked by distance (k = 0, 1, ...),
     then infeasible coalitions follow in coalition order — an infeasible
     record with ``coalition`` set means that group alone cannot reach the
-    target.
+    target. ``row_degraded`` (one bucket per row, indexed like ``row_ids``)
+    collects exact-backend degradations across every coalition's solve for
+    ``explain_batch``'s own aggregate warning.
     """
     from treecf.api import _ALL_LEVERS, Counterfactual, Infeasible, _validate_coalitions
 
@@ -549,6 +841,7 @@ def _rows_by_coalitions(
                     X[i], target, backend, time_budget_s, sparsity_weight, seed,
                     warn_factual=False,
                     warm_start=warm_start, node_budget=node_budget, gap=gap,
+                    degraded=None if row_degraded is None else row_degraded[i],
                 )
                 for i in range(len(X))
             ]
@@ -587,7 +880,14 @@ def _row_by_seeds(
     node_budget: int | None = None,
     gap: float | None = None,
     region: bool = False,
+    degraded: list[_Degradation] | None = None,
+    incumbent: tuple[float, FloatArray] | None = None,
 ) -> list[BatchRecord]:
+    """``incumbent``, when given, is shared by every attempt below instead of
+    each attempt warm-starting its own (the caller is expected to pass
+    ``warm_start=False`` alongside it, so a ``None`` incumbent -- an
+    infeasible warm draw -- also runs unwarmed rather than falling back to a
+    per-attempt genetic pass; see ``explain_batch``'s ``allow_exact_batch``)."""
     from treecf.api import Counterfactual
 
     found: dict[frozenset[str], tuple[Counterfactual, int]] = {}
@@ -597,6 +897,7 @@ def _row_by_seeds(
             x, target, backend, time_budget_s, sparsity_weight, attempt_seed,
             warn_factual=False,  # explain_batch already warned in aggregate
             warm_start=warm_start, node_budget=node_budget, gap=gap,
+            degraded=degraded, incumbent=incumbent,
         )
         if isinstance(result, Counterfactual):
             key = frozenset(result.changes)
@@ -632,6 +933,7 @@ def _row_by_lever_blocking(
     node_budget: int | None = None,
     gap: float | None = None,
     region: bool = False,
+    degraded: list[_Degradation] | None = None,
 ) -> tuple[list[BatchRecord], list[str]]:
     from treecf.api import Counterfactual
 
@@ -640,6 +942,7 @@ def _row_by_lever_blocking(
             x, target, backend, time_budget_s, sparsity_weight, seed,
             warn_factual=False,  # explain_batch already warned in aggregate
             warm_start=warm_start, node_budget=node_budget, gap=gap,
+            degraded=degraded,
         )
         assert not isinstance(explained, dict)  # bands are rejected by explain_batch
         primary = explained
@@ -669,6 +972,7 @@ def _row_by_lever_blocking(
             x, target, backend, time_budget_s, sparsity_weight, seed,
             warn_factual=False,  # explain_batch already warned in aggregate
             warm_start=warm_start, node_budget=node_budget, gap=gap,
+            degraded=degraded,
         )
         if isinstance(alternative, Counterfactual):
             key = frozenset(alternative.changes)

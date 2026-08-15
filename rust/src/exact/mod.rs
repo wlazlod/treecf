@@ -24,6 +24,12 @@
 //!    all depend on the order nodes are visited in, so the search is
 //!    single-threaded by construction and no rayon call may enter it. The
 //!    RNG-free stages that `ga.rs` fans out have no analogue here.
+//!    The interrupt probe the search polls does not weaken this: it is asked
+//!    a question that depends on nothing in the search, it is asked on a
+//!    schedule fixed by the node counter alone, and the only thing it can do
+//!    is replace the whole answer with `Interrupted`. It never changes a
+//!    value that is returned — the same reasoning that already makes the
+//!    `time_budget_s` early break parity-neutral.
 //! 2. **Full re-summation.** Assigning a feature re-walks the trees that split
 //!    on it from their roots, then the ensemble bracket is re-summed over every
 //!    tree in ascending index (`base + tree_0 + tree_1 + ...`), never patched
@@ -70,6 +76,7 @@ pub(crate) mod search;
 #[cfg(test)]
 pub(crate) mod test_support;
 
+pub use crate::interrupt::SearchOutcome;
 pub use domains::constraint_cells;
 pub use search::{solve_exact, ExactParams, ExactResult, ExactStats};
 

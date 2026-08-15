@@ -10,6 +10,7 @@ use pyo3::prelude::*;
 use crate::constraints::{Constraints, LinearC};
 use crate::exact::{ExactParams, ValuePolicy};
 use crate::ga::GaParams;
+use crate::interrupt::SearchOutcome;
 use crate::ir::{Ensemble, Link};
 
 /// Per-feature value-policy flat encoding: `0=raw` (`None`), `1=integer`,
@@ -313,6 +314,9 @@ fn solve_genetic_raw<'py>(
 /// Batch GA solve: one independent search per `(task_row, task_seed)` pair,
 /// fanned out with rayon under a released GIL. Returns
 /// `(x_cf (n_tasks, p) — factual copy where infeasible, feasible mask, generations)`.
+/// A `Ctrl-C` while the GIL is released surfaces as a third error category:
+/// the `PyErr` `check_signals` raises (ordinarily `KeyboardInterrupt`),
+/// propagated as-is — never a `PyValueError`/`PyRuntimeError`.
 #[pyfunction]
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 #[pyo3(signature = (ensemble, constraints, x_rows, task_row, task_seed, lo_t, hi_t,
@@ -390,7 +394,17 @@ fn solve_genetic_batch_raw<'py>(
         (Some(if_e), Some(bound)) => Some((&if_e.inner, bound)),
         _ => None,
     };
-    let results = py.detach(|| {
+    let mut pending: Option<PyErr> = None;
+    let outcome = py.detach(|| {
+        let mut probe = || {
+            Python::attach(|py| match py.check_signals() {
+                Ok(()) => false,
+                Err(err) => {
+                    pending = Some(err);
+                    true
+                }
+            })
+        };
         crate::ga::solve_genetic_batch(
             ens,
             &xs_own,
@@ -404,8 +418,21 @@ fn solve_genetic_batch_raw<'py>(
             bg_own.as_ref().map(|(data, n)| (data.as_slice(), *n)),
             plaus,
             &params,
+            &mut probe,
         )
     });
+    let results = match outcome {
+        SearchOutcome::Done(results) => results,
+        // The probe only ever returns `true` after storing a `PyErr` from
+        // `check_signals` (almost always `KeyboardInterrupt`), so this is a
+        // third error category alongside `PyValueError`/`PyRuntimeError`
+        // below: it propagates that PyErr as-is rather than wrapping it.
+        SearchOutcome::Interrupted => {
+            return Err(pending
+                .take()
+                .expect("interrupt probe always stores the pending PyErr"));
+        }
+    };
     let n_tasks = tasks.len();
     let mut x_cf = vec![0.0f64; n_tasks * p];
     let mut feasible = vec![false; n_tasks];
@@ -443,7 +470,10 @@ fn solve_genetic_batch_raw<'py>(
 /// value-policy-array length check, or `marshal_value_policies` itself)
 /// means the caller marshaled malformed input — a bug, never a user-facing
 /// constraint problem — so it is deliberately a different exception type and
-/// propagates as a plain `RuntimeError` instead.
+/// propagates as a plain `RuntimeError` instead. A third category — a
+/// `Ctrl-C` while the search holds the released GIL — surfaces as whatever
+/// `PyErr` `check_signals` itself raised (ordinarily `KeyboardInterrupt`),
+/// propagated as-is rather than mapped to either exception type above.
 #[pyfunction]
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 #[pyo3(signature = (ensemble, constraints, x, lo_t, hi_t, sigma, weights, lam,
@@ -515,8 +545,18 @@ fn solve_exact_raw<'py>(
         gap,
         time_budget_s,
     };
-    let result = py
+    let mut pending: Option<PyErr> = None;
+    let outcome = py
         .detach(|| {
+            let mut probe = || {
+                Python::attach(|py| match py.check_signals() {
+                    Ok(()) => false,
+                    Err(err) => {
+                        pending = Some(err);
+                        true
+                    }
+                })
+            };
             crate::exact::solve_exact(
                 ens,
                 &x_own,
@@ -529,9 +569,22 @@ fn solve_exact_raw<'py>(
                 plaus,
                 &params,
                 incumbent,
+                &mut probe,
             )
         })
         .map_err(PyValueError::new_err)?;
+    let result = match outcome {
+        SearchOutcome::Done(result) => result,
+        // The probe only ever returns `true` after storing a `PyErr` from
+        // `check_signals` (almost always `KeyboardInterrupt`), so this is a
+        // third error category alongside `PyValueError`/`PyRuntimeError`
+        // above: it propagates that PyErr as-is rather than wrapping it.
+        SearchOutcome::Interrupted => {
+            return Err(pending
+                .take()
+                .expect("interrupt probe always stores the pending PyErr"));
+        }
+    };
     let stats = result.stats;
     let stats_tuple = (
         stats.nodes_expanded,
@@ -657,7 +710,9 @@ fn debug_domains_raw<'py>(
 /// distinction (see `crate::regions`'s module doc). `lo_b`/`hi_b` are the
 /// instance bounds and `open_set` the non-degenerate feature indices;
 /// `regions.py` already computes both to build `feature_intervals` either
-/// way, so this binding does not re-derive them.
+/// way, so this binding does not re-derive them. A `Ctrl-C` while growth
+/// holds the released GIL surfaces as a third error category: the `PyErr`
+/// `check_signals` raises (ordinarily `KeyboardInterrupt`), propagated as-is.
 #[pyfunction]
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 #[pyo3(signature = (ensemble, missing_defined, constraints, x_cf, lo_t, hi_t,
@@ -697,7 +752,17 @@ fn compute_region_raw<'py>(
         (Some(if_e), Some(md)) => Some((&if_e.inner, md.as_slice())),
         _ => None,
     };
-    let result = py.detach(|| {
+    let mut pending: Option<PyErr> = None;
+    let outcome = py.detach(|| {
+        let mut probe = || {
+            Python::attach(|py| match py.check_signals() {
+                Ok(()) => false,
+                Err(err) => {
+                    pending = Some(err);
+                    true
+                }
+            })
+        };
         crate::regions::recourse_region(
             ens,
             &missing_defined_own,
@@ -709,8 +774,22 @@ fn compute_region_raw<'py>(
             &open_set_own,
             if_pair,
             min_total_path.unwrap_or(0.0),
+            &mut probe,
         )
     });
+    let result = match outcome {
+        SearchOutcome::Done(result) => result,
+        // The probe only ever returns `true` after storing a `PyErr` from
+        // `check_signals` (almost always `KeyboardInterrupt`), so this is a
+        // third error category alongside `PyValueError`/`PyRuntimeError`
+        // that other bindings in this module raise: it propagates that PyErr
+        // as-is rather than wrapping it.
+        SearchOutcome::Interrupted => {
+            return Err(pending
+                .take()
+                .expect("interrupt probe always stores the pending PyErr"));
+        }
+    };
     Ok((result.lo.into_pyarray(py), result.hi.into_pyarray(py)))
 }
 

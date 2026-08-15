@@ -166,6 +166,11 @@ def solve_exact(
     features onto one shared value inside their cells. All of that only
     narrows or nudges what the arbiter is shown; the arbiter still decides.
 
+    This search is plain Python, so a ``KeyboardInterrupt`` between bytecode
+    instructions raises it immediately, with no result returned — the same
+    contract ``solve_exact_rust`` gives callers by polling for signals from
+    inside the released GIL.
+
     Args:
         ir: Model whose score must land in ``interval``.
         x: The factual row.

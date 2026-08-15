@@ -10,7 +10,9 @@ pip install "treecf[xgboost,viz]"        # parser extras, matplotlib plots
 numpy is the only Python dependency; the genetic engine is a compiled Rust core
 shipped inside the wheel. Model parsers accept JSON dumps directly, so
 explanations can be generated on machines where the training framework (or any
-solver) is not installed.
+solver) is not installed. ARM v6 wheels (piwheels Bookworm) can lag behind a
+release due to an upstream builder issue; all other platforms ship from CI as
+usual.
 
 ## First counterfactual
 

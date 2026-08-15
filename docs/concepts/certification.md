@@ -65,6 +65,32 @@ coming back empty-handed (budget exhausted, a repair withdrawn, the genetic/pyth
 finding nothing) reports `proof="search_exhausted"`: a plan was not found, but nothing is proven
 about whether one exists.
 
+## When the budget runs out
+
+Whenever the exact backend returns any result with `solver_stats["completed"] is False` —
+`explain`, a `Target.bands` ladder, `explain_coalitions`, or `explain_batch` alike — a
+`TreecfWarning` fires, always, naming exactly one of two causes and never conflating them:
+
+- **The search genuinely ran out of budget** (`node_budget` nodes expanded, or `time_budget_s`
+  elapsed): the warning says so, states the node count, and — when a row was found — reports it
+  as the best found rather than proven optimal, together with a lower-bound/gap parenthetical
+  when one is available (`(lower bound X, gap ≤ Y%)`); it also points at raising the budgets or
+  passing `gap=` as the next move.
+- **A conservative constraint repair withdrew the optimality certificate without touching the
+  budget** — the same repair mechanism the first honesty note above describes: the row is still
+  real and float-verified, only the "cheapest possible" claim is dropped.
+
+If the search's own warm start (`warm_start=True`, the default) was unseeded (`seed=None`) and
+contributed the incumbent, the warning appends a clause noting that a rerun may land on a
+different heuristic result and that passing `seed=` fixes it.
+
+`Target.bands`, `explain_coalitions`, and `explain_batch` never emit one warning per degraded
+solve — they collapse every degraded solve from one call into a single aggregate `TreecfWarning`
+that breaks the count down by cause (`exhausted: N solves; withdrawn: M solves`) and points back
+at each result's own `proof`/`solver_stats` for which case applies to it. Read `solver_stats` on
+the affected result(s) directly for the full picture: `nodes_expanded`, `nodes_pruned_score`,
+`nodes_pruned_cost`, `lower_bound`, `gap`, `completed`, and `warm_start_used`.
+
 ## Value policies under certification
 
 `value_policy` changes what "optimal" is measured against, and the two backend families read a
@@ -132,7 +158,8 @@ feature count. In practice:
 - As a rule of thumb, keep the number of influential features to the low hundreds; well beyond
   that, `node_budget` or `time_budget_s` is likely to cut the search short before it settles the
   space (reported honestly as `proof="heuristic"` or `Infeasible.proof="search_exhausted"`,
-  never silently).
+  never silently — see [When the budget runs out](#when-the-budget-runs-out) for the
+  `TreecfWarning` this always triggers on `explain`/`explain_batch`/`explain_coalitions`).
 - `node_budget` (default 2,000,000 assignments) and `gap` (default `0.0`) are the two pressure
   valves: lowering `node_budget` bounds worst-case wall time at the cost of a less certain
   answer, and a `gap > 0` lets the search settle for — and honestly report, via
@@ -142,6 +169,64 @@ feature count. In practice:
   capped at 2 seconds) seeds the exact search with an incumbent before it starts branching,
   which prunes harder from the first node without costing anything from the main budget — the
   exact search still gets the full `time_budget_s` afterward.
+- The budgets can be removed entirely: `time_budget_s=math.inf` disables the time cut, and a
+  very large `node_budget` (any value up to 2^64 − 1) makes the node cut unreachable, so the
+  search runs until it proves optimality or certified infeasibility — practical since Ctrl-C
+  now aborts promptly (see [Interrupting a search](#interrupting-a-search)). An unlimited
+  budget guarantees the search completes, not that it certifies: the conservative constraint
+  repair described above can still return an honestly-warned `proof="heuristic"`.
+
+## The exact-batch opt-in
+
+`explain_batch(..., backend="exact")` has no vectorized population to parallelize the way the
+genetic engine does — it loops the single-instance exact solve per row (and per plan, for
+`diversity="lever-blocking"`), sequentially, and each row still gets the full, undiminished
+`time_budget_s`. That wall time is easy to underestimate from a single
+`explain(..., backend="exact")` call, so the batch path requires explicit consent:
+`backend="exact"` without `allow_exact_batch=True` raises `ValueError` instead of running,
+naming the arithmetic behind the estimate — `rows × plans × time_budget_s`, hours-formatted,
+where `plans` is `n_per_example` for `diversity="seeds"`/`"lever-blocking"` or the coalition
+count (`len(coalitions) + 1` when `include_full=True`) for `diversity="coalitions"`. The figure
+is a floor, not a ceiling: `diversity="seeds"` retries up to three attempts per requested plan
+when a draw collides with one already found, so its actual wall time can run past the estimate;
+the other two diversity modes never exceed it.
+
+Opting in also changes how `warm_start` (default `True`) behaves. Instead of every row (or, in
+`diversity="seeds"`, every attempt) running its own internal genetic warm pass, one vectorized
+`Explainer._solve_batch` call warms every row at once, budgeted at
+`min(time_budget_s * 0.25, 2.0)` regardless of row count — the saving is entirely in the warm-up,
+not in the exact search itself: each row's exact solve afterward still gets the full
+`time_budget_s`. A row whose warm draw comes back infeasible, or fails float-space verification,
+gets no incumbent and runs unwarmed; there is no per-row genetic fallback.
+
+For `diversity="seeds"`, the shared warm pass has a real trade-off: every attempt of a row starts
+from the same one incumbent, rather than each attempt warm-starting its own the way a sequential
+run of `explain` would. With `n_per_example=1` that makes no difference — the result matches a
+sequential `explain(..., backend="exact")` call exactly — but for `n_per_example > 1` a batch run
+is not guaranteed to explore as many distinct warm starts per row as an equivalent sequence of
+`explain` calls would. `diversity="lever-blocking"` shares the incumbent for the primary solve
+only; the per-lever frozen clones keep their own per-solve `warm_start`, since a `Freeze` changes
+the constraint set enough that the primary's incumbent does not necessarily still verify for
+them. `diversity="coalitions"` keeps per-coalition-solver `warm_start` throughout, for the same
+reason.
+
+## Interrupting a search
+
+A `Ctrl-C` during an exact search, a certified-region growth, or a batch genetic solve raises
+`KeyboardInterrupt` promptly instead of waiting for the whole search to finish. The Rust core
+polls for it from inside its released GIL — for the exact search, about every 2^18 nodes — and
+the pure-Python exact fallback raises just as promptly, for a different reason: Python delivers
+signals between bytecode instructions, so there is nothing to poll for. Either way nothing is
+returned: whatever incumbent the search was holding, or however much of a region it had grown so
+far, is discarded rather than handed back partial.
+
+This is reliable only when the call happens on the **main thread** — Python only delivers
+`SIGINT` there, so a search launched from a worker thread will not see a `Ctrl-C` this way.
+
+`time_budget_s` is an *anytime* budget, not a deadline the search waits out: an interrupt at any
+point during it stops the search immediately rather than continuing to the budget's edge, and a
+search that finds nothing before the interrupt lands leaves no result to fall back on — the same
+`KeyboardInterrupt` propagates all the way up to caller code.
 
 ## What the exact backend does not certify yet
 
