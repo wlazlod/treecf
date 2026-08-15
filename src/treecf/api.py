@@ -377,12 +377,16 @@ class Explainer:
         gap: float | None = None,
         region: bool = False,
         degraded: list[_Degradation] | None = None,
+        incumbent: tuple[float, FloatArray] | None = None,
     ) -> Counterfactual | Infeasible | dict[str, object]:
         """``explain`` body; ``explain_batch`` calls it with ``warn_factual=False``
         after emitting its own aggregate warning. ``degraded`` collects exact-backend
         degradations for an external caller's own aggregate instead of warning
         immediately; ignored (a fresh local collector is used instead) when
-        ``target.bands_spec`` is set, since batch/coalitions never pass bands through."""
+        ``target.bands_spec`` is set, since batch/coalitions never pass bands through.
+        ``incumbent`` forwards to ``_explain_exact`` for the single-interval case only
+        (``target.bands_spec`` rows never receive one — batch, the only caller that
+        passes one, already rejects bands)."""
         x = np.asarray(x, dtype=np.float64)
         if warn_factual:
             violations = self.compiled.factual_violations(x)
@@ -433,7 +437,7 @@ class Explainer:
             self._explain_exact(
                 x, interval, time_budget_s, resolved_warm_start,
                 resolved_node_budget, resolved_gap, sparsity_weight, seed,
-                degraded=degraded,
+                incumbent=incumbent, degraded=degraded,
             )
             if backend == "exact"
             else self._explain_genetic(
@@ -461,6 +465,7 @@ class Explainer:
         node_budget: int | None = None,
         gap: float | None = None,
         region: bool = False,
+        allow_exact_batch: bool = False,
     ) -> Any:
         """Mass-produce counterfactuals for a dataset; see ``treecf.batch``.
 
@@ -480,11 +485,23 @@ class Explainer:
         ``backend="exact"`` has no vectorized population to parallelize, so
         this loops the single-instance exact solve per row (and per plan, for
         lever-blocking) sequentially — expect roughly linear-in-rows wall
-        time rather than the Rust engine's parallel wave scheduling.
-        ``warm_start``/``node_budget``/``gap`` thread through to every one of
-        those solves; see ``Explainer.explain``. ``region=True`` attaches a
-        certified ``RecourseRegion`` (``BatchRecord.region``) to every
-        feasible record, at the same one-oracle-call-per-expansion cost.
+        time rather than the Rust engine's parallel wave scheduling, and each
+        row still gets the full, undiminished ``time_budget_s``. Because that
+        wall time is easy to underestimate, ``backend="exact"`` here is
+        opt-in: without ``allow_exact_batch=True`` this raises ``ValueError``
+        naming a worst-case estimate (rows × plans × ``time_budget_s``,
+        hours-formatted) instead of silently running; passing it through with
+        any other backend also raises ``ValueError``. Opting in additionally
+        replaces ``warm_start``'s N sequential per-row (or, in seeds mode,
+        per-attempt) genetic warm passes with a single vectorized one across
+        every row — see ``treecf.batch.explain_batch`` for exactly which
+        modes it covers and which keep 0.2.0's per-solve behavior.
+        ``node_budget``/``gap`` thread through to every solve unchanged; see
+        ``Explainer.explain``. A ``KeyboardInterrupt`` during any batch solve
+        discards whatever the batch has not yet finished — there is no
+        partial ``BatchResult``. ``region=True`` attaches a certified
+        ``RecourseRegion`` (``BatchRecord.region``) to every feasible record,
+        at the same one-oracle-call-per-expansion cost.
         """
         from treecf.batch import explain_batch
 
@@ -494,6 +511,7 @@ class Explainer:
             sparsity_weight=sparsity_weight, seed=seed,
             coalitions=coalitions, include_full=include_full,
             warm_start=warm_start, node_budget=node_budget, gap=gap, region=region,
+            allow_exact_batch=allow_exact_batch,
         )
 
     def explain_coalitions(
@@ -565,13 +583,14 @@ class Explainer:
         gap: float | None = None,
         region: bool = False,
         degraded: list[_Degradation] | None = None,
+        incumbent: tuple[float, FloatArray] | None = None,
     ) -> Counterfactual | Infeasible:
         """`explain` for a single-interval target, with the bands arm ruled out."""
         result = self._explain(
             x, target, backend, time_budget_s, sparsity_weight, seed,
             warn_factual=warn_factual,
             warm_start=warm_start, node_budget=node_budget, gap=gap, region=region,
-            degraded=degraded,
+            degraded=degraded, incumbent=incumbent,
         )
         assert not isinstance(result, dict)  # bands are rejected by the callers
         return result
@@ -705,6 +724,7 @@ class Explainer:
         gap: float,
         sparsity_weight: float,
         seed: int | None,
+        incumbent: tuple[float, FloatArray] | None = None,
         degraded: list[_Degradation] | None = None,
     ) -> Counterfactual | Infeasible:
         """Exact-backend counterfactual for one target interval.
@@ -716,6 +736,13 @@ class Explainer:
         backend's own objective and handed to ``solve_exact`` as an
         incumbent — the exact search still runs with the full, undiminished
         ``time_budget_s`` afterwards.
+
+        ``incumbent``, when given, is used as that starting incumbent
+        directly and this method's own internal warm pass never runs (the
+        pass only runs when ``incumbent is None and warm_start``) — used by
+        ``explain_batch``'s opt-in exact path, which computes one incumbent
+        per row in a single vectorized genetic pass instead of every row (or,
+        in seeds mode, every attempt) running its own.
 
         The search itself dispatches rust-first: when the `_treecf_core`
         extension is importable, ``exact_rust.solve_exact_rust`` runs instead
@@ -739,8 +766,7 @@ class Explainer:
         from treecf.backends._exact_domains import _cost_of_row
         from treecf.backends.exact_rust import _rust_available, solve_exact_rust
 
-        incumbent: tuple[float, FloatArray] | None = None
-        if warm_start:
+        if incumbent is None and warm_start:
             warm_budget = min(time_budget_s * 0.25, 2.0)
             warm = self._explain_genetic(
                 x, interval, warm_budget, sparsity_weight, seed, rust=True

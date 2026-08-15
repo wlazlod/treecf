@@ -295,6 +295,7 @@ class TestAggregateWarnings:
             batch = exp.explain_batch(
                 X, target, backend="exact", seed=0,
                 warm_start=False, node_budget=1, time_budget_s=5.0,
+                allow_exact_batch=True,
             )
         assert len(batch) == 3
         assert len(record) == 1
@@ -316,6 +317,7 @@ class TestAggregateWarnings:
             batch = exp.explain_batch(
                 X, target, backend="exact", seed=0, n_per_example=2,
                 warm_start=False, node_budget=1, time_budget_s=5.0,
+                allow_exact_batch=True,
             )
         assert len(batch) == 3
         assert len(record) == 1

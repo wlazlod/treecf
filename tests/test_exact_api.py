@@ -205,7 +205,7 @@ def test_explain_coalitions_backend_exact(exp: Explainer) -> None:
 def test_explain_batch_exact_matches_per_row_explain(exp: Explainer) -> None:
     target = Target.raw(op=">=", value=0.9)  # unique cheapest solution: "a" alone
     X = np.zeros((2, 3))
-    batch = exp.explain_batch(X, target, backend="exact", seed=0)
+    batch = exp.explain_batch(X, target, backend="exact", seed=0, allow_exact_batch=True)
     assert len(batch) == 2
     for i, row in enumerate(X):
         single = exp.explain(row, target, backend="exact", seed=0)

@@ -168,6 +168,110 @@ class TestLeverBlocking:
             exp.explain_batch(X, TARGET, diversity="magic")
 
 
+class TestExactBatchOptIn:
+    def test_no_flag_raises_with_estimate(self, exp: Explainer) -> None:
+        X5 = np.zeros((5, 3))
+        with pytest.raises(ValueError, match=r"5 rows x 1 plans x 10s") as excinfo:
+            exp.explain_batch(X5, TARGET, backend="exact", seed=0)
+        assert "hours" in str(excinfo.value)
+
+    def test_no_flag_estimate_multiplies_plans_by_n_per_example(self, exp: Explainer) -> None:
+        X3 = np.zeros((3, 3))
+        with pytest.raises(ValueError, match=r"3 rows x 4 plans x 10s"):
+            exp.explain_batch(
+                X3, TARGET, backend="exact", seed=0,
+                diversity="lever-blocking", n_per_example=4,
+            )
+
+    def test_no_flag_estimate_uses_coalition_count_as_plans(self, exp: Explainer) -> None:
+        X2 = np.zeros((2, 3))
+        with pytest.raises(ValueError, match=r"2 rows x 3 plans x 10s"):
+            exp.explain_batch(
+                X2, TARGET, backend="exact", seed=0, diversity="coalitions",
+                coalitions={"c1": ["a"], "c2": ["b", "c"]}, include_full=True,
+            )
+
+    def test_flag_with_non_exact_backend_raises(self, exp: Explainer) -> None:
+        with pytest.raises(ValueError, match="allow_exact_batch"):
+            exp.explain_batch(X, TARGET, backend="genetic", allow_exact_batch=True)
+
+    def test_coalitions_gated_by_flag(self, exp: Explainer) -> None:
+        kwargs: dict[str, object] = {
+            "diversity": "coalitions",
+            "coalitions": {"c1": ["a"]},
+            "backend": "exact",
+            "seed": 0,
+        }
+        with pytest.raises(ValueError, match="allow_exact_batch"):
+            exp.explain_batch(X[:1], TARGET, **kwargs)
+        batch = exp.explain_batch(X[:1], TARGET, allow_exact_batch=True, **kwargs)
+        assert len(batch) == 1
+
+    def test_one_vectorized_warm_pass_and_no_genetic_fallback(
+        self, exp: Explainer, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A default (``diversity="seeds"``, ``n_per_example=1``) exact batch
+        should run its warm pass through exactly one ``_solve_batch`` call and
+        never fall back to the single-row ``_explain_genetic`` path."""
+        calls = {"solve_batch": 0, "explain_genetic": 0}
+        original_solve_batch = Explainer._solve_batch
+        original_explain_genetic = Explainer._explain_genetic
+
+        def spy_solve_batch(self: Explainer, *args: object, **kwargs: object) -> object:
+            calls["solve_batch"] += 1
+            return original_solve_batch(self, *args, **kwargs)  # type: ignore[arg-type]
+
+        def spy_explain_genetic(self: Explainer, *args: object, **kwargs: object) -> object:
+            calls["explain_genetic"] += 1
+            return original_explain_genetic(self, *args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(Explainer, "_solve_batch", spy_solve_batch)
+        monkeypatch.setattr(Explainer, "_explain_genetic", spy_explain_genetic)
+
+        batch = exp.explain_batch(X, TARGET, backend="exact", seed=0, allow_exact_batch=True)
+        assert len(batch) == 4
+        assert calls["solve_batch"] == 1
+        assert calls["explain_genetic"] == 0
+
+    def test_infeasible_warm_row_runs_unwarmed_with_no_ga_fallback(
+        self, exp: Explainer, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A warm draw that comes back infeasible must not trigger a per-row
+        genetic pass -- the exact search for that row simply runs unwarmed."""
+        from treecf.backends.genetic import GeneticResult
+
+        explain_genetic_calls = 0
+        original_explain_genetic = Explainer._explain_genetic
+
+        def spy_explain_genetic(self: Explainer, *args: object, **kwargs: object) -> object:
+            nonlocal explain_genetic_calls
+            explain_genetic_calls += 1
+            return original_explain_genetic(self, *args, **kwargs)  # type: ignore[arg-type]
+
+        def fake_solve_batch(
+            self: Explainer, X: object, tasks: list[object], *args: object, **kwargs: object
+        ) -> list[GeneticResult]:
+            return [GeneticResult(x_cf=None, stats={}) for _ in tasks]
+
+        monkeypatch.setattr(Explainer, "_explain_genetic", spy_explain_genetic)
+        monkeypatch.setattr(Explainer, "_solve_batch", fake_solve_batch)
+
+        X2 = np.zeros((2, 3))
+        batch = exp.explain_batch(X2, TARGET, backend="exact", seed=0, allow_exact_batch=True)
+        assert explain_genetic_calls == 0
+        assert all(r.feasible for r in batch)  # the (generous default budget) exact
+        # search still finds a counterfactual on its own, without the warm start
+
+    def test_lever_blocking_smoke(self, exp: Explainer) -> None:
+        batch = exp.explain_batch(
+            X[:1], TARGET, n_per_example=2, diversity="lever-blocking",
+            backend="exact", seed=0, allow_exact_batch=True,
+        )
+        records = [r for r in batch.for_id(0) if r.feasible]
+        assert records
+        assert records[0].blocked_lever is None
+
+
 class TestPersistence:
     def test_save_load_round_trip_with_nans(self, tmp_path: object) -> None:
         from treecf import AllowMissing
