@@ -65,6 +65,32 @@ coming back empty-handed (budget exhausted, a repair withdrawn, the genetic/pyth
 finding nothing) reports `proof="search_exhausted"`: a plan was not found, but nothing is proven
 about whether one exists.
 
+## When the budget runs out
+
+Whenever the exact backend returns any result with `solver_stats["completed"] is False` —
+`explain`, a `Target.bands` ladder, `explain_coalitions`, or `explain_batch` alike — a
+`TreecfWarning` fires, always, naming exactly one of two causes and never conflating them:
+
+- **The search genuinely ran out of budget** (`node_budget` nodes expanded, or `time_budget_s`
+  elapsed): the warning says so, states the node count, and — when a row was found — reports it
+  as the best found rather than proven optimal, together with a lower-bound/gap parenthetical
+  when one is available (`(lower bound X, gap ≤ Y%)`); it also points at raising the budgets or
+  passing `gap=` as the next move.
+- **A conservative constraint repair withdrew the optimality certificate without touching the
+  budget** — the same repair mechanism the first honesty note above describes: the row is still
+  real and float-verified, only the "cheapest possible" claim is dropped.
+
+If the search's own warm start (`warm_start=True`, the default) was unseeded (`seed=None`) and
+contributed the incumbent, the warning appends a clause noting that a rerun may land on a
+different heuristic result and that passing `seed=` fixes it.
+
+`Target.bands`, `explain_coalitions`, and `explain_batch` never emit one warning per degraded
+solve — they collapse every degraded solve from one call into a single aggregate `TreecfWarning`
+that breaks the count down by cause (`exhausted: N solves; withdrawn: M solves`) and points back
+at each result's own `proof`/`solver_stats` for which case applies to it. Read `solver_stats` on
+the affected result(s) directly for the full picture: `nodes_expanded`, `nodes_pruned_score`,
+`nodes_pruned_cost`, `lower_bound`, `gap`, `completed`, and `warm_start_used`.
+
 ## Value policies under certification
 
 `value_policy` changes what "optimal" is measured against, and the two backend families read a
@@ -132,7 +158,8 @@ feature count. In practice:
 - As a rule of thumb, keep the number of influential features to the low hundreds; well beyond
   that, `node_budget` or `time_budget_s` is likely to cut the search short before it settles the
   space (reported honestly as `proof="heuristic"` or `Infeasible.proof="search_exhausted"`,
-  never silently).
+  never silently — see [When the budget runs out](#when-the-budget-runs-out) for the
+  `TreecfWarning` this always triggers on `explain`/`explain_batch`/`explain_coalitions`).
 - `node_budget` (default 2,000,000 assignments) and `gap` (default `0.0`) are the two pressure
   valves: lowering `node_budget` bounds worst-case wall time at the cost of a less certain
   answer, and a `gap > 0` lets the search settle for — and honestly report, via
@@ -142,6 +169,24 @@ feature count. In practice:
   capped at 2 seconds) seeds the exact search with an incumbent before it starts branching,
   which prunes harder from the first node without costing anything from the main budget — the
   exact search still gets the full `time_budget_s` afterward.
+
+## Interrupting a search
+
+A `Ctrl-C` during an exact search, a certified-region growth, or a batch genetic solve raises
+`KeyboardInterrupt` promptly instead of waiting for the whole search to finish. The Rust core
+polls for it from inside its released GIL — for the exact search, about every 2^18 nodes — and
+the pure-Python exact fallback raises just as promptly, for a different reason: Python delivers
+signals between bytecode instructions, so there is nothing to poll for. Either way nothing is
+returned: whatever incumbent the search was holding, or however much of a region it had grown so
+far, is discarded rather than handed back partial.
+
+This is reliable only when the call happens on the **main thread** — Python only delivers
+`SIGINT` there, so a search launched from a worker thread will not see a `Ctrl-C` this way.
+
+`time_budget_s` is an *anytime* budget, not a deadline the search waits out: an interrupt at any
+point during it stops the search immediately rather than continuing to the budget's edge, and a
+search that finds nothing before the interrupt lands leaves no result to fall back on — the same
+`KeyboardInterrupt` propagates all the way up to caller code.
 
 ## What the exact backend does not certify yet
 
