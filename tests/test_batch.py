@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import json
+import re
 
 import numpy as np
 import pytest
 
-from treecf import Explainer, Target, TreecfError
-from treecf.batch import BatchResult
+from treecf import Explainer, Target, TreecfError, TreecfWarning
+from treecf.batch import BatchRecord, BatchResult
 from treecf.ir.model import EnsembleIR, Link, Node, SplitOp, Tree
 
 
@@ -272,6 +273,84 @@ class TestExactBatchOptIn:
         assert records[0].blocked_lever is None
 
 
+class TestRecordProof:
+    """``BatchRecord.proof``/``solver_stats`` mirror the single-instance result
+    that produced each record, so the aggregate degraded warning's pointer at
+    "each result's own proof/solver_stats" is true as written."""
+
+    def test_degraded_exact_batch_proofs_sum_to_the_warning_counts(
+        self, exp: Explainer
+    ) -> None:
+        """The aggregate warning's per-kind solve counts must equal the counts
+        recoverable from the records' own proof/solver_stats (one solve per
+        record here: each row's first attempt returns the warm incumbent)."""
+        node_budget = 1
+        with pytest.warns(TreecfWarning) as record:
+            batch = exp.explain_batch(
+                X[:3], TARGET, backend="exact", seed=0,
+                node_budget=node_budget, time_budget_s=5.0, allow_exact_batch=True,
+            )
+        assert len(record) == 1
+        message = str(record[0].message)
+        warned_counts = {kind: int(n) for kind, n in re.findall(r"(\w+): (\d+) solve", message)}
+
+        record_counts: dict[str, int] = {}
+        for r in batch:
+            stats = r.solver_stats
+            assert stats["completed"] is False  # every solve degraded here
+            kind = "exhausted" if int(stats["nodes_expanded"]) >= node_budget else "withdrawn"
+            record_counts[kind] = record_counts.get(kind, 0) + 1
+        assert record_counts == warned_counts
+        assert all(r.proof == "heuristic" for r in batch)  # exhausted with a warm row
+
+    def test_genetic_rows_are_heuristic_with_empty_stats(self, exp: Explainer) -> None:
+        batch = exp.explain_batch(X, TARGET, n_per_example=2, seed=0)
+        assert all(r.proof == "heuristic" for r in batch if r.feasible)
+        assert all(r.solver_stats == {} for r in batch)
+
+    def test_certified_infeasible_row_carries_certified_proof(self, exp: Explainer) -> None:
+        unreachable = Target.raw(op=">=", value=10.0)  # max raw score is 2.4
+        batch = exp.explain_batch(
+            X[:2], unreachable, backend="exact", seed=0, allow_exact_batch=True,
+        )
+        assert len(batch) == 2
+        for r in batch:
+            assert not r.feasible
+            assert r.proof == "certified"
+            assert r.solver_stats["completed"] is True
+
+    def test_optimal_rows_mirror_proof_and_stats(self, exp: Explainer) -> None:
+        batch = exp.explain_batch(
+            X[:2], TARGET, backend="exact", seed=0, allow_exact_batch=True,
+        )
+        for r in batch:
+            assert r.feasible
+            assert r.proof == "optimal"
+            assert r.solver_stats["completed"] is True
+
+    def test_construction_without_the_new_fields_still_works(self) -> None:
+        record = BatchRecord(
+            id=0, k=0, feasible=False, x_cf=None, changes={},
+            distance=None, n_changed=None, score_raw=None, score_prob=None,
+        )
+        assert record.proof == "heuristic"
+        assert record.solver_stats == {}
+
+    def test_proof_and_stats_round_trip_through_save_load(
+        self, exp: Explainer, tmp_path: object
+    ) -> None:
+        unreachable = Target.raw(op=">=", value=10.0)
+        batch = exp.explain_batch(
+            X[:2], unreachable, backend="exact", seed=0, allow_exact_batch=True,
+        )
+        path = f"{tmp_path}/batch_proof.json"
+        batch.save(path)
+        loaded = BatchResult.load(path)
+        for original, restored in zip(batch, loaded, strict=True):
+            assert restored.proof == original.proof
+            assert restored.solver_stats == original.solver_stats
+
+
 class TestPersistence:
     def test_save_load_round_trip_with_nans(self, tmp_path: object) -> None:
         from treecf import AllowMissing
@@ -357,7 +436,7 @@ class TestPersistence:
         batch = exp.explain_batch(X[:2], TARGET, n_per_example=1, seed=0)
         frame = batch.to_frame()
         assert isinstance(frame, pd.DataFrame)
-        for column in ("id", "k", "feasible", "distance", "cf_a", "cf_b", "cf_c"):
+        for column in ("id", "k", "feasible", "distance", "proof", "cf_a", "cf_b", "cf_c"):
             assert column in frame.columns
         assert len(frame) == len(batch)
 

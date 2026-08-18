@@ -210,6 +210,56 @@ the constraint set enough that the primary's incumbent does not necessarily stil
 them. `diversity="coalitions"` keeps per-coalition-solver `warm_start` throughout, for the same
 reason.
 
+## Audit certificates
+
+`Explainer.certificate(x, result, target)` turns any stored result — a `Counterfactual` or an
+`Infeasible`, fresh or reloaded years later — into a JSON-serializable audit record. A
+certificate is a *reproducibility record plus a fresh verification*: it binds the claim to a
+model fingerprint, a constraint fingerprint, and the solve parameters, and re-verifies the
+returned plan at issue time — it does not cryptographically prove that a search ran or that a
+`proof="optimal"` claim is true; re-running with the recorded seed and budgets on a
+fingerprint-matching model is how a validator checks that.
+
+The certificate is a plain `dict` with `"schema_version": 1` that serializes with
+`json.dumps(cert, allow_nan=False, sort_keys=True)` — non-finite floats are encoded as the
+strings `"NaN"`, `"Infinity"`, and `"-Infinity"` wherever they can occur. Its fields:
+
+| Field | Contents |
+|---|---|
+| `schema_version`, `created_utc`, `treecf_version` | Schema version (`1`), timezone-aware ISO 8601 issue time, the issuing treecf version |
+| `reproducible` (+ `reproducible_reason`) | `false` when a component has no canonical encoding (a callable `value_policy`), with the reason |
+| `model` | `ir_fingerprint` (SHA-256 over a canonical byte encoding of the ensemble), feature names, link name; a `plausibility` sub-block (forest fingerprint, `min_total_path`) when configured |
+| `constraints` | `fingerprint` (SHA-256 over the constraint set, `sigma`, `weights`, and value policies) plus a human-readable `listing` — the listing is for humans, the fingerprint is for machines |
+| `target` | Declared space and bounds (the band's own name and bounds for a `Target.bands` result, passed via `band=`), the resolved raw interval actually used, and `"calibrator": "external — not embedded"` for calibrated targets |
+| `solve` | `backend` (recovered from the result's own stats), `proof`, full `solver_stats`, and — when the caller supplies them — `seed`/`node_budget`/`gap`/`time_budget_s`/`warm_start` under `solve.declared` (the result object does not carry them, so their caller-supplied provenance stays explicit) |
+| `factual` / `plan` / `infeasible` | The factual `x`; for a `Counterfactual`: `x_cf`, `changes`, `distance`, `snapped`, and region intervals when present; for an `Infeasible`: `reason` and `proof` |
+| `verification` | Performed **fresh at issue time**, never copied from the solve: recomputed raw score, target membership, the compiled constraint check, plausibility when configured, and — for a region — a sampled set of re-checked points (each widened feature's endpoints plus the all-lo/all-hi corners; every checked point is recorded). For an `Infeasible` it records only whether the factual itself sits outside the target |
+
+A certificate whose fresh verification fails is still issued, with the failing booleans
+recorded — a certificate that refused to print a failure would hide exactly what it exists to
+catch — but a `TreecfWarning` names the failed check.
+
+`Explainer.check_certificate(cert)` is the validator's tool: it recomputes both fingerprints
+against *this* explainer, re-runs the verification block from the certificate's stored
+factual/plan, and reports — it never raises on a mismatch:
+
+```python
+cert = exp.certificate(x_row, res, target, seed=0, time_budget_s=10.0)
+stored = json.dumps(cert, allow_nan=False, sort_keys=True)   # file it with the decision
+
+# two years later, on the model and constraints the validator was handed:
+report = exp.check_certificate(json.loads(stored))
+report["model_match"]        # False if the ensemble was swapped
+report["constraints_match"]  # False if the constraint set changed
+report["verification_ok"]    # False if the stored plan no longer verifies
+report["mismatches"]         # one human-readable string per mismatch
+```
+
+For batches: every `BatchRecord` now carries its own `proof` and `solver_stats`, mirroring the
+single-instance result that produced it, so the aggregate degraded warning's pointer at each
+record's own fields is true as written. Build certificates per row post-hoc via
+`Explainer.certificate` — there is no batch convenience wrapper in this release.
+
 ## Interrupting a search
 
 A `Ctrl-C` during an exact search, a certified-region growth, or a batch genetic solve raises

@@ -15,6 +15,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-08-19
+
+### Added
+
+- **Audit certificates**: `Explainer.certificate(x, result, target)` turns any stored
+  `Counterfactual` or `Infeasible` (the certified "no" included) into a strict-JSON-serializable
+  audit record — a reproducibility record plus a fresh verification. It binds the claim to a
+  model fingerprint, a constraint fingerprint, and the solve parameters, and re-verifies the
+  returned plan (score, target membership, constraint check, plausibility, sampled region
+  points) at issue time; it does not cryptographically prove that a search ran or that a
+  `proof="optimal"` claim is true — re-running with the recorded seed/budgets on a
+  fingerprint-matching model is how a validator checks that. A certificate whose fresh
+  verification fails is still issued with the failing checks recorded, plus a `TreecfWarning`
+  naming them. `Explainer.check_certificate(cert)` is the validator's tool: it recomputes both
+  fingerprints against the current explainer, re-runs the verification block, and reports
+  (`model_match`/`constraints_match`/`verification_ok`/`mismatches`) without ever raising on a
+  mismatch. The new `treecf.audit` module exposes the underlying `ir_fingerprint` and
+  `constraints_fingerprint` (SHA-256 over canonical byte encodings — stable across Python
+  versions, platforms, and dict ordering; a callable `value_policy` has no canonical encoding
+  and marks the certificate `"reproducible": false` with a reason).
+- `BatchRecord.proof` and `BatchRecord.solver_stats`: every batch record now carries the claim
+  and (for exact solves) the diagnostics of the single-instance result that produced it —
+  `Counterfactual.proof` values for feasible records, `Infeasible.proof`
+  (`"search_exhausted"`/`"certified"`) for infeasibility markers. Genetic/python records carry
+  empty stats (those engines report no per-row diagnostics). `BatchResult.to_frame` gains a
+  `proof` column (`solver_stats` stays record-only); `save`/`load` round-trip both fields, and
+  files from earlier versions load with feasibility-based defaults.
+
+### Fixed
+
+- The batch aggregate degraded-result warning pointed at "each result's own
+  proof/solver_stats" while `BatchRecord` exposed neither field; the fields now exist, so the
+  message is true as written (the wording itself is unchanged).
+
+### Notes
+
+- No solver behavior changes; no fixtures touched; no Rust source changes (only the mirrored
+  version in `rust/Cargo.toml`/`Cargo.lock`).
+
 ## [0.2.1] - 2026-08-15
 
 ### Added

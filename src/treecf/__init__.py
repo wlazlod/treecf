@@ -10,6 +10,7 @@ from treecf._errors import (
     UnsupportedModelError,
 )
 from treecf.api import Counterfactual, Explainer, Grid, Infeasible
+from treecf.audit import constraints_fingerprint, ir_fingerprint
 from treecf.batch import BatchRecord, BatchResult
 from treecf.constraints import (
     AllowMissing,
@@ -27,7 +28,7 @@ from treecf.plausibility import Plausibility
 from treecf.regions import RecourseRegion
 from treecf.targets import Target
 
-__version__ = "0.2.1"
+__version__ = "0.2.2"
 
 __all__ = [
     "AllowMissing",
@@ -58,5 +59,7 @@ __all__ = [
     "UnsupportedModelError",
     "__version__",
     "constraint",
+    "constraints_fingerprint",
+    "ir_fingerprint",
     "suggest_constraints",
 ]

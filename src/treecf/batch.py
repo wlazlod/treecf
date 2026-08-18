@@ -39,9 +39,10 @@ class BatchRecord:
     """One counterfactual (or the infeasibility marker) for one dataset row.
 
     Fields mirror ``Counterfactual`` (``x_cf``, ``changes``, ``distance``,
-    ``n_changed``, ``score_raw``, ``score_prob``, ``region``), plus batch
-    bookkeeping: ``id`` and ``k`` place the record in the dataset, and
-    ``feasible`` distinguishes a real plan from the infeasibility marker.
+    ``n_changed``, ``score_raw``, ``score_prob``, ``proof``, ``solver_stats``,
+    ``region``), plus batch bookkeeping: ``id`` and ``k`` place the record in
+    the dataset, and ``feasible`` distinguishes a real plan from the
+    infeasibility marker.
 
     Attributes:
         id: The row identifier this record belongs to (an element of
@@ -84,6 +85,14 @@ class BatchRecord:
         region: The certified box around ``x_cf``, set only when
             ``explain_batch`` ran with ``region=True`` and ``feasible`` is
             ``True``; ``None`` otherwise.
+        proof: The claim this record makes, mirroring the single-instance
+            result that produced it: ``Counterfactual.proof`` (``"heuristic"``
+            | ``"optimal"`` | ``"optimal_within_gap"``) for a feasible
+            record, ``Infeasible.proof`` (``"search_exhausted"`` |
+            ``"certified"``) for an infeasibility marker.
+        solver_stats: Exact-backend diagnostics for the solve behind this
+            record, same keys as ``Counterfactual.solver_stats``; empty for
+            genetic/python solves (those engines report no per-row stats).
     """
 
     id: object
@@ -99,6 +108,8 @@ class BatchRecord:
     blocked_lever: str | None = None  # diversity="lever-blocking": the frozen lever
     coalition: str | None = None  # diversity="coalitions": the group this plan may touch
     region: RecourseRegion | None = None  # set by explain_batch(..., region=True)
+    proof: str = "heuristic"  # mirrors Counterfactual.proof / Infeasible.proof
+    solver_stats: dict[str, object] = field(default_factory=dict)  # exact-backend only
 
 
 @dataclass(frozen=True)
@@ -180,6 +191,11 @@ class BatchResult:
                     "seed": record.seed,
                     "blocked_lever": record.blocked_lever,
                     "coalition": record.coalition,
+                    "proof": record.proof,
+                    "solver_stats": {
+                        key: encode_floats(value)
+                        for key, value in record.solver_stats.items()
+                    },
                     "region": (
                         None
                         if record.region is None
@@ -207,7 +223,9 @@ class BatchResult:
         A file saved without ``region=True``, or by a version of treecf
         before regions existed, loads with every record's ``region`` set to
         ``None``; a file saved before coalition support loads with every
-        record's ``coalition`` set to ``None``.
+        record's ``coalition`` set to ``None``; a file saved before per-record
+        proofs existed loads with ``proof`` defaulted by feasibility
+        (``"heuristic"``/``"search_exhausted"``) and empty ``solver_stats``.
 
         Args:
             path: Path to a file written by ``save``.
@@ -257,6 +275,14 @@ class BatchResult:
                     blocked_lever=raw["blocked_lever"],
                     coalition=raw.get("coalition"),  # absent in pre-coalition files
                     region=region,
+                    # pre-0.2.2 files carry neither field; default by feasibility
+                    proof=raw.get(
+                        "proof", "heuristic" if raw["feasible"] else "search_exhausted"
+                    ),
+                    solver_stats={
+                        key: decode_floats(value)
+                        for key, value in raw.get("solver_stats", {}).items()
+                    },
                 )
             )
         essential_ids = [decode_floats(k) for k in data.get("essential_lever_ids", [])]
@@ -271,11 +297,13 @@ class BatchResult:
     def to_frame(self) -> Any:
         """One row per (id, k), wide ``cf_<feature>`` columns (pandas, lazy import).
 
-        Every ``BatchRecord`` field except ``x_cf``/``changes``/``region``
-        becomes its own column; ``x_cf`` is spread into one ``cf_<feature>``
-        column per model feature (``NaN`` for an infeasible record, or an
-        unchanged feature's factual-equal value); ``changes`` is summarized as
-        a ``changed_features`` column (sorted feature names).
+        Every ``BatchRecord`` field except ``x_cf``/``changes``/``region``/
+        ``solver_stats`` becomes its own column (``solver_stats`` stays
+        record-only — read it off the ``BatchRecord`` directly); ``x_cf`` is
+        spread into one ``cf_<feature>`` column per model feature (``NaN`` for
+        an infeasible record, or an unchanged feature's factual-equal value);
+        ``changes`` is summarized as a ``changed_features`` column (sorted
+        feature names).
 
         Returns:
             A pandas ``DataFrame`` with one row per record.
@@ -300,6 +328,7 @@ class BatchResult:
                 "seed": record.seed,
                 "blocked_lever": record.blocked_lever,
                 "coalition": record.coalition,
+                "proof": record.proof,
                 "changed_features": sorted(record.changes),
             }
             for j, name in enumerate(self.feature_names):
@@ -540,6 +569,13 @@ def explain_batch(
     )
 
 
+def _exact_stats(stats: dict[str, object]) -> dict[str, object]:
+    """Stats worth mirroring onto a record: the exact backend's per-solve
+    diagnostics (recognized by their ``completed`` key). Genetic/python engine
+    stats are not mirrored — those engines report no per-row diagnostics."""
+    return stats if "completed" in stats else {}
+
+
 def _record_from(
     row_id: object,
     k: int,
@@ -563,14 +599,23 @@ def _record_from(
         blocked_lever=blocked_lever,
         coalition=coalition,
         region=region,
+        proof=cf.proof,
+        solver_stats=_exact_stats(cf.solver_stats),
     )
 
 
-def _infeasible_record(row_id: object, k: int = 0, coalition: str | None = None) -> BatchRecord:
+def _infeasible_record(
+    row_id: object,
+    k: int = 0,
+    coalition: str | None = None,
+    infeasible: Infeasible | None = None,
+) -> BatchRecord:
     return BatchRecord(
         id=row_id, k=k, feasible=False, x_cf=None, changes={},
         distance=None, n_changed=None, score_raw=None, score_prob=None,
         coalition=coalition,
+        proof="search_exhausted" if infeasible is None else infeasible.proof,
+        solver_stats={} if infeasible is None else _exact_stats(infeasible.solver_stats),
     )
 
 
@@ -860,8 +905,9 @@ def _rows_by_coalitions(
             records.append(_record_from(row_id, k, cf, coalition=name, region=reg))
             k += 1
         for name in solvers:
-            if not isinstance(outcomes[name][i], Counterfactual):
-                records.append(_infeasible_record(row_id, k=k, coalition=name))
+            outcome = outcomes[name][i]
+            if isinstance(outcome, Infeasible):
+                records.append(_infeasible_record(row_id, k=k, coalition=name, infeasible=outcome))
                 k += 1
     return records
 
@@ -888,9 +934,10 @@ def _row_by_seeds(
     ``warm_start=False`` alongside it, so a ``None`` incumbent -- an
     infeasible warm draw -- also runs unwarmed rather than falling back to a
     per-attempt genetic pass; see ``explain_batch``'s ``allow_exact_batch``)."""
-    from treecf.api import Counterfactual
+    from treecf.api import Counterfactual, Infeasible
 
     found: dict[frozenset[str], tuple[Counterfactual, int]] = {}
+    last_infeasible: Infeasible | None = None
     for attempt in range(_SEED_ATTEMPT_FACTOR * n_per_example):
         attempt_seed = master_seed + attempt
         result = explainer._explain(
@@ -905,8 +952,10 @@ def _row_by_seeds(
                 found[key] = (result, attempt_seed)
                 if len(found) == n_per_example:
                     break
+        elif isinstance(result, Infeasible):  # bands are rejected by explain_batch
+            last_infeasible = result
     if not found:
-        return [_infeasible_record(row_id)]
+        return [_infeasible_record(row_id, infeasible=last_infeasible)]
     ranked = sorted(found.values(), key=lambda pair: pair[0].distance)[:n_per_example]
     interval = target.raw_interval(explainer.ir.link) if region else None
     return [
@@ -947,7 +996,7 @@ def _row_by_lever_blocking(
         assert not isinstance(explained, dict)  # bands are rejected by explain_batch
         primary = explained
     if not isinstance(primary, Counterfactual):
-        return [_infeasible_record(row_id)], []
+        return [_infeasible_record(row_id, infeasible=primary)], []
 
     interval = target.raw_interval(explainer.ir.link) if region else None
     primary_region = (

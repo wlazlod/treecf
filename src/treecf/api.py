@@ -1248,6 +1248,98 @@ class Explainer:
             )
         return self._region_for(x, x_cf, interval)
 
+    def certificate(
+        self,
+        x: FloatArray,
+        result: Counterfactual | Infeasible,
+        target: Target,
+        *,
+        band: str | None = None,
+        seed: int | None = None,
+        node_budget: int | None = None,
+        gap: float | None = None,
+        time_budget_s: float | None = None,
+        warm_start: bool | None = None,
+    ) -> dict[str, object]:
+        """Issue an audit certificate for a stored result (post-hoc, like
+        ``recourse_region``).
+
+        A certificate is a reproducibility record plus a fresh verification —
+        it binds the result to a model fingerprint, a constraint fingerprint,
+        and the solve parameters, and re-verifies the returned plan at issue
+        time; it does not cryptographically prove that a search ran or that a
+        ``proof="optimal"`` claim is true — re-running with the recorded seed
+        and budgets on a fingerprint-matching model is how a validator checks
+        that. See
+        [Certification — audit certificates](concepts/certification.md#audit-certificates)
+        for the schema.
+
+        The certificate is a plain ``dict`` (``"schema_version": 1``) that
+        serializes with ``json.dumps(cert, allow_nan=False, sort_keys=True)``;
+        non-finite floats are encoded as the strings ``"NaN"``/``"Infinity"``/
+        ``"-Infinity"``. Accepts a ``Counterfactual`` or an ``Infeasible`` —
+        the certified "no" is exactly the case a validator cares most about.
+        The verification block is computed fresh here, never copied from the
+        solve: the plan's score, target membership, and constraint check are
+        recomputed (plus the plausibility bound when configured, and a sampled
+        set of region points when the result carries a region). A certificate
+        whose fresh verification fails is still returned, with the failing
+        booleans recorded — but a ``TreecfWarning`` names the failed check.
+
+        ``seed``/``node_budget``/``gap``/``time_budget_s``/``warm_start`` are
+        recorded under ``solve.declared`` when given: the result object does
+        not carry them, so they are caller-supplied, and the block's name
+        makes that provenance explicit.
+
+        Args:
+            x: The factual instance the result was solved from.
+            result: The ``Counterfactual`` or ``Infeasible`` to certify.
+            target: The target the result was solved against.
+            band: For a ``Target.bands`` result, the band this result belongs
+                to; required then, invalid otherwise.
+            seed: The seed the solve ran with, if the caller wants it recorded.
+            node_budget: The node budget the solve ran with, likewise.
+            gap: The relative gap the solve ran with, likewise.
+            time_budget_s: The time budget the solve ran with, likewise.
+            warm_start: The warm-start setting the solve ran with, likewise.
+
+        Returns:
+            The certificate as a strict-JSON-serializable ``dict``.
+
+        Raises:
+            TreecfError: If ``target`` is a ``Target.bands`` ladder and
+                ``band`` is missing or unknown, or if ``band`` is given for a
+                plain-interval target.
+        """
+        from treecf.audit import build_certificate
+
+        return build_certificate(
+            self, x, result, target, band=band, seed=seed, node_budget=node_budget,
+            gap=gap, time_budget_s=time_budget_s, warm_start=warm_start,
+        )
+
+    def check_certificate(self, cert: dict[str, object]) -> dict[str, object]:
+        """Validate a stored certificate against *this* explainer.
+
+        Recomputes both fingerprints (model and constraints) against this
+        explainer and re-runs the certificate's verification block from its
+        stored factual/plan, so a tampered ``x_cf``, a swapped model, or a
+        changed constraint set each flips the corresponding boolean. This
+        method reports — it never raises on a mismatch.
+
+        Args:
+            cert: A certificate produced by ``Explainer.certificate`` (a
+                ``json.loads`` round trip of one works identically).
+
+        Returns:
+            ``{"model_match": bool, "constraints_match": bool,
+            "verification_ok": bool, "mismatches": [...]}`` with one
+            human-readable string per mismatch.
+        """
+        from treecf.audit import check_certificate
+
+        return check_certificate(self, cert)
+
     def _region_for(
         self, x: FloatArray, x_cf: FloatArray, interval: tuple[float, float]
     ) -> RecourseRegion:

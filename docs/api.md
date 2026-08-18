@@ -40,6 +40,12 @@
 
 ::: treecf.RecourseRegion
 
+## Audit
+
+::: treecf.ir_fingerprint
+
+::: treecf.constraints_fingerprint
+
 ## Visualization
 
 ::: treecf.viz
