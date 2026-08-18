@@ -1,0 +1,1643 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Constrained, threshold-aware counterfactual explanations for tree ensembles.">
+      
+      
+      
+        <link rel="canonical" href="https://wlazlod.github.io/treecf/concepts/certification/">
+      
+      
+        <link rel="prev" href="../backends/">
+      
+      
+        <link rel="next" href="../../notebooks/01-quickstart/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Certification - treecf</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#certification" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="treecf" class="md-header__button md-logo" aria-label="treecf" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            treecf
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Certification
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="teal" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/wlazlod/treecf" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    wlazlod/treecf
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="treecf" class="md-nav__button md-logo" aria-label="treecf" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    treecf
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/wlazlod/treecf" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    wlazlod/treecf
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-it-works/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    How it works
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Concepts
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../models/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Models and the IR
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../targets/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Targets
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../calibration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Calibration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../constraints/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Constraints
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../missing-values/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Missing values
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../plausibility/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Plausibility
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../coalitions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coalitions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../backends/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backends and proofs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Certification
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Certification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#what-a-certificate-covers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What a certificate covers
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#proof-taxonomy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Proof taxonomy
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Proof taxonomy">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#two-honesty-notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Two honesty notes
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#when-the-budget-runs-out" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        When the budget runs out
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#value-policies-under-certification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Value policies under certification
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#regions-certified-not-maximal-not-monotone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Regions: certified, not maximal, not monotone
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#scaling-guidance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scaling guidance
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-exact-batch-opt-in" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The exact-batch opt-in
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#audit-certificates" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Audit certificates
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#interrupting-a-search" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Interrupting a search
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-the-exact-backend-does-not-certify-yet" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What the exact backend does not certify yet
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-approaches" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related approaches
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-to-go-next" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where to go next
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tutorials
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Tutorials
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../notebooks/01-quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../notebooks/02-credit-risk-tutorial/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Credit-risk tutorial
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../notebooks/03-no-solver-environments/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Restricted environments: JSON dumps + the Rust genetic engine
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../faq/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    FAQ
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#what-a-certificate-covers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What a certificate covers
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#proof-taxonomy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Proof taxonomy
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Proof taxonomy">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#two-honesty-notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Two honesty notes
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#when-the-budget-runs-out" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        When the budget runs out
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#value-policies-under-certification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Value policies under certification
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#regions-certified-not-maximal-not-monotone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Regions: certified, not maximal, not monotone
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#scaling-guidance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scaling guidance
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-exact-batch-opt-in" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The exact-batch opt-in
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#audit-certificates" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Audit certificates
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#interrupting-a-search" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Interrupting a search
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-the-exact-backend-does-not-certify-yet" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What the exact backend does not certify yet
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-approaches" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related approaches
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-to-go-next" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where to go next
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="certification">Certification<a class="headerlink" href="#certification" title="Permanent link">&para;</a></h1>
+<p>Every backend float-verifies its own answer before returning it — that much is true of
+<code>"genetic"</code>, <code>"python"</code>, and <code>"exact"</code> alike (see <a href="../../how-it-works/#nothing-ships-unverified">How it works — nothing ships
+unverified</a>). <strong>Certification</strong> is a stronger,
+separate claim that only <code>backend="exact"</code> and <code>Explainer.recourse_region</code> can make: not just
+"this row checks out" but "no cheaper row exists" or "every row in this box checks out". This
+page is about what that stronger claim covers, what it does not, and where it stops.</p>
+<h2 id="what-a-certificate-covers">What a certificate covers<a class="headerlink" href="#what-a-certificate-covers" title="Permanent link">&para;</a></h2>
+<p>A treecf certificate is a statement about the artifact you handed the <code>Explainer</code> — this parsed
+model, this compiled constraint set, this plausibility threshold (if any), these value-policy
+domains (if any) — at the moment the search ran. It is not a statement about the world:</p>
+<ul>
+<li>It says nothing about whether the model itself generalizes, or whether the training data it
+  learned from was representative.</li>
+<li>It says nothing about whether the real applicant behind the row can actually execute the
+  plan — only that the plan, as a vector of feature values, is feasible against the constraints
+  you declared.</li>
+<li>Change the model, the constraints, the plausibility bound, or a value policy, and you have a
+  different problem with its own certificate; nothing carries over.</li>
+</ul>
+<p>Within that scope the claim is exact: the search enumerates the same kind of candidate grid every
+backend shares — the model's cells, refined by the compiled constraints (see <a href="../../how-it-works/#the-search-space-cells-not-real-numbers">How it works — the
+search space</a>) — and every row it
+returns is re-verified against the model in float space before you see it, the same as every
+other backend.</p>
+<h2 id="proof-taxonomy">Proof taxonomy<a class="headerlink" href="#proof-taxonomy" title="Permanent link">&para;</a></h2>
+<p><code>Counterfactual.proof</code> is always one of three values, and <code>Infeasible.proof</code> one of two:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Value</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Counterfactual.proof</code></td>
+<td><code>"heuristic"</code></td>
+<td>No optimality claim — the default for <code>"genetic"</code>/<code>"python"</code>, always; see below for when <code>"exact"</code> also reports it</td>
+</tr>
+<tr>
+<td><code>Counterfactual.proof</code></td>
+<td><code>"optimal"</code></td>
+<td>The exact backend proved no cheaper feasible row exists in the searched grid</td>
+</tr>
+<tr>
+<td><code>Counterfactual.proof</code></td>
+<td><code>"optimal_within_gap"</code></td>
+<td><code>gap &gt; 0</code> was passed; the exact backend proved no row cheaper by more than that relative fraction exists</td>
+</tr>
+<tr>
+<td><code>Infeasible.proof</code></td>
+<td><code>"search_exhausted"</code></td>
+<td>The default — a budget ran out, or a heuristic search found nothing; nothing is proven about whether a counterfactual exists at all</td>
+</tr>
+<tr>
+<td><code>Infeasible.proof</code></td>
+<td><code>"certified"</code></td>
+<td>Exact-backend only — every assignment the searched grid allows was tried and none was feasible; <code>reason</code> names the node count behind the proof</td>
+</tr>
+</tbody>
+</table>
+<h3 id="two-honesty-notes">Two honesty notes<a class="headerlink" href="#two-honesty-notes" title="Permanent link">&para;</a></h3>
+<p><strong>A feasible exact result can report <code>proof="heuristic"</code> without exhausting <code>node_budget</code> or
+<code>time_budget_s</code>.</strong> Two features tied by an inter-feature constraint (<code>constraint("a &lt;= b")</code>)
+sometimes need a repaired value the search's own candidate grid does not offer; the repair is
+conservative by design — see <a href="../../how-it-works/#the-exact-search-cells-domains-and-branch-and-bound">How it works</a>
+— and when it cannot settle every such pair it withdraws the optimality claim rather than risk
+overstating it. The row itself is still real, still float-verified, and still the cheapest one
+the search happened to find — only the "cheapest possible" claim is dropped. Read <code>proof</code>, not
+<code>x_cf</code>'s presence, to know which claim you got:</p>
+<div class="highlight"><pre><span></span><code><span class="n">res</span> <span class="o">=</span> <span class="n">exp</span><span class="o">.</span><span class="n">explain</span><span class="p">(</span><span class="n">applicant</span><span class="p">,</span> <span class="n">target</span><span class="o">=</span><span class="n">t</span><span class="p">,</span> <span class="n">backend</span><span class="o">=</span><span class="s2">&quot;exact&quot;</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+<span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">res</span><span class="p">,</span> <span class="n">Counterfactual</span><span class="p">):</span>
+    <span class="n">res</span><span class="o">.</span><span class="n">proof</span>         <span class="c1"># &quot;optimal&quot; | &quot;optimal_within_gap&quot; | &quot;heuristic&quot;</span>
+    <span class="n">res</span><span class="o">.</span><span class="n">solver_stats</span>   <span class="c1"># nodes_expanded, nodes_pruned_score, nodes_pruned_cost,</span>
+                        <span class="c1"># lower_bound, gap, completed, warm_start_used</span>
+</code></pre></div>
+<p><strong>Certified infeasibility comes only from a completed search.</strong> <code>Infeasible.proof="certified"</code>
+means the exact backend enumerated the whole reachable grid and rejected every row — it did not
+run out of budget, and it did not give up partway through a constraint repair. Every other way of
+coming back empty-handed (budget exhausted, a repair withdrawn, the genetic/python backends
+finding nothing) reports <code>proof="search_exhausted"</code>: a plan was not found, but nothing is proven
+about whether one exists.</p>
+<h2 id="when-the-budget-runs-out">When the budget runs out<a class="headerlink" href="#when-the-budget-runs-out" title="Permanent link">&para;</a></h2>
+<p>Whenever the exact backend returns any result with <code>solver_stats["completed"] is False</code> —
+<code>explain</code>, a <code>Target.bands</code> ladder, <code>explain_coalitions</code>, or <code>explain_batch</code> alike — a
+<code>TreecfWarning</code> fires, always, naming exactly one of two causes and never conflating them:</p>
+<ul>
+<li><strong>The search genuinely ran out of budget</strong> (<code>node_budget</code> nodes expanded, or <code>time_budget_s</code>
+  elapsed): the warning says so, states the node count, and — when a row was found — reports it
+  as the best found rather than proven optimal, together with a lower-bound/gap parenthetical
+  when one is available (<code>(lower bound X, gap ≤ Y%)</code>); it also points at raising the budgets or
+  passing <code>gap=</code> as the next move.</li>
+<li><strong>A conservative constraint repair withdrew the optimality certificate without touching the
+  budget</strong> — the same repair mechanism the first honesty note above describes: the row is still
+  real and float-verified, only the "cheapest possible" claim is dropped.</li>
+</ul>
+<p>If the search's own warm start (<code>warm_start=True</code>, the default) was unseeded (<code>seed=None</code>) and
+contributed the incumbent, the warning appends a clause noting that a rerun may land on a
+different heuristic result and that passing <code>seed=</code> fixes it.</p>
+<p><code>Target.bands</code>, <code>explain_coalitions</code>, and <code>explain_batch</code> never emit one warning per degraded
+solve — they collapse every degraded solve from one call into a single aggregate <code>TreecfWarning</code>
+that breaks the count down by cause (<code>exhausted: N solves; withdrawn: M solves</code>) and points back
+at each result's own <code>proof</code>/<code>solver_stats</code> for which case applies to it. Read <code>solver_stats</code> on
+the affected result(s) directly for the full picture: <code>nodes_expanded</code>, <code>nodes_pruned_score</code>,
+<code>nodes_pruned_cost</code>, <code>lower_bound</code>, <code>gap</code>, <code>completed</code>, and <code>warm_start_used</code>.</p>
+<h2 id="value-policies-under-certification">Value policies under certification<a class="headerlink" href="#value-policies-under-certification" title="Permanent link">&para;</a></h2>
+<p><code>value_policy</code> changes what "optimal" is measured against, and the two backend families read a
+policy differently:</p>
+<ul>
+<li><strong>The exact backend treats a value policy as a hard constraint.</strong> Policy-conforming values are
+  the only candidates its search ever builds — a feature under <code>value_policy={"n_active_loans":
+  "integer"}</code> never gets a fractional candidate to begin with. So <code>proof="optimal"</code> on a policy
+  run means <em>optimal among policy-conforming rows</em>, not optimal over the unrestricted space.
+  A callable <code>value_policy</code> is rejected outright at exact-backend validation time (it names
+  <code>backend="genetic"</code> as the fallback): the search has no way to enumerate an arbitrary
+  function's conforming values.</li>
+<li><strong>The genetic backend treats a value policy as a soft preference.</strong> It searches the
+  unrestricted space and snaps the winning row onto the policy afterward, reverting features one
+  at a time if snapping breaks feasibility. For a changed feature under a policy,
+  <code>snapped[name] = False</code> can mean either of two things: no conforming value existed inside the
+  feature's cell to snap to, or one did and was applied but later reverted because the snapped
+  row failed verification — either way, the row you get back may hold a value the policy would
+  not have chosen.</li>
+</ul>
+<p>The two backends can therefore legitimately return different answers on the same policy run —
+not because one is wrong, but because they are certifying against different candidate sets.</p>
+<h2 id="regions-certified-not-maximal-not-monotone">Regions: certified, not maximal, not monotone<a class="headerlink" href="#regions-certified-not-maximal-not-monotone" title="Permanent link">&para;</a></h2>
+<p><code>explain(..., region=True)</code> (or <code>Explainer.recourse_region</code> directly) widens a verified
+counterfactual into a <code>RecourseRegion</code> — a per-feature box around it. The certificate here is
+per-point: <strong>every point inside the box, not just the counterfactual itself, is independently a
+valid counterfactual</strong> — still in the target interval,
+still plausible when plausibility is configured, still constraint-feasible — proven by an
+interval-tree walk of every ensemble tree plus a worst-corner check of every linear constraint,
+never by sampling.</p>
+<p>Two things the certificate does <em>not</em> claim:</p>
+<ul>
+<li><strong>Not maximal.</strong> The box is grown greedily, one joint-grid cell at a time, accepting an
+  expansion only when the whole enlarged box still passes the soundness oracle. A larger sound
+  box may exist that this growth order did not find.</li>
+<li><strong>Not monotone in the target.</strong> A strictly narrower target interval can still produce a
+  strictly wider region on some feature — growth is greedy and order-dependent, so a feature
+  that is forced to stop early on one target can free up room a later feature grows into on a
+  narrower one. Do not assume tightening the target only shrinks the region.</li>
+</ul>
+<p><code>region.describe()</code> gives one human-readable phrase per non-degenerate feature — two-sided
+(<code>"in [lo, hi]"</code>) when both endpoints are finite, one-sided (<code>"≤ v"</code> / <code>"≥ v"</code>) <em>only</em> when
+the other side is genuinely unbounded, not merely wide, and <code>"unconstrained"</code> when both
+endpoints are unbounded. <code>plot_recourse_map(..., schematic=True)</code>
+reads these phrases directly when a plan carries a region, in place of the single-value wording
+it otherwise falls back to.</p>
+<p>Features an <code>Implies</code>, a <code>OneHot</code>, or an unsupported multi-feature <code>Linear</code> could still break are
+never widened at all — they stay pinned at the counterfactual's own value, conservatively, rather
+than trust an argument this release has not proven sound for those shapes.</p>
+<h2 id="scaling-guidance">Scaling guidance<a class="headerlink" href="#scaling-guidance" title="Permanent link">&para;</a></h2>
+<p>The exact search is a branch-and-bound over a per-feature candidate grid, and its worst case is
+exponential in the number of <em>influential</em> features — features the search actually branches on,
+because more than one candidate value survives constraint pruning — not in the model's total
+feature count. In practice:</p>
+<ul>
+<li><code>Freeze</code> and other constraints that pin a feature to one value remove it from branching
+  entirely, so a heavily constrained problem searches a much smaller space than the raw feature
+  count suggests.</li>
+<li>As a rule of thumb, keep the number of influential features to the low hundreds; well beyond
+  that, <code>node_budget</code> or <code>time_budget_s</code> is likely to cut the search short before it settles the
+  space (reported honestly as <code>proof="heuristic"</code> or <code>Infeasible.proof="search_exhausted"</code>,
+  never silently — see <a href="#when-the-budget-runs-out">When the budget runs out</a> for the
+  <code>TreecfWarning</code> this always triggers on <code>explain</code>/<code>explain_batch</code>/<code>explain_coalitions</code>).</li>
+<li><code>node_budget</code> (default 2,000,000 assignments) and <code>gap</code> (default <code>0.0</code>) are the two pressure
+  valves: lowering <code>node_budget</code> bounds worst-case wall time at the cost of a less certain
+  answer, and a <code>gap &gt; 0</code> lets the search settle for — and honestly report, via
+  <code>proof="optimal_within_gap"</code> — a row provably within that relative fraction of the true
+  optimum instead of paying for the last few percent.</li>
+<li><code>warm_start</code> defaults to <code>True</code>: a short genetic pass (about a quarter of <code>time_budget_s</code>,
+  capped at 2 seconds) seeds the exact search with an incumbent before it starts branching,
+  which prunes harder from the first node without costing anything from the main budget — the
+  exact search still gets the full <code>time_budget_s</code> afterward.</li>
+<li>The budgets can be removed entirely: <code>time_budget_s=math.inf</code> disables the time cut, and a
+  very large <code>node_budget</code> (any value up to 2^64 − 1) makes the node cut unreachable, so the
+  search runs until it proves optimality or certified infeasibility — practical since Ctrl-C
+  now aborts promptly (see <a href="#interrupting-a-search">Interrupting a search</a>). An unlimited
+  budget guarantees the search completes, not that it certifies: the conservative constraint
+  repair described above can still return an honestly-warned <code>proof="heuristic"</code>.</li>
+</ul>
+<h2 id="the-exact-batch-opt-in">The exact-batch opt-in<a class="headerlink" href="#the-exact-batch-opt-in" title="Permanent link">&para;</a></h2>
+<p><code>explain_batch(..., backend="exact")</code> has no vectorized population to parallelize the way the
+genetic engine does — it loops the single-instance exact solve per row (and per plan, for
+<code>diversity="lever-blocking"</code>), sequentially, and each row still gets the full, undiminished
+<code>time_budget_s</code>. That wall time is easy to underestimate from a single
+<code>explain(..., backend="exact")</code> call, so the batch path requires explicit consent:
+<code>backend="exact"</code> without <code>allow_exact_batch=True</code> raises <code>ValueError</code> instead of running,
+naming the arithmetic behind the estimate — <code>rows × plans × time_budget_s</code>, hours-formatted,
+where <code>plans</code> is <code>n_per_example</code> for <code>diversity="seeds"</code>/<code>"lever-blocking"</code> or the coalition
+count (<code>len(coalitions) + 1</code> when <code>include_full=True</code>) for <code>diversity="coalitions"</code>. The figure
+is a floor, not a ceiling: <code>diversity="seeds"</code> retries up to three attempts per requested plan
+when a draw collides with one already found, so its actual wall time can run past the estimate;
+the other two diversity modes never exceed it.</p>
+<p>Opting in also changes how <code>warm_start</code> (default <code>True</code>) behaves. Instead of every row (or, in
+<code>diversity="seeds"</code>, every attempt) running its own internal genetic warm pass, one vectorized
+<code>Explainer._solve_batch</code> call warms every row at once, budgeted at
+<code>min(time_budget_s * 0.25, 2.0)</code> regardless of row count — the saving is entirely in the warm-up,
+not in the exact search itself: each row's exact solve afterward still gets the full
+<code>time_budget_s</code>. A row whose warm draw comes back infeasible, or fails float-space verification,
+gets no incumbent and runs unwarmed; there is no per-row genetic fallback.</p>
+<p>For <code>diversity="seeds"</code>, the shared warm pass has a real trade-off: every attempt of a row starts
+from the same one incumbent, rather than each attempt warm-starting its own the way a sequential
+run of <code>explain</code> would. With <code>n_per_example=1</code> that makes no difference — the result matches a
+sequential <code>explain(..., backend="exact")</code> call exactly — but for <code>n_per_example &gt; 1</code> a batch run
+is not guaranteed to explore as many distinct warm starts per row as an equivalent sequence of
+<code>explain</code> calls would. <code>diversity="lever-blocking"</code> shares the incumbent for the primary solve
+only; the per-lever frozen clones keep their own per-solve <code>warm_start</code>, since a <code>Freeze</code> changes
+the constraint set enough that the primary's incumbent does not necessarily still verify for
+them. <code>diversity="coalitions"</code> keeps per-coalition-solver <code>warm_start</code> throughout, for the same
+reason.</p>
+<h2 id="audit-certificates">Audit certificates<a class="headerlink" href="#audit-certificates" title="Permanent link">&para;</a></h2>
+<p><code>Explainer.certificate(x, result, target)</code> turns any stored result — a <code>Counterfactual</code> or an
+<code>Infeasible</code>, fresh or reloaded years later — into a JSON-serializable audit record. A
+certificate is a <em>reproducibility record plus a fresh verification</em>: it binds the claim to a
+model fingerprint, a constraint fingerprint, and the solve parameters, and re-verifies the
+returned plan at issue time — it does not cryptographically prove that a search ran or that a
+<code>proof="optimal"</code> claim is true; re-running with the recorded seed and budgets on a
+fingerprint-matching model is how a validator checks that.</p>
+<p>The certificate is a plain <code>dict</code> with <code>"schema_version": 1</code> that serializes with
+<code>json.dumps(cert, allow_nan=False, sort_keys=True)</code> — non-finite floats are encoded as the
+strings <code>"NaN"</code>, <code>"Infinity"</code>, and <code>"-Infinity"</code> wherever they can occur. Its fields:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Contents</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>schema_version</code>, <code>created_utc</code>, <code>treecf_version</code></td>
+<td>Schema version (<code>1</code>), timezone-aware ISO 8601 issue time, the issuing treecf version</td>
+</tr>
+<tr>
+<td><code>reproducible</code> (+ <code>reproducible_reason</code>)</td>
+<td><code>false</code> when a component has no canonical encoding (a callable <code>value_policy</code>), with the reason</td>
+</tr>
+<tr>
+<td><code>model</code></td>
+<td><code>ir_fingerprint</code> (SHA-256 over a canonical byte encoding of the ensemble), feature names, link name; a <code>plausibility</code> sub-block (forest fingerprint, <code>min_total_path</code>) when configured</td>
+</tr>
+<tr>
+<td><code>constraints</code></td>
+<td><code>fingerprint</code> (SHA-256 over the constraint set, <code>sigma</code>, <code>weights</code>, and value policies) plus a human-readable <code>listing</code> — the listing is for humans, the fingerprint is for machines</td>
+</tr>
+<tr>
+<td><code>target</code></td>
+<td>Declared space and bounds (the band's own name and bounds for a <code>Target.bands</code> result, passed via <code>band=</code>), the resolved raw interval actually used, and <code>"calibrator": "external — not embedded"</code> for calibrated targets</td>
+</tr>
+<tr>
+<td><code>solve</code></td>
+<td><code>backend</code> (recovered from the result's own stats), <code>proof</code>, full <code>solver_stats</code>, and — when the caller supplies them — <code>seed</code>/<code>node_budget</code>/<code>gap</code>/<code>time_budget_s</code>/<code>warm_start</code> under <code>solve.declared</code> (the result object does not carry them, so their caller-supplied provenance stays explicit)</td>
+</tr>
+<tr>
+<td><code>factual</code> / <code>plan</code> / <code>infeasible</code></td>
+<td>The factual <code>x</code>; for a <code>Counterfactual</code>: <code>x_cf</code>, <code>changes</code>, <code>distance</code>, <code>snapped</code>, and region intervals when present; for an <code>Infeasible</code>: <code>reason</code> and <code>proof</code></td>
+</tr>
+<tr>
+<td><code>verification</code></td>
+<td>Performed <strong>fresh at issue time</strong>, never copied from the solve: recomputed raw score, target membership, the compiled constraint check, plausibility when configured, and — for a region — a sampled set of re-checked points (each widened feature's endpoints plus the all-lo/all-hi corners; every checked point is recorded). For an <code>Infeasible</code> it records only whether the factual itself sits outside the target</td>
+</tr>
+</tbody>
+</table>
+<p>A certificate whose fresh verification fails is still issued, with the failing booleans
+recorded — a certificate that refused to print a failure would hide exactly what it exists to
+catch — but a <code>TreecfWarning</code> names the failed check.</p>
+<p><code>Explainer.check_certificate(cert)</code> is the validator's tool: it recomputes both fingerprints
+against <em>this</em> explainer, re-runs the verification block from the certificate's stored
+factual/plan, and reports — it never raises on a mismatch:</p>
+<div class="highlight"><pre><span></span><code><span class="n">cert</span> <span class="o">=</span> <span class="n">exp</span><span class="o">.</span><span class="n">certificate</span><span class="p">(</span><span class="n">x_row</span><span class="p">,</span> <span class="n">res</span><span class="p">,</span> <span class="n">target</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">time_budget_s</span><span class="o">=</span><span class="mf">10.0</span><span class="p">)</span>
+<span class="n">stored</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">dumps</span><span class="p">(</span><span class="n">cert</span><span class="p">,</span> <span class="n">allow_nan</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">sort_keys</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>   <span class="c1"># file it with the decision</span>
+
+<span class="c1"># two years later, on the model and constraints the validator was handed:</span>
+<span class="n">report</span> <span class="o">=</span> <span class="n">exp</span><span class="o">.</span><span class="n">check_certificate</span><span class="p">(</span><span class="n">json</span><span class="o">.</span><span class="n">loads</span><span class="p">(</span><span class="n">stored</span><span class="p">))</span>
+<span class="n">report</span><span class="p">[</span><span class="s2">&quot;model_match&quot;</span><span class="p">]</span>        <span class="c1"># False if the ensemble was swapped</span>
+<span class="n">report</span><span class="p">[</span><span class="s2">&quot;constraints_match&quot;</span><span class="p">]</span>  <span class="c1"># False if the constraint set changed</span>
+<span class="n">report</span><span class="p">[</span><span class="s2">&quot;verification_ok&quot;</span><span class="p">]</span>    <span class="c1"># False if the stored plan no longer verifies</span>
+<span class="n">report</span><span class="p">[</span><span class="s2">&quot;mismatches&quot;</span><span class="p">]</span>         <span class="c1"># one human-readable string per mismatch</span>
+</code></pre></div>
+<p>For batches: every <code>BatchRecord</code> now carries its own <code>proof</code> and <code>solver_stats</code>, mirroring the
+single-instance result that produced it, so the aggregate degraded warning's pointer at each
+record's own fields is true as written. Build certificates per row post-hoc via
+<code>Explainer.certificate</code> — there is no batch convenience wrapper in this release.</p>
+<h2 id="interrupting-a-search">Interrupting a search<a class="headerlink" href="#interrupting-a-search" title="Permanent link">&para;</a></h2>
+<p>A <code>Ctrl-C</code> during an exact search, a certified-region growth, or a batch genetic solve raises
+<code>KeyboardInterrupt</code> promptly instead of waiting for the whole search to finish. The Rust core
+polls for it from inside its released GIL — for the exact search, about every 2^18 nodes — and
+the pure-Python exact fallback raises just as promptly, for a different reason: Python delivers
+signals between bytecode instructions, so there is nothing to poll for. Either way nothing is
+returned: whatever incumbent the search was holding, or however much of a region it had grown so
+far, is discarded rather than handed back partial.</p>
+<p>This is reliable only when the call happens on the <strong>main thread</strong> — Python only delivers
+<code>SIGINT</code> there, so a search launched from a worker thread will not see a <code>Ctrl-C</code> this way.</p>
+<p><code>time_budget_s</code> is an <em>anytime</em> budget, not a deadline the search waits out: an interrupt at any
+point during it stops the search immediately rather than continuing to the budget's edge, and a
+search that finds nothing before the interrupt lands leaves no result to fall back on — the same
+<code>KeyboardInterrupt</code> propagates all the way up to caller code.</p>
+<h2 id="what-the-exact-backend-does-not-certify-yet">What the exact backend does not certify yet<a class="headerlink" href="#what-the-exact-backend-does-not-certify-yet" title="Permanent link">&para;</a></h2>
+<p>The exact backend supports single-feature <code>Linear</code> constraints and the canonical two-feature
+order-pair shape (<code>constraint("a &lt;= b")</code>, i.e. <code>a - b &lt;= 0</code>) exactly. Any other multi-feature
+<code>Linear</code> — three or more features, or a two-feature shape other than the canonical order pair —
+raises <code>ConstraintValidationError</code> and names <code>backend="genetic"</code> as the fallback: the genetic
+engine has no such restriction, at the cost of the optimality proof.</p>
+<h2 id="related-approaches">Related approaches<a class="headerlink" href="#related-approaches" title="Permanent link">&para;</a></h2>
+<p>treecf's exact backend sits in a line of mixed-integer/constraint work on tree ensembles, though
+it depends on no external solver. Kantchelian, Tygar &amp; Joseph, <em>Evasion and Hardening of Tree
+Ensemble Classifiers</em> (ICML 2016), formulate adversarial evasion of a tree ensemble as a MILP
+over the trees' decision paths. Cui, Chen, He &amp; Chen, <em>Optimal Action Extraction for Random
+Forests and Boosted Trees</em> (KDD 2015), use integer linear programming to find the minimum-cost
+action that flips an ensemble's prediction. Tolomei, Silvestri, Haines &amp; Lalmas, <em>Interpretable
+Predictions of Tree-based Ensembles via Actionable Feature Tweaking</em> (KDD 2017), trade the exact
+guarantee for speed with a greedy path-tweaking heuristic on the same actionability question.
+Parmentier &amp; Vidal, <em>Optimal Counterfactual Explanations in Tree Ensembles</em> (ICML 2021 — the
+OCEAN package), generalize furthest: full counterfactual search with plausibility (isolation
+forest) and heterogeneous-constraint support, backed by MIP, CP, and MaxSAT solvers.</p>
+<p>treecf's own angle is narrower and dependency-free: an exact engine built directly on the same
+cell IR the genetic backend already shares, with no solver dependency, paired with the
+certificate and region layer this page documents.</p>
+<h2 id="where-to-go-next">Where to go next<a class="headerlink" href="#where-to-go-next" title="Permanent link">&para;</a></h2>
+<ul>
+<li><a href="../../how-it-works/#the-exact-search-cells-domains-and-branch-and-bound">How it works — the exact search</a>
+  and <a href="../../how-it-works/#certified-regions-grow-and-verify">— certified regions</a> for the
+  mechanisms behind this page.</li>
+<li><a href="../backends/">Backends and proofs</a> for the engine-level contract (genetic/python/exact,
+  rust-first dispatch, benchmarks).</li>
+<li><a href="../constraints/">Constraints</a> for what <code>Linear</code>, <code>Implies</code>, <code>OneHot</code>, <code>Freeze</code>, and <code>Monotone</code>
+  compile to.</li>
+<li><a href="../plausibility/">Plausibility</a> for the isolation-forest bound the exact search and the region
+  oracle both read.</li>
+<li>The <a href="../../notebooks/02-credit-risk-tutorial/">credit-risk tutorial</a> runs the exact backend,
+  a certified-infeasible case, and a region end to end.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "navigation.top", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="../../javascripts/mathjax.js"></script>
+      
+        <script src="https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js"></script>
+      
+    
+  </body>
+</html>
