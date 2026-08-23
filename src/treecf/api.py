@@ -1318,7 +1318,9 @@ class Explainer:
             gap=gap, time_budget_s=time_budget_s, warm_start=warm_start,
         )
 
-    def check_certificate(self, cert: dict[str, object]) -> dict[str, object]:
+    def check_certificate(
+        self, cert: dict[str, object], *, calibrator: object | None = None
+    ) -> dict[str, object]:
         """Validate a stored certificate against *this* explainer.
 
         Recomputes both fingerprints (model and constraints) against this
@@ -1327,18 +1329,33 @@ class Explainer:
         changed constraint set each flips the corresponding boolean. This
         method reports — it never raises on a mismatch.
 
+        Without ``calibrator=``, a calibrated-target certificate is still
+        fully verifiable in *plan geometry*: the resolved ``raw_interval``
+        is stored, so this proves the plan reaches the stored interval — it
+        does not prove which calibrator produced that interval. Passing
+        ``calibrator=`` adds exactly that: the duck-typed ``fingerprint()``
+        is compared with the stored one, and the certificate's calibrated
+        ``lo``/``hi`` are re-inverted through the supplied calibrator and
+        compared with the stored interval (rtol 1e-9, infinities by
+        identity). Neither mode requires treecf to import a calibration
+        library.
+
         Args:
             cert: A certificate produced by ``Explainer.certificate`` (a
                 ``json.loads`` round trip of one works identically).
+            calibrator: Optional duck-typed calibrator (the object handed to
+                ``Target.calibrated``) to additionally verify calibrator
+                provenance against a calibrated-target certificate.
 
         Returns:
             ``{"model_match": bool, "constraints_match": bool,
             "verification_ok": bool, "mismatches": [...]}`` with one
-            human-readable string per mismatch.
+            human-readable string per mismatch, plus ``"calibrator_match":
+            bool`` when ``calibrator=`` was given.
         """
         from treecf.audit import check_certificate
 
-        return check_certificate(self, cert)
+        return check_certificate(self, cert, calibrator=calibrator)
 
     def _region_for(
         self, x: FloatArray, x_cf: FloatArray, interval: tuple[float, float]

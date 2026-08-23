@@ -309,6 +309,22 @@ def _verify_infeasible(
     }
 
 
+def _duck_fingerprint(calibrator: object) -> str | None:
+    """The calibrator's duck-typed ``fingerprint()``, or ``None``.
+
+    Absent or raising members degrade to ``None`` — provenance is optional
+    by design; treecf never requires a calibration library at runtime.
+    """
+    fn = getattr(calibrator, "fingerprint", None)
+    if not callable(fn):
+        return None
+    try:
+        value = fn()
+    except Exception:
+        return None
+    return str(value) if value is not None else None
+
+
 def _target_block(
     target: Target, band: str | None, explainer: Explainer
 ) -> tuple[dict[str, object], tuple[float, float]]:
@@ -338,7 +354,12 @@ def _target_block(
     if band is not None:
         block["band"] = band
     if target.space == "calibrated":
-        block["calibrator"] = "external — not embedded"
+        block["calibrator"] = {
+            "embedded": False,
+            "fingerprint": _duck_fingerprint(target.calibrator),
+            "type": type(target.calibrator).__name__,
+            "buffer_logit": _json_float(target.buffer_logit),
+        }
     return block, interval
 
 
@@ -443,7 +464,9 @@ def build_certificate(
     return cert
 
 
-def check_certificate(explainer: Explainer, cert: dict[str, object]) -> dict[str, object]:
+def check_certificate(
+    explainer: Explainer, cert: dict[str, object], *, calibrator: object | None = None
+) -> dict[str, object]:
     """Body of ``Explainer.check_certificate``; see its docstring."""
     mismatches: list[str] = []
 
@@ -517,9 +540,73 @@ def check_certificate(explainer: Explainer, cert: dict[str, object]) -> dict[str
         verification_ok = False
         mismatches.append(f"verification could not be re-run: {exc}")
 
-    return {
+    report: dict[str, object] = {
         "model_match": model_match,
         "constraints_match": constraints_match,
         "verification_ok": verification_ok,
         "mismatches": mismatches,
     }
+    if calibrator is not None:
+        report["calibrator_match"] = _check_calibrator(cert, calibrator, mismatches)
+    return report
+
+
+def _check_calibrator(
+    cert: dict[str, object], calibrator: object, mismatches: list[str]
+) -> bool:
+    """The two extra checks ``check_certificate(calibrator=...)`` adds.
+
+    (a) the duck-typed fingerprint against the stored one — unavailable on
+    either side is noted in ``mismatches`` without failing the match, since
+    absence is not evidence of a different calibrator; (b) the certificate's
+    calibrated ``lo``/``hi`` re-inverted through the calibrator against the
+    stored ``raw_interval`` (rtol 1e-9, infinities by identity) — the check
+    that actually proves this calibrator produces this plan geometry.
+    """
+    ok = True
+    target = cert.get("target")
+    if not isinstance(target, dict) or target.get("space") != "calibrated":
+        mismatches.append("calibrator= given but the certificate's target is not calibrated")
+        return False
+    stored_block = target.get("calibrator")
+    stored_fp = stored_block.get("fingerprint") if isinstance(stored_block, dict) else None
+    fresh_fp = _duck_fingerprint(calibrator)
+    if stored_fp is None or fresh_fp is None:
+        mismatches.append(
+            "calibrator fingerprint unavailable on "
+            + ("both sides" if stored_fp is None and fresh_fp is None else "one side")
+            + " — identity not confirmed by fingerprint"
+        )
+    elif stored_fp != fresh_fp:
+        ok = False
+        mismatches.append("calibrator fingerprint does not match the certificate's")
+    stored_buffer = (
+        _from_json_float(stored_block.get("buffer_logit", 0.0))
+        if isinstance(stored_block, dict)
+        else 0.0
+    )
+    raw = target.get("raw_interval")
+    try:
+        lo = _from_json_float(target.get("lo"))
+        hi = _from_json_float(target.get("hi"))
+        fresh_lo, fresh_hi = calibrator.interval_inverse(  # type: ignore[attr-defined]
+            lo, hi, space="logit", buffer_logit=stored_buffer
+        )
+        stored_lo = _from_json_float(raw[0])  # type: ignore[index]
+        stored_hi = _from_json_float(raw[1])  # type: ignore[index]
+        for fresh, stored in ((fresh_lo, stored_lo), (fresh_hi, stored_hi)):
+            if math.isinf(fresh) or math.isinf(stored):
+                same = fresh == stored
+            else:
+                same = math.isclose(fresh, stored, rel_tol=1e-9, abs_tol=1e-12)
+            if not same:
+                ok = False
+                mismatches.append(
+                    "re-inverted interval does not match the stored raw_interval: "
+                    f"fresh ({fresh_lo}, {fresh_hi}) vs stored ({stored_lo}, {stored_hi})"
+                )
+                break
+    except Exception as exc:
+        ok = False
+        mismatches.append(f"re-inversion through the supplied calibrator failed: {exc}")
+    return ok
