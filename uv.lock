@@ -2048,6 +2048,19 @@ wheels = [
 ]
 
 [[package]]
+name = "probcal"
+version = "0.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b5/15/b0664ceeab90996bb4eead83bfee400ffb944f8e9fea1d2b0488032f7a78/probcal-0.2.0.tar.gz", hash = "sha256:c3a649e16f6dcbd7ca925ea1b981b731cb5f562527a7cdb468345e9a44e8e7f5", size = 1184055, upload-time = "2026-08-23T14:52:35.678Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/82/94/c40a4872316c447317844faaf1e5ac75f991c88ec1c4f527c6c328231f58/probcal-0.2.0-py3-none-any.whl", hash = "sha256:c5cad7f389447e478b46d6941a164fe91f5c5e9f47cb5e45a34cd9d24c04644c", size = 133558, upload-time = "2026-08-23T14:52:34.28Z" },
+]
+
+[[package]]
 name = "prompt-toolkit"
 version = "3.0.52"
 source = { registry = "https://pypi.org/simple" }
@@ -2844,6 +2857,7 @@ dev = [
     { name = "matplotlib" },
     { name = "maturin" },
     { name = "mypy" },
+    { name = "probcal" },
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "ruff" },
@@ -2865,6 +2879,11 @@ lightgbm = [
 sklearn = [
     { name = "scikit-learn" },
 ]
+test = [
+    { name = "hypothesis" },
+    { name = "probcal" },
+    { name = "pytest" },
+]
 viz = [
     { name = "matplotlib" },
 ]
@@ -2879,6 +2898,7 @@ requires-dist = [
     { name = "catboost", marker = "extra == 'catboost'", specifier = ">=1.2" },
     { name = "catboost", marker = "extra == 'dev'", specifier = ">=1.2" },
     { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.100" },
+    { name = "hypothesis", marker = "extra == 'test'", specifier = ">=6.100" },
     { name = "ipykernel", marker = "extra == 'docs'", specifier = ">=6.29" },
     { name = "lightgbm", marker = "extra == 'all'", specifier = ">=4.3" },
     { name = "lightgbm", marker = "extra == 'dev'", specifier = ">=4.3" },
@@ -2893,8 +2913,11 @@ requires-dist = [
     { name = "mkdocstrings", extras = ["python"], marker = "extra == 'docs'", specifier = ">=0.27" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
     { name = "numpy", specifier = ">=1.24" },
+    { name = "probcal", marker = "extra == 'dev'", specifier = ">=0.2" },
+    { name = "probcal", marker = "extra == 'test'", specifier = ">=0.2" },
     { name = "pymdown-extensions", marker = "extra == 'docs'", specifier = ">=10.9" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5" },
     { name = "scikit-learn", marker = "extra == 'all'", specifier = ">=1.4" },
@@ -2904,7 +2927,7 @@ requires-dist = [
     { name = "xgboost", marker = "extra == 'dev'", specifier = ">=2.0" },
     { name = "xgboost", marker = "extra == 'xgboost'", specifier = ">=2.0" },
 ]
-provides-extras = ["xgboost", "lightgbm", "catboost", "sklearn", "viz", "all", "dev", "docs"]
+provides-extras = ["xgboost", "lightgbm", "catboost", "sklearn", "viz", "all", "test", "dev", "docs"]
 
 [[package]]
 name = "typing-extensions"
