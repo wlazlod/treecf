@@ -1053,19 +1053,18 @@ pub fn solve_exact(
     }
 
     completed = completed && dropped_floor >= incumbent_cost;
-    let lower_bound;
-    let proof;
-    if completed {
-        lower_bound = match incumbent_row {
+    let (lower_bound, proof) = if completed {
+        let bound = match incumbent_row {
             None => f64::INFINITY,
             Some(_) if gap == 0.0 => incumbent_cost,
             Some(_) => incumbent_cost / (1.0 + gap),
         };
-        proof = if gap > 0.0 && gap_prune_fired {
+        let label = if gap > 0.0 && gap_prune_fired {
             "optimal_within_gap"
         } else {
             "optimal"
         };
+        (bound, label)
     } else {
         let mut open_view = f64::INFINITY;
         if !ctx.order.is_empty() {
@@ -1081,9 +1080,11 @@ pub fn solve_exact(
         } else {
             dropped_floor
         };
-        lower_bound = py_min(py_min(open_view, incumbent_cost), set_aside_view);
-        proof = "heuristic";
-    }
+        (
+            py_min(py_min(open_view, incumbent_cost), set_aside_view),
+            "heuristic",
+        )
+    };
 
     let mut snapped: Vec<usize> = Vec::new();
     for (level, chosen_state) in incumbent_states.iter().flatten().enumerate() {
