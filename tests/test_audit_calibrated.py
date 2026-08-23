@@ -264,3 +264,19 @@ class TestCalibratedReadout:
         res = exp.explain(X0, target, seed=0)
         cert = exp.certificate(X0, res, target)
         assert cert["factual"].get("score_calibrated") is None
+
+
+class TestInversionCaching:
+    def test_explain_batch_inverts_exactly_once(self, exp: Explainer) -> None:
+        cal = StubCalibrator(a=1.0, b=0.2)
+        target = Target.calibrated(cal, op=">=", value=0.4)
+        exp.explain_batch(np.zeros((4, 3)), target, seed=0)
+        assert cal.inverse_calls == 1
+
+    def test_band_ladder_inverts_once_per_band(self, exp: Explainer) -> None:
+        cal = StubCalibrator(a=1.0, b=0.0)
+        target = Target.bands(
+            {"good": (0.0, 0.4), "bad": (0.4, 1.0)}, space="calibrated", calibrator=cal
+        )
+        exp.explain(X0, target, seed=0)
+        assert cal.inverse_calls == 2  # one per band
