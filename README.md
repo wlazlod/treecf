@@ -1,5 +1,7 @@
 # treecf
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22069503.svg)](https://doi.org/10.5281/zenodo.22069503)
+
 **Constrained, threshold-aware counterfactual explanations for tree ensembles.**
 
 `treecf` answers the question: *"what is the minimal, feasible change to this instance such
