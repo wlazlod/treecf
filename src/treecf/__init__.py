@@ -28,7 +28,7 @@ from treecf.plausibility import Plausibility
 from treecf.regions import RecourseRegion
 from treecf.targets import Target
 
-__version__ = "0.2.3"
+__version__ = "0.2.4"
 
 __all__ = [
     "AllowMissing",
