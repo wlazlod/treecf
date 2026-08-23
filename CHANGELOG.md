@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-08-23
+
 ### Fixed
 
 - **sklearn `tree_`-based ensembles (RandomForest, GradientBoosting, IsolationForest) routed
@@ -35,6 +37,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   predicts on the float64 grid and is unchanged; XGBoost also casts features to float32
   natively and should get the same treatment once a reproducing case is confirmed
   (follow-up).
+
+### Internal
+
+- Restructured a late-initialized binding in the exact search's proof/lower-bound
+  epilogue (behavior-identical) — clippy 1.98's `needless_late_init` began rejecting
+  the old form under `-D warnings` on the freshly installed stable toolchain in CI.
 
 ## [0.2.2] - 2026-08-19
 
