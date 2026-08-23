@@ -582,11 +582,20 @@ def explain_batch(
     if target.space == "calibrated":
         from dataclasses import replace as _replace
 
+        from treecf.api import _calibrated_readout
         from treecf.audit import _duck_fingerprint
 
         calibrator_fp = _duck_fingerprint(target.calibrator)
         if calibrator_fp is not None:
             records = [_replace(r, calibrator_fingerprint=calibrator_fp) for r in records]
+        # The Rust wave paths assemble Counterfactuals without going through
+        # Explainer._explain, so the read-out is filled here for every path.
+        records = [
+            _replace(r, score_calibrated=_calibrated_readout(target, r.score_raw))
+            if r.feasible and r.score_calibrated is None and r.score_raw is not None
+            else r
+            for r in records
+        ]
 
     return BatchResult(
         feature_names=explainer.ir.feature_names,
@@ -622,6 +631,7 @@ def _record_from(
         n_changed=cf.n_changed,
         score_raw=cf.score_raw,
         score_prob=cf.score_prob,
+        score_calibrated=cf.score_calibrated,
         seed=seed,
         blocked_lever=blocked_lever,
         coalition=coalition,

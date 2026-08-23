@@ -363,6 +363,16 @@ def _target_block(
     return block, interval
 
 
+def _factual_block(explainer: Explainer, x: FloatArray, target: Target) -> dict[str, object]:
+    block: dict[str, object] = {"x": _encode_array(x)}
+    if target.space == "calibrated":
+        from treecf.api import _calibrated_readout
+
+        readout = _calibrated_readout(target, raw_score(explainer.ir, x))
+        block["score_calibrated"] = _json_float(readout) if readout is not None else None
+    return block
+
+
 def build_certificate(
     explainer: Explainer,
     x: FloatArray,
@@ -426,7 +436,7 @@ def build_certificate(
         },
         "target": target_block,
         "solve": solve,
-        "factual": {"x": _encode_array(x)},
+        "factual": _factual_block(explainer, x, target),
     }
     if reproducible_reason is not None:
         cert["reproducible_reason"] = reproducible_reason

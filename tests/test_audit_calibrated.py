@@ -216,3 +216,51 @@ class TestBatchProvenance:
         loaded = BatchResult.load(path)
         assert all(r.calibrator_fingerprint is None for r in loaded.records)
         assert all(r.score_calibrated is None for r in loaded.records)
+
+
+class TestCalibratedReadout:
+    def test_counterfactual_readout_matches_external_recompute(self, exp: Explainer) -> None:
+        cal = StubCalibrator(a=0.8, b=0.4)
+        res, _target = _feasible(exp, cal)
+        assert res.score_calibrated is not None
+        expected = float(cal.predict_proba(np.array([_sigmoid(res.score_raw)]))[0])
+        assert res.score_calibrated == pytest.approx(expected, abs=1e-12)
+        assert res.score_calibrated >= 0.5 - 1e-12  # inside the closed target
+
+    def test_none_for_raw_targets_and_bare_calibrators(self, exp: Explainer) -> None:
+        raw_res = exp.explain(X0, Target.raw(op=">=", value=0.5), seed=0)
+        assert raw_res.score_calibrated is None
+        bare_res, _ = _feasible(exp, BareCalibrator(a=1.0, b=0.3))
+        assert bare_res.score_calibrated is None
+
+    def test_band_results_carry_the_readout(self, exp: Explainer) -> None:
+        cal = StubCalibrator(a=1.0, b=0.0)
+        target = Target.bands(
+            {"good": (0.0, 0.4), "bad": (0.4, 1.0)}, space="calibrated", calibrator=cal
+        )
+        out = exp.explain(X0, target, seed=0)
+        for res in out.values():
+            if hasattr(res, "x_cf"):
+                assert res.score_calibrated is not None
+
+    def test_batch_records_carry_the_readout(self, exp: Explainer) -> None:
+        cal = StubCalibrator(a=1.0, b=0.2)
+        batch = exp.explain_batch(np.zeros((2, 3)), Target.calibrated(cal, op=">=", value=0.4))
+        for rec in batch.records:
+            if rec.feasible:
+                expected = float(cal.predict_proba(np.array([_sigmoid(rec.score_raw)]))[0])
+                assert rec.score_calibrated == pytest.approx(expected, abs=1e-12)
+
+    def test_certificate_factual_block_carries_the_readout(self, exp: Explainer) -> None:
+        cal = StubCalibrator(a=1.0, b=0.2)
+        res, target = _feasible(exp, cal)
+        cert = exp.certificate(X0, res, target)
+        # X0 has raw score -1.0 (base_score, no levers raised)
+        expected = float(cal.predict_proba(np.array([_sigmoid(-1.0)]))[0])
+        assert cert["factual"]["score_calibrated"] == pytest.approx(expected, abs=1e-12)
+
+    def test_certificate_factual_readout_none_for_raw_target(self, exp: Explainer) -> None:
+        target = Target.raw(op=">=", value=0.5)
+        res = exp.explain(X0, target, seed=0)
+        cert = exp.certificate(X0, res, target)
+        assert cert["factual"].get("score_calibrated") is None
