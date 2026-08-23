@@ -181,3 +181,38 @@ class TestCertificateProvenance:
         # fingerprint unavailable on both sides -> noted, but the interval
         # re-inversion still passes, so calibrator_match reflects only real evidence
         assert any("fingerprint" in m for m in report["mismatches"])
+
+
+class TestBatchProvenance:
+    def test_records_carry_the_calibrator_fingerprint(self, exp: Explainer, tmp_path) -> None:
+        cal = StubCalibrator(a=1.0, b=0.2)
+        target = Target.calibrated(cal, op=">=", value=0.4)
+        X = np.zeros((3, 3))
+        batch = exp.explain_batch(X, target, seed=0)
+        assert len(batch.records) == 3
+        for rec in batch.records:
+            assert rec.calibrator_fingerprint == cal.fingerprint()
+        path = tmp_path / "batch.json"
+        batch.save(path)
+        loaded = type(batch).load(path)
+        assert all(r.calibrator_fingerprint == cal.fingerprint() for r in loaded.records)
+
+    def test_non_calibrated_target_leaves_field_none(self, exp: Explainer) -> None:
+        batch = exp.explain_batch(np.zeros((2, 3)), Target.raw(op=">=", value=0.5), seed=0)
+        assert all(r.calibrator_fingerprint is None for r in batch.records)
+
+    def test_pre_0_2_4_batch_json_loads_defaulted(self, exp: Explainer, tmp_path) -> None:
+        from treecf.batch import BatchResult
+
+        cal = StubCalibrator()
+        batch = exp.explain_batch(np.zeros((2, 3)), Target.calibrated(cal, op=">=", value=0.4))
+        path = tmp_path / "old.json"
+        batch.save(path)
+        data = json.loads(path.read_text())
+        for raw in data["records"]:  # simulate a 0.2.x writer
+            raw.pop("calibrator_fingerprint", None)
+            raw.pop("score_calibrated", None)
+        path.write_text(json.dumps(data))
+        loaded = BatchResult.load(path)
+        assert all(r.calibrator_fingerprint is None for r in loaded.records)
+        assert all(r.score_calibrated is None for r in loaded.records)
