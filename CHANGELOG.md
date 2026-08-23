@@ -15,6 +15,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-08-23
+
+### Fixed
+
+- **sklearn `tree_`-based ensembles (RandomForest, GradientBoosting, IsolationForest) routed
+  differently from sklearn itself at split boundaries**, because sklearn casts inputs to
+  float32 before comparing against the float64 threshold while the IR evaluates in float64.
+  A counterfactual whose coordinate landed exactly on a split threshold — the natural optimum
+  of a smallest-change search, since `<=` cells are closed on the left — could flip through
+  many trees at once: in the reproducing case (`GradientBoostingClassifier`,
+  `subsample=0.8`), the exact backend stamped `proof="optimal"` on an `x_cf` whose true
+  `decision_function` margin was 3.09 raw-score units away from the reported `score_raw`,
+  silently violating the target. Thresholds are now re-expressed at parse time as the exact
+  float64 boundary of the float32 cast (largest float64 `T` with `float32(T) <= t`,
+  round-half-to-even handled), so float64 IR routing reproduces sklearn bit-for-bit for
+  every input — search, certificates, and `score_raw` included. Verified by a 138k-probe
+  property sweep, new unquantized conformance tests (exact-threshold and float64-neighbour
+  probes; the old harness quantized all probes to the float32 grid, which is exactly why
+  this never surfaced), and probcal's joint recourse scenarios. HistGradientBoosting
+  predicts on the float64 grid and is unchanged; XGBoost also casts features to float32
+  natively and should get the same treatment once a reproducing case is confirmed
+  (follow-up).
+
+### Internal
+
+- Restructured a late-initialized binding in the exact search's proof/lower-bound
+  epilogue (behavior-identical) — clippy 1.98's `needless_late_init` began rejecting
+  the old form under `-D warnings` on the freshly installed stable toolchain in CI.
+
 ## [0.2.2] - 2026-08-19
 
 ### Added

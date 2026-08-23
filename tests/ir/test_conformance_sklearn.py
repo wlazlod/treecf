@@ -85,3 +85,84 @@ def test_multiclass_forest_raises() -> None:
     clf.fit(X, rng.integers(0, 3, size=len(X)))
     with pytest.raises(UnsupportedModelError, match="multi"):
         parse_model(clf)
+
+
+# --------------------------------------------------------------- float64 grid
+# sklearn tree_ ensembles route float32(x) <= float64(threshold). The IR must
+# reproduce that for EVERY float64 x — not only float32-representable probes —
+# because the counterfactual search places representatives on exact float64
+# boundaries. Regression for the probcal joint finding: an x_cf whose
+# coordinate sat exactly on a shared threshold evaluated 3+ raw-score units
+# apart between treecf (proof="optimal") and decision_function.
+
+
+@pytest.mark.parametrize("subsample", [1.0, 0.6])
+def test_gradient_boosting_classifier_unquantized_probes(subsample: float) -> None:
+    X, y, _ = make_synthetic(seed=31, nan_frac=0.0)
+    clf = GradientBoostingClassifier(
+        n_estimators=30, max_depth=3, subsample=subsample, random_state=0
+    )
+    clf.fit(X, y)
+    ir = parse_model(clf)
+    assert_conformance(
+        ir, X, lambda A: clf.predict_proba(A)[:, 1],
+        n_random=3000, include_nan=False, quantize=False,
+    )
+
+
+def test_random_forest_classifier_unquantized_probes() -> None:
+    X, y, _ = make_synthetic(seed=32, nan_frac=0.0)
+    clf = RandomForestClassifier(n_estimators=10, max_depth=4, random_state=0)
+    clf.fit(X, y)
+    ir = parse_model(clf)
+    assert_conformance(
+        ir, X, lambda A: clf.predict_proba(A)[:, 1],
+        n_random=3000, include_nan=False, quantize=False,
+    )
+
+
+def test_gradient_boosting_regressor_unquantized_probes() -> None:
+    X, _, y = make_synthetic(seed=33, nan_frac=0.0)
+    reg = GradientBoostingRegressor(n_estimators=20, max_depth=3, random_state=0)
+    reg.fit(X, y)
+    ir = parse_model(reg)
+    assert_conformance(ir, X, reg.predict, n_random=3000, include_nan=False, quantize=False)
+
+
+def test_hist_gradient_boosting_unquantized_probes() -> None:
+    # HistGradientBoosting predicts on the float64 grid directly; the
+    # unquantized mode must already hold with untouched thresholds.
+    X, y, _ = make_synthetic(seed=34, nan_frac=0.0)
+    clf = HistGradientBoostingClassifier(max_iter=30, random_state=0)
+    clf.fit(X, y)
+    ir = parse_model(clf)
+    assert_conformance(
+        ir, X, lambda A: clf.predict_proba(A)[:, 1], n_random=3000, quantize=False
+    )
+
+
+def test_exact_threshold_point_routes_like_sklearn() -> None:
+    # The distilled probcal finding: a point EXACTLY at a float64 split
+    # threshold must produce the same raw score as decision_function.
+    from treecf.ir.evaluate import raw_score
+
+    X, y, _ = make_synthetic(seed=35, nan_frac=0.0)
+    clf = GradientBoostingClassifier(n_estimators=30, max_depth=3, random_state=0)
+    clf.fit(X, y)
+    ir = parse_model(clf)
+    base = np.nan_to_num(X[0], nan=0.0)
+    checked = 0
+    for tree in ir.trees:
+        for node in tree.nodes:
+            if node.feature is None:
+                continue
+            row = base.copy()
+            row[node.feature] = node.threshold
+            got = raw_score(ir, row)
+            want = float(clf.decision_function(row[None])[0])
+            assert got == pytest.approx(want, abs=1e-9), (
+                f"threshold routing mismatch at feature {node.feature}, "
+                f"threshold {node.threshold!r}: IR {got} vs sklearn {want}"
+            )
+            checked += 1
+    assert checked > 50

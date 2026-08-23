@@ -1,6 +1,6 @@
 [package]
 name = "treecf-core"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 # f64::next_down (cells.rs) stabilized in 1.86; pyo3 0.29 needs 1.83
 rust-version = "1.86"
