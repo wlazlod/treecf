@@ -7,6 +7,7 @@ authors:
     given-names: "Daniel"
     email: "wlazlo.daniel@gmail.com"
 version: 0.2.3
+doi: 10.5281/zenodo.22069504
 date-released: 2026-08-23
 license: MIT
 repository-code: "https://github.com/wlazlod/treecf"
@@ -17,3 +18,7 @@ keywords:
   - algorithmic recourse
   - gradient boosting
   - credit risk
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.22069503
+    description: "Concept DOI (all versions)"
