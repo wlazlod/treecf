@@ -129,6 +129,11 @@ class Counterfactual:
         region: The certified box around ``x_cf``, set only when the search ran
             with ``region=True`` (``Explainer.explain``/``explain_batch``/
             ``explain_coalitions``); ``None`` otherwise.
+        score_calibrated: The calibrator's probability at ``x_cf`` — set only
+            for a calibrated-space target whose calibrator exposes
+            ``predict_proba``; ``None`` otherwise. Presentational: the engine
+            optimized and verified against the raw interval the calibrator's
+            ``interval_inverse`` produced, never against this value.
     """
 
     x_cf: FloatArray
@@ -141,6 +146,7 @@ class Counterfactual:
     solver_stats: dict[str, object] = field(default_factory=dict)
     snapped: dict[str, bool] = field(default_factory=dict)  # value_policy outcome
     region: RecourseRegion | None = None  # set when `explain(..., region=True)`
+    score_calibrated: float | None = None  # presentational read-out; see docstring
 
 
 @dataclass(frozen=True)
@@ -169,6 +175,25 @@ class Infeasible:
     reason: str
     proof: str = "search_exhausted"  # "search_exhausted" | "certified"
     solver_stats: dict[str, object] = field(default_factory=dict)
+
+
+def _calibrated_readout(target: Target, score_raw: float) -> float | None:
+    """Calibrated probability at a raw score, or ``None`` when unavailable.
+
+    Duck-typed on ``predict_proba`` (never a probcal import); any failure in
+    the external calibrator degrades to ``None`` rather than erroring —
+    the read-out is presentational, the engine consumed the raw interval.
+    """
+    if target.space != "calibrated":
+        return None
+    predict = getattr(target.calibrator, "predict_proba", None)
+    if not callable(predict):
+        return None
+    try:
+        prob = 1.0 / (1.0 + np.exp(-np.float64(score_raw)))
+        return float(np.asarray(predict(np.array([prob])), dtype=np.float64).reshape(-1)[0])
+    except Exception:
+        return None
 
 
 # documented defaults for the exact-only kwargs; ``None`` at the public call
@@ -563,6 +588,10 @@ class Explainer:
                 )
                 if region and isinstance(outcome, Counterfactual):
                     outcome = replace(outcome, region=self._region_for(x, outcome.x_cf, interval))
+                if isinstance(outcome, Counterfactual) and target.space == "calibrated":
+                    outcome = replace(
+                        outcome, score_calibrated=_calibrated_readout(target, outcome.score_raw)
+                    )
                 results[name] = outcome
             message = _degraded_summary(band_degraded, len(band_degraded), len(intervals), "bands")
             if message is not None:
@@ -584,6 +613,10 @@ class Explainer:
         )
         if region and isinstance(result, Counterfactual):
             result = replace(result, region=self._region_for(x, result.x_cf, interval))
+        if isinstance(result, Counterfactual) and target.space == "calibrated":
+            result = replace(
+                result, score_calibrated=_calibrated_readout(target, result.score_raw)
+            )
         return result
 
     def explain_batch(
@@ -1318,7 +1351,9 @@ class Explainer:
             gap=gap, time_budget_s=time_budget_s, warm_start=warm_start,
         )
 
-    def check_certificate(self, cert: dict[str, object]) -> dict[str, object]:
+    def check_certificate(
+        self, cert: dict[str, object], *, calibrator: object | None = None
+    ) -> dict[str, object]:
         """Validate a stored certificate against *this* explainer.
 
         Recomputes both fingerprints (model and constraints) against this
@@ -1327,18 +1362,33 @@ class Explainer:
         changed constraint set each flips the corresponding boolean. This
         method reports — it never raises on a mismatch.
 
+        Without ``calibrator=``, a calibrated-target certificate is still
+        fully verifiable in *plan geometry*: the resolved ``raw_interval``
+        is stored, so this proves the plan reaches the stored interval — it
+        does not prove which calibrator produced that interval. Passing
+        ``calibrator=`` adds exactly that: the duck-typed ``fingerprint()``
+        is compared with the stored one, and the certificate's calibrated
+        ``lo``/``hi`` are re-inverted through the supplied calibrator and
+        compared with the stored interval (rtol 1e-9, infinities by
+        identity). Neither mode requires treecf to import a calibration
+        library.
+
         Args:
             cert: A certificate produced by ``Explainer.certificate`` (a
                 ``json.loads`` round trip of one works identically).
+            calibrator: Optional duck-typed calibrator (the object handed to
+                ``Target.calibrated``) to additionally verify calibrator
+                provenance against a calibrated-target certificate.
 
         Returns:
             ``{"model_match": bool, "constraints_match": bool,
             "verification_ok": bool, "mismatches": [...]}`` with one
-            human-readable string per mismatch.
+            human-readable string per mismatch, plus ``"calibrator_match":
+            bool`` when ``calibrator=`` was given.
         """
         from treecf.audit import check_certificate
 
-        return check_certificate(self, cert)
+        return check_certificate(self, cert, calibrator=calibrator)
 
     def _region_for(
         self, x: FloatArray, x_cf: FloatArray, interval: tuple[float, float]

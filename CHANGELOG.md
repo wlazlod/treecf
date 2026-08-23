@@ -15,6 +15,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-08-23
+
+### Added
+
+- **Calibrator provenance in certificates.** For calibrated-space targets the certificate's
+  `target.calibrator` block is now structured — `{embedded: false, fingerprint, type,
+  buffer_logit}` — with the fingerprint duck-read from the calibrator's own `fingerprint()`
+  (`null` when absent; probcal calibrators provide one). `check_certificate` accepts an
+  optional `calibrator=` keyword: when given, the report gains `calibrator_match`, true only
+  if the fingerprints agree and re-inverting the stored calibrated bounds through the passed
+  calibrator reproduces the stored raw interval.
+- **Calibrator provenance in batch records.** `BatchRecord.calibrator_fingerprint` repeats the
+  target calibrator's fingerprint on every row, so each JSON line stays self-contained.
+- **`score_calibrated` read-out.** `Counterfactual`, `BatchRecord`, and the certificate's
+  `factual` block now carry the calibrator's probability at the result (and at the factual)
+  for calibrated targets whose calibrator exposes `predict_proba`; `None` otherwise.
+  Presentational only: the engine still optimizes and verifies against the raw interval.
+- **Plateau-aware exactness tests.** Calibrated targets on and one float above step-calibrator
+  plateau levels, cross-checked against brute-force enumeration in calibrated space and
+  against real probcal isotonic/centered-isotonic fits.
+- **probcal test matrix.** New optional `test` extra (and probcal in the `dev` extra):
+  7 fitted probcal calibrators x target ops x buffer levels on sklearn and LightGBM models,
+  every plan re-verified through the model and calibrator; dedicated CI job with pinned
+  probcal + lightgbm. `src/` never imports probcal — the duck-typed protocol is unchanged.
+- **Docs.** `concepts/calibration.md` gains provenance, read-out, and worked-example
+  sections, and pins the guarantee that `explain_batch` calls `interval_inverse` exactly
+  once per call (once per band for ladders), backed by counting tests.
+
+### Compatibility
+
+- Strictly additive. All new dataclass fields default to `None`; 0.2.x batch JSON and
+  certificates load with the new fields defaulted. `check_certificate` without `calibrator=`
+  produces byte-identical reports to 0.2.3. Calibrators missing optional duck members
+  (`fingerprint`, `predict_proba`) degrade to `null`/`None`, never an error.
+
 ## [0.2.3] - 2026-08-23
 
 ### Fixed

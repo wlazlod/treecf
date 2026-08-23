@@ -1,6 +1,6 @@
 [project]
 name = "treecf"
-version = "0.2.3"
+version = "0.2.4"
 description = "Constrained, threshold-aware counterfactual explanations for tree ensembles (XGBoost, LightGBM, CatBoost, sklearn) — fast Rust genetic search, exact optimality proofs, certified infeasibility, and recourse regions."
 readme = "README.md"
 license = { text = "MIT" }
@@ -44,6 +44,11 @@ all = [
     "scikit-learn>=1.4",
     "matplotlib>=3.8",
 ]
+test = [
+    "pytest>=8.0",
+    "hypothesis>=6.100",
+    "probcal>=0.2",
+]
 dev = [
     "maturin>=1.7",
     "pytest>=8.0",
@@ -56,6 +61,7 @@ dev = [
     "catboost>=1.2",
     "scikit-learn>=1.4",
     "matplotlib>=3.8",
+    "probcal>=0.2",
 ]
 docs = [
     "mkdocs>=1.6",

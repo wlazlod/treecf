@@ -93,6 +93,14 @@ class BatchRecord:
         solver_stats: Exact-backend diagnostics for the solve behind this
             record, same keys as ``Counterfactual.solver_stats``; empty for
             genetic/python solves (those engines report no per-row stats).
+        calibrator_fingerprint: The duck-typed ``fingerprint()`` of the
+            calibrated target's calibrator, when it exposes one; ``None``
+            for raw/probability targets or fingerprint-less calibrators.
+            Repeated on every record so each file line is self-contained.
+        score_calibrated: The calibrator's probability at ``x_cf`` for a
+            calibrated target whose calibrator exposes ``predict_proba``;
+            presentational only — the engine optimized and verified on the
+            resolved raw interval. ``None`` otherwise.
     """
 
     id: object
@@ -110,6 +118,11 @@ class BatchRecord:
     region: RecourseRegion | None = None  # set by explain_batch(..., region=True)
     proof: str = "heuristic"  # mirrors Counterfactual.proof / Infeasible.proof
     solver_stats: dict[str, object] = field(default_factory=dict)  # exact-backend only
+    # Calibrated-target provenance and read-out (0.2.4). The fingerprint is one
+    # value repeated per record on purpose: every JSON line stays self-contained
+    # for a validator who receives only a slice of the file.
+    calibrator_fingerprint: str | None = None
+    score_calibrated: float | None = None  # presentational; the engine used raw_interval
 
 
 @dataclass(frozen=True)
@@ -192,6 +205,8 @@ class BatchResult:
                     "blocked_lever": record.blocked_lever,
                     "coalition": record.coalition,
                     "proof": record.proof,
+                    "calibrator_fingerprint": record.calibrator_fingerprint,
+                    "score_calibrated": record.score_calibrated,
                     "solver_stats": {
                         key: encode_floats(value)
                         for key, value in record.solver_stats.items()
@@ -279,6 +294,9 @@ class BatchResult:
                     proof=raw.get(
                         "proof", "heuristic" if raw["feasible"] else "search_exhausted"
                     ),
+                    # absent in files written before 0.2.4
+                    calibrator_fingerprint=raw.get("calibrator_fingerprint"),
+                    score_calibrated=raw.get("score_calibrated"),
                     solver_stats={
                         key: decode_floats(value)
                         for key, value in raw.get("solver_stats", {}).items()
@@ -561,6 +579,24 @@ def explain_batch(
     if message is not None:
         warnings.warn(message, TreecfWarning, stacklevel=2)
 
+    if target.space == "calibrated":
+        from dataclasses import replace as _replace
+
+        from treecf.api import _calibrated_readout
+        from treecf.audit import _duck_fingerprint
+
+        calibrator_fp = _duck_fingerprint(target.calibrator)
+        if calibrator_fp is not None:
+            records = [_replace(r, calibrator_fingerprint=calibrator_fp) for r in records]
+        # The Rust wave paths assemble Counterfactuals without going through
+        # Explainer._explain, so the read-out is filled here for every path.
+        records = [
+            _replace(r, score_calibrated=_calibrated_readout(target, r.score_raw))
+            if r.feasible and r.score_calibrated is None and r.score_raw is not None
+            else r
+            for r in records
+        ]
+
     return BatchResult(
         feature_names=explainer.ir.feature_names,
         diversity=diversity,
@@ -595,6 +631,7 @@ def _record_from(
         n_changed=cf.n_changed,
         score_raw=cf.score_raw,
         score_prob=cf.score_prob,
+        score_calibrated=cf.score_calibrated,
         seed=seed,
         blocked_lever=blocked_lever,
         coalition=coalition,
