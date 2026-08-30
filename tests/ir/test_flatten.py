@@ -49,3 +49,51 @@ def test_tree_roots_are_offsets_of_each_tree(  ) -> None:
     sizes = [len(t.nodes) for t in ir.trees]
     expected_roots = np.cumsum([0, *sizes[:-1]]).astype(np.uint32)
     np.testing.assert_array_equal(flat["tree_roots"], expected_roots)
+
+
+def _mixed_sample(rng: np.random.Generator, n: int, cardinality: int = 4) -> np.ndarray:
+    X = rng.normal(scale=3.0, size=(n, 4))
+    X[:, 1] = rng.integers(0, cardinality + 2, size=n).astype(np.float64)  # incl. unseen codes
+    X[rng.random(X.shape) < 0.2] = np.nan
+    return X
+
+
+@pytest.mark.parametrize("seed", range(5))
+def test_mixed_round_trip_preserves_batch_scores(seed: int) -> None:
+    from ..conftest import make_random_mixed_ir
+
+    rng = np.random.default_rng(seed)
+    ir = make_random_mixed_ir(rng, n_features=4, n_trees=5, depth=3, categorical={1: 4})
+    flat = flatten_ir(ir)
+    back = unflatten_ir(flat)
+    assert back.categorical == ir.categorical
+    X = _mixed_sample(rng, 300)
+    np.testing.assert_array_equal(raw_score_batch(ir, X), raw_score_batch(back, X))
+
+
+def test_mixed_round_trip_preserves_split_sets() -> None:
+    from ..conftest import make_random_mixed_ir
+
+    rng = np.random.default_rng(7)
+    ir = make_random_mixed_ir(rng, categorical={1: 4, 3: 70})  # a set beyond one word
+    back = unflatten_ir(flatten_ir(ir))
+    for tree, back_tree in zip(ir.trees, back.trees, strict=True):
+        for node, back_node in zip(tree.nodes, back_tree.nodes, strict=True):
+            assert node.categories == back_node.categories
+
+
+def test_numeric_flat_dict_has_no_categorical_keys() -> None:
+    rng = np.random.default_rng(0)
+    flat = flatten_ir(make_random_ir(rng))
+    assert "node_set" not in flat
+    assert "cat_idx" not in flat
+
+
+def test_old_flat_dict_without_categorical_keys_unflattens() -> None:
+    rng = np.random.default_rng(0)
+    ir = make_random_ir(rng)
+    flat = flatten_ir(ir)
+    back = unflatten_ir(dict(flat))  # simulates a fixture written before set splits
+    assert back.categorical == {}
+    X = rng.normal(size=(50, 3))
+    np.testing.assert_array_equal(raw_score_batch(ir, X), raw_score_batch(back, X))

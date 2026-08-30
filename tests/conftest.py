@@ -6,7 +6,7 @@ import numpy as np
 import numpy.typing as npt
 import pytest
 
-from treecf.ir.model import EnsembleIR, Link, Node, SplitOp, Tree
+from treecf.ir.model import CategoricalFeature, EnsembleIR, Link, Node, SplitOp, Tree
 
 
 def make_synthetic(
@@ -81,4 +81,61 @@ def make_random_ir(
         n_features=n_features,
         feature_names=tuple(f"x{j}" for j in range(n_features)),
         meta={"source": "random-test"},
+    )
+
+
+def make_random_mixed_ir(
+    rng: np.random.Generator,
+    n_features: int = 4,
+    n_trees: int = 4,
+    depth: int = 3,
+    categorical: dict[int, int] | None = None,
+) -> EnsembleIR:
+    """Random IR mixing numeric splits with set-membership splits.
+
+    ``categorical`` maps feature index to cardinality; those features get
+    random non-empty proper subsets of their codes as split sets, the rest
+    split numerically as in ``make_random_ir``.
+    """
+    cats = {1: 4} if categorical is None else categorical
+    threshold_pool = np.round(rng.normal(scale=2.0, size=5), 2)
+
+    def build(nodes: list[Node | None], d: int) -> int:
+        idx = len(nodes)
+        nodes.append(None)
+        if d == 0 or rng.random() < 0.25:
+            nodes[idx] = Node(idx, None, None, None, None, None, None, float(rng.normal()))
+            return idx
+        feature = int(rng.integers(0, n_features))
+        missing_left = bool(rng.random() < 0.5)
+        left = build(nodes, d - 1)
+        right = build(nodes, d - 1)
+        if feature in cats:
+            cardinality = cats[feature]
+            size = int(rng.integers(1, cardinality))
+            members = frozenset(
+                int(c) for c in rng.choice(cardinality, size=size, replace=False)
+            )
+            nodes[idx] = Node(
+                idx, feature, None, None, missing_left, left, right, None, categories=members
+            )
+        else:
+            threshold = float(rng.choice(threshold_pool))
+            op = SplitOp.LT if rng.random() < 0.5 else SplitOp.LE
+            nodes[idx] = Node(idx, feature, threshold, op, missing_left, left, right, None)
+        return idx
+
+    trees = []
+    for _ in range(n_trees):
+        nodes: list[Node | None] = []
+        build(nodes, depth)
+        trees.append(Tree(nodes=tuple(n for n in nodes if n is not None)))
+    return EnsembleIR(
+        trees=tuple(trees),
+        base_score=float(rng.normal(scale=0.1)),
+        link=Link.IDENTITY,
+        n_features=n_features,
+        feature_names=tuple(f"x{j}" for j in range(n_features)),
+        meta={"source": "random-mixed-test"},
+        categorical={j: CategoricalFeature(cardinality=k) for j, k in sorted(cats.items())},
     )

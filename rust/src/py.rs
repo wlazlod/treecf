@@ -56,6 +56,11 @@ pub struct RustEnsemble {
 impl RustEnsemble {
     #[new]
     #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (
+        feature, threshold, is_lt, missing_left, left, right, value, tree_roots,
+        base_score, link, n_features,
+        node_set=None, set_offsets=None, set_words=None, cat_idx=None, cat_card=None
+    ))]
     fn new(
         feature: PyReadonlyArray1<i32>,
         threshold: PyReadonlyArray1<f64>,
@@ -68,13 +73,18 @@ impl RustEnsemble {
         base_score: f64,
         link: &str,
         n_features: usize,
+        node_set: Option<PyReadonlyArray1<i32>>,
+        set_offsets: Option<PyReadonlyArray1<u32>>,
+        set_words: Option<PyReadonlyArray1<u64>>,
+        cat_idx: Option<PyReadonlyArray1<u32>>,
+        cat_card: Option<PyReadonlyArray1<u32>>,
     ) -> PyResult<Self> {
         let link = match link {
             "identity" => Link::Identity,
             "sigmoid" => Link::Sigmoid,
             other => return Err(PyValueError::new_err(format!("unknown link {other:?}"))),
         };
-        let inner = Ensemble::new(
+        let mut inner = Ensemble::new(
             feature.as_slice()?.to_vec(),
             threshold.as_slice()?.to_vec(),
             is_lt.as_slice()?.iter().map(|&b| b != 0).collect(),
@@ -88,6 +98,28 @@ impl RustEnsemble {
             n_features,
         )
         .map_err(PyValueError::new_err)?;
+        if let (Some(node_set), Some(set_offsets), Some(set_words)) =
+            (node_set, set_offsets, set_words)
+        {
+            let mut cardinality = vec![0u32; n_features];
+            if let (Some(cat_idx), Some(cat_card)) = (cat_idx, cat_card) {
+                for (&j, &k) in cat_idx.as_slice()?.iter().zip(cat_card.as_slice()?.iter()) {
+                    let j = j as usize;
+                    if j >= n_features {
+                        return Err(PyValueError::new_err("categorical index out of range"));
+                    }
+                    cardinality[j] = k;
+                }
+            }
+            inner = inner
+                .with_categories(
+                    node_set.as_slice()?.to_vec(),
+                    set_offsets.as_slice()?.to_vec(),
+                    set_words.as_slice()?.to_vec(),
+                    cardinality,
+                )
+                .map_err(PyValueError::new_err)?;
+        }
         Ok(Self { inner })
     }
 

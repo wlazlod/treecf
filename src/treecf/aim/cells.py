@@ -89,7 +89,9 @@ def feature_cells(*irs: EnsembleIR) -> tuple[tuple[Cell, ...], ...]:
     for ir in irs:
         for tree in ir.trees:
             for node in tree.nodes:
-                if node.feature is not None:
+                # set-membership splits carry no threshold; their features
+                # partition into category blocks instead of interval cells
+                if node.feature is not None and node.categories is None:
                     assert node.threshold is not None and node.op is not None
                     pairs[node.feature].append((node.threshold, node.op))
     return tuple(build_cells(feature_pairs) for feature_pairs in pairs)

@@ -251,3 +251,36 @@ class TestBandsAndErrors:
         result = Infeasible(reason="test")
         with pytest.raises(TreecfError, match="band="):
             exp.certificate(np.zeros(3), result, TARGET, band="lo")
+
+
+class TestCategoricalFingerprints:
+    """Set-split encodings extend the fingerprint; numeric encodings are frozen."""
+
+    RECORDED_NUMERIC = "4e004fa506fd23b3a655b562cb0627a01786fcbc1e4c4c3b1771627b6e72d778"
+
+    def test_numeric_encoding_is_frozen(self) -> None:
+        from treecf.ir.flatten import unflatten_ir
+
+        with open("tests/fixtures/exact/01-basic-lt-le.json", encoding="utf-8") as fh:
+            payload = json.load(fh)
+        ir = unflatten_ir(payload["ensemble"])
+        assert ir_fingerprint(ir) == self.RECORDED_NUMERIC
+
+    def test_set_membership_changes_the_fingerprint(self) -> None:
+        from tests.conftest import make_random_mixed_ir
+
+        a = make_random_mixed_ir(np.random.default_rng(0), categorical={1: 4})
+        b = make_random_mixed_ir(np.random.default_rng(0), categorical={1: 4})
+        assert ir_fingerprint(a) == ir_fingerprint(b)
+        c = make_random_mixed_ir(np.random.default_rng(1), categorical={1: 4})
+        assert ir_fingerprint(a) != ir_fingerprint(c)
+
+    def test_cardinality_changes_the_fingerprint(self) -> None:
+        from dataclasses import replace as dc_replace
+
+        from tests.conftest import make_random_mixed_ir
+        from treecf.ir.model import CategoricalFeature
+
+        a = make_random_mixed_ir(np.random.default_rng(0), categorical={1: 4})
+        wider = dc_replace(a, categorical={1: CategoricalFeature(cardinality=9)})
+        assert ir_fingerprint(a) != ir_fingerprint(wider)

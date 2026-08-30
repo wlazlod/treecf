@@ -37,7 +37,7 @@ from treecf.constraints.objects import (
     OneHot,
     Range,
 )
-from treecf.ir.evaluate import raw_score
+from treecf.ir.evaluate import bitset_words, raw_score
 from treecf.ir.model import EnsembleIR, SplitOp
 
 if TYPE_CHECKING:
@@ -114,6 +114,16 @@ def ir_fingerprint(ir: EnsembleIR) -> str:
                 hasher.update(b"\x00\x02")  # op / missing_left sentinels
                 hasher.update(struct.pack("<II", _NONE_U32, _NONE_U32))
                 hasher.update(struct.pack("<d", node.value))
+            elif node.categories is not None:  # set-membership split
+                assert node.missing_left is not None
+                assert node.left is not None and node.right is not None
+                hasher.update(b"\x02" + struct.pack("<I", node.feature))
+                hasher.update(struct.pack("<B", 1 if node.missing_left else 0))
+                hasher.update(struct.pack("<II", node.left, node.right))
+                words = bitset_words(node.categories)
+                hasher.update(struct.pack("<I", len(words)))
+                for word in words:
+                    hasher.update(struct.pack("<Q", word))
             else:
                 assert node.threshold is not None and node.op is not None
                 assert node.missing_left is not None
@@ -125,6 +135,10 @@ def ir_fingerprint(ir: EnsembleIR) -> str:
                 )
                 hasher.update(struct.pack("<II", node.left, node.right))
                 hasher.update(_NONE_F64)
+    if ir.categorical:  # absent on numeric-only models, keeping their digests unchanged
+        hasher.update(b"CAT" + struct.pack("<I", len(ir.categorical)))
+        for j in sorted(ir.categorical):
+            hasher.update(struct.pack("<II", j, ir.categorical[j].cardinality))
     return hasher.hexdigest()
 
 

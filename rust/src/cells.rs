@@ -152,7 +152,9 @@ pub fn feature_cells_joint(ensembles: &[&Ensemble]) -> Vec<Vec<Cell>> {
     let mut pairs: Vec<Vec<(f64, bool)>> = vec![Vec::new(); n_features];
     for ens in ensembles {
         for i in 0..ens.feature.len() {
-            if ens.feature[i] >= 0 {
+            // set-membership splits carry no threshold; their features partition
+            // into category blocks instead of interval cells
+            if ens.feature[i] >= 0 && ens.node_set[i] < 0 {
                 pairs[ens.feature[i] as usize].push((ens.threshold[i], ens.is_lt[i]));
             }
         }
