@@ -38,3 +38,8 @@ res.changes   # {"utilization": (0.71, 0.419), "max_dpd_12m": (9.0, 3.0)}
 2. [How it works](how-it-works.md) — the full pipeline, from objective to verified answer.
 3. [Tutorials](notebooks/01-quickstart.ipynb) — runnable notebooks, from quickstart to a
    credit-risk batch workflow.
+
+Contributions are welcome — see
+[CONTRIBUTING.md](https://github.com/wlazlod/treecf/blob/main/CONTRIBUTING.md);
+security reports go through
+[SECURITY.md](https://github.com/wlazlod/treecf/blob/main/SECURITY.md).
