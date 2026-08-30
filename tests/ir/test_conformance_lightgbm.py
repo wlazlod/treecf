@@ -64,14 +64,67 @@ def test_multiclass_raises() -> None:
         parse_model(clf)
 
 
-def test_categorical_split_raises() -> None:
-    X, y, _ = make_synthetic(seed=10, nan_frac=0.0)
-    Xc = X.copy()
-    Xc[:, 1] = np.floor(np.abs(Xc[:, 1])) % 4  # small-cardinality integer column
+def _categorical_training(
+    seed: int, cardinalities: dict[int, int], nan_frac: float = 0.1
+) -> tuple[np.ndarray, np.ndarray]:
+    X, y, _ = make_synthetic(seed=seed, nan_frac=nan_frac)
+    rng = np.random.default_rng(seed)
+    for j, k in cardinalities.items():
+        codes = rng.integers(0, k, size=len(X)).astype(np.float64)
+        if nan_frac > 0:
+            codes[rng.random(len(X)) < nan_frac] = np.nan
+        X[:, j] = codes
+        # give the codes signal so trees actually split on them
+        y = np.where(np.isnan(codes), y, (y + (codes % 2)) % 2)
+    return X, y
+
+
+def test_native_categorical_conformance_with_nans() -> None:
+    X, y = _categorical_training(seed=11, cardinalities={1: 4, 3: 9})
     booster = lgb.train(
         {**_params("binary"), "min_data_per_group": 1},
-        lgb.Dataset(Xc, label=y, categorical_feature=[1], free_raw_data=False),
-        num_boost_round=10,
+        lgb.Dataset(X, label=y, categorical_feature=[1, 3], free_raw_data=False),
+        num_boost_round=25,
     )
-    with pytest.raises(UnsupportedModelError, match="categorical"):
-        parse_model(booster)
+    ir = parse_model(booster)
+    assert set(ir.categorical) == {1, 3}
+    assert ir.categorical[1].cardinality >= 4
+    assert any(
+        node.categories is not None for tree in ir.trees for node in tree.nodes
+    )
+    assert_conformance(ir, X, booster.predict)  # probes include NaN and unseen codes
+
+
+def test_native_categorical_conformance_without_nans() -> None:
+    X, y = _categorical_training(seed=12, cardinalities={1: 6}, nan_frac=0.0)
+    booster = lgb.train(
+        {**_params("binary"), "min_data_per_group": 1},
+        lgb.Dataset(X, label=y, categorical_feature=[1], free_raw_data=False),
+        num_boost_round=20,
+    )
+    ir = parse_model(booster)
+    assert_conformance(ir, X, booster.predict)
+
+
+def test_pandas_categorical_names_are_recovered() -> None:
+    pd = pytest.importorskip("pandas")
+    rng = np.random.default_rng(13)
+    n = 600
+    names = ["clerk", "manager", "nurse", "smith"]
+    frame = pd.DataFrame(
+        {
+            "num": rng.normal(size=n),
+            "occupation": pd.Categorical(rng.choice(names, size=n), categories=names),
+        }
+    )
+    y = ((frame["occupation"].cat.codes % 2).to_numpy() ^ (frame["num"] > 0)).astype(int)
+    clf = lgb.LGBMClassifier(
+        n_estimators=10, num_leaves=7, min_child_samples=5, random_state=0, verbose=-1
+    )
+    clf.fit(frame, y)
+    ir = parse_model(clf)
+    assert ir.categorical[1].categories == tuple(names)
+    X = np.column_stack(
+        [frame["num"].to_numpy(), frame["occupation"].cat.codes.to_numpy(dtype=np.float64)]
+    )
+    assert_conformance(ir, X, clf.booster_.predict, n_random=2000)
