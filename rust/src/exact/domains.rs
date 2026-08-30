@@ -27,6 +27,9 @@ fn py_cmp(a: f64, b: f64) -> std::cmp::Ordering {
 
 /// One feature's contribution to the objective — the per-feature term of
 /// `genetic.objective()`, same four cases, same multiply-then-divide order.
+/// A categorical change (`is_cat`) costs one flat unit in place of the
+/// absolute code distance; NaN transitions keep their declared deltas.
+#[allow(clippy::too_many_arguments)]
 fn term_cost(
     x_j: f64,
     r: f64,
@@ -35,6 +38,7 @@ fn term_cost(
     lam: f64,
     to_miss: f64,
     from_miss: f64,
+    is_cat: bool,
 ) -> f64 {
     let x_nan = x_j.is_nan();
     let r_nan = r.is_nan();
@@ -50,11 +54,12 @@ fn term_cost(
     if r == x_j {
         return 0.0;
     }
-    let delta = (r - x_j).abs();
+    let delta = if is_cat { 1.0 } else { (r - x_j).abs() };
     lam + (weight_j * delta) / sigma_j
 }
 
 /// Full-row objective, accumulated in ascending feature index.
+/// `cardinality[j] > 0` marks feature j categorical (flat change cost).
 pub(crate) fn cost_of_row(
     x: &[f64],
     row: &[f64],
@@ -62,11 +67,21 @@ pub(crate) fn cost_of_row(
     weights: &[f64],
     lam: f64,
     deltas: &[(f64, f64)],
+    cardinality: &[u32],
 ) -> f64 {
     let mut total = 0.0;
     for j in 0..x.len() {
         let (to_miss, from_miss) = deltas[j];
-        total += term_cost(x[j], row[j], weights[j], sigma[j], lam, to_miss, from_miss);
+        total += term_cost(
+            x[j],
+            row[j],
+            weights[j],
+            sigma[j],
+            lam,
+            to_miss,
+            from_miss,
+            cardinality[j] > 0,
+        );
     }
     total
 }
@@ -429,11 +444,19 @@ pub(crate) fn build_domains(
             if !x_nan {
                 // the pin fixes the only value the feature may take; going
                 // missing is a separate question AllowMissing still answers
-                let cost = term_cost(x_j, v, weight_j, sigma_j, lam, to_miss, from_miss);
+                let cost = term_cost(x_j, v, weight_j, sigma_j, lam, to_miss, from_miss, false);
                 let mut states = vec![State::new(v, cost, cell_index(cells, v), false)];
                 if allow_j && !suppress_nan[j] {
-                    let nan_cost =
-                        term_cost(x_j, f64::NAN, weight_j, sigma_j, lam, to_miss, from_miss);
+                    let nan_cost = term_cost(
+                        x_j,
+                        f64::NAN,
+                        weight_j,
+                        sigma_j,
+                        lam,
+                        to_miss,
+                        from_miss,
+                        false,
+                    );
                     states.push(State::new(f64::NAN, nan_cost, cells.len(), true));
                     sort_states(&mut states);
                 }
@@ -449,7 +472,7 @@ pub(crate) fn build_domains(
                 states.push(State::new(f64::NAN, 0.0, cells.len(), true));
             }
             if allow_j {
-                let cost = term_cost(x_j, v, weight_j, sigma_j, lam, to_miss, from_miss);
+                let cost = term_cost(x_j, v, weight_j, sigma_j, lam, to_miss, from_miss, false);
                 states.push(State::new(v, cost, cell_index(cells, v), false));
             }
             sort_states(&mut states);
@@ -492,7 +515,8 @@ pub(crate) fn build_domains(
                     if keep_added && val == x_j {
                         continue;
                     }
-                    let cost = term_cost(x_j, val, weight_j, sigma_j, lam, to_miss, from_miss);
+                    let cost =
+                        term_cost(x_j, val, weight_j, sigma_j, lam, to_miss, from_miss, false);
                     states.push(State::new(val, cost, local_idx, false));
                 }
                 continue;
@@ -504,7 +528,7 @@ pub(crate) fn build_domains(
                 if !iv.contains(val) || (keep_added && val == x_j) {
                     continue;
                 }
-                let cost = term_cost(x_j, val, weight_j, sigma_j, lam, to_miss, from_miss);
+                let cost = term_cost(x_j, val, weight_j, sigma_j, lam, to_miss, from_miss, false);
                 states.push(State::new(val, cost, local_idx, false));
                 added_here.push(val);
             }
@@ -523,14 +547,23 @@ pub(crate) fn build_domains(
             if added_here.contains(&r) {
                 continue; // the demanded value was this cell's nearest point too
             }
-            let cost = term_cost(x_j, r, weight_j, sigma_j, lam, to_miss, from_miss);
+            let cost = term_cost(x_j, r, weight_j, sigma_j, lam, to_miss, from_miss, false);
             let mut state = State::new(r, cost, local_idx, false);
             state.snapped = snapped;
             states.push(state);
         }
 
         if allow_j && !suppress_nan[j] {
-            let nan_cost = term_cost(x_j, f64::NAN, weight_j, sigma_j, lam, to_miss, from_miss);
+            let nan_cost = term_cost(
+                x_j,
+                f64::NAN,
+                weight_j,
+                sigma_j,
+                lam,
+                to_miss,
+                from_miss,
+                false,
+            );
             states.push(State::new(f64::NAN, nan_cost, cells.len(), true));
         }
 

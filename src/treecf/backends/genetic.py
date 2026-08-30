@@ -92,7 +92,10 @@ def solve_genetic(
             else:
                 went_nan = col_nan
                 moved = ~col_nan & (col != x[j])
-                delta = np.where(moved, np.abs(np.nan_to_num(col) - x[j]), 0.0)
+                if is_cat[j]:  # a category change costs one flat unit
+                    delta = np.where(moved, 1.0, 0.0)
+                else:
+                    delta = np.where(moved, np.abs(np.nan_to_num(col) - x[j]), 0.0)
                 total += went_nan * (weights[j] * to_miss / sigma[j] + lam)
                 total += moved * lam + weights[j] * delta / sigma[j]
         return total

@@ -395,7 +395,15 @@ fn rank_keys(
             2
         };
         if tier[r] == 0 {
-            key[r] = objective_row(&pop[r * p..(r + 1) * p], x, sigma, weights, lam, deltas);
+            key[r] = objective_row(
+                &pop[r * p..(r + 1) * p],
+                x,
+                sigma,
+                weights,
+                lam,
+                deltas,
+                &ens.cardinality,
+            );
         } else {
             let gap = (lo_t - s).max(0.0) + (s - hi_t).max(0.0);
             // np.nan_to_num(gap, posinf=1e18): NaN -> 0.0, +inf -> 1e18
@@ -411,6 +419,7 @@ fn rank_keys(
     (tier, key)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn objective_row(
     row: &[f64],
     x: &[f64],
@@ -418,6 +427,7 @@ fn objective_row(
     weights: &[f64],
     lam: f64,
     deltas: &[(f64, f64)],
+    cardinality: &[u32],
 ) -> f64 {
     let mut total = 0.0;
     for j in 0..row.len() {
@@ -433,7 +443,13 @@ fn objective_row(
             }
             let moved = !col_nan && row[j] != x[j];
             if moved {
-                total += lam + weights[j] * (row[j] - x[j]).abs() / sigma[j];
+                // a category change costs one flat unit; numeric moves cost |delta|
+                let delta = if cardinality[j] > 0 {
+                    1.0
+                } else {
+                    (row[j] - x[j]).abs()
+                };
+                total += lam + weights[j] * delta / sigma[j];
             }
         }
     }

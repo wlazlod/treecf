@@ -8,6 +8,7 @@ frequent ``median = mode = 0`` case.
 from __future__ import annotations
 
 import warnings
+from collections.abc import Collection
 
 import numpy as np
 import numpy.typing as npt
@@ -19,11 +20,20 @@ class DegenerateFeatureWarning(UserWarning):
     """A feature had no usable spread; its normalizer defaults to 1.0."""
 
 
-def fit_normalizers(X: FloatArray) -> FloatArray:
-    """Return sigma_j > 0 per feature, ignoring NaNs in the background sample."""
+def fit_normalizers(X: FloatArray, categorical: Collection[int] = ()) -> FloatArray:
+    """Return sigma_j > 0 per feature, ignoring NaNs in the background sample.
+
+    A feature listed in ``categorical`` gets ``sigma_j = 1.0`` outright: its
+    values are category codes, and the MAD of labels is meaningless — every
+    category change costs one unit regardless of code distance.
+    """
     n_features = X.shape[1]
+    cat = set(categorical)
     sigma = np.empty(n_features, dtype=np.float64)
     for j in range(n_features):
+        if j in cat:
+            sigma[j] = 1.0
+            continue
         col = X[:, j]
         col = col[~np.isnan(col)]
         if len(col) == 0:

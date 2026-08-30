@@ -819,6 +819,7 @@ def _batch_warm_incumbents(
             cost = _cost_of_row(
                 X[i], candidate.x_cf, explainer.sigma, explainer.weights, sparsity_weight,
                 explainer.compiled.allow_missing,
+                categorical=frozenset(explainer.ir.categorical),
             )
             incumbents.append((cost, candidate.x_cf))
         else:

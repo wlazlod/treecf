@@ -77,10 +77,13 @@ def _term_cost(
     lam: float,
     to_miss: float,
     from_miss: float,
+    is_cat: bool = False,
 ) -> float:
     """One feature's contribution to the objective, mirroring the per-feature
     term of ``genetic.objective()`` exactly — same four cases, same
     multiply-then-divide order, so results stay bit-identical across backends.
+    A categorical change (``is_cat``) costs one flat unit in place of the
+    absolute code distance; NaN transitions keep their declared deltas.
     """
     x_nan = math.isnan(x_j)
     r_nan = math.isnan(r)
@@ -92,7 +95,7 @@ def _term_cost(
         return (weight_j * to_miss) / sigma_j + lam
     if r == x_j:  # keep: no movement, no sparsity penalty
         return 0.0
-    delta = abs(r - x_j)
+    delta = 1.0 if is_cat else abs(r - x_j)
     return lam + (weight_j * delta) / sigma_j
 
 
@@ -103,6 +106,7 @@ def _cost_of_row(
     weights: FloatArray,
     lam: float,
     allow_missing: Mapping[int, tuple[float, float]],
+    categorical: frozenset[int] = frozenset(),
 ) -> float:
     """Full-row objective, accumulated ascending feature index like
     ``genetic.objective()``. ``row`` is an arbitrary candidate — not necessarily
@@ -113,7 +117,14 @@ def _cost_of_row(
     for j in range(len(x)):
         to_miss, from_miss = allow_missing.get(j, (0.0, 0.0))
         total += _term_cost(
-            float(x[j]), float(row[j]), float(weights[j]), float(sigma[j]), lam, to_miss, from_miss
+            float(x[j]),
+            float(row[j]),
+            float(weights[j]),
+            float(sigma[j]),
+            lam,
+            to_miss,
+            from_miss,
+            j in categorical,
         )
     return total
 

@@ -414,7 +414,7 @@ class Explainer:
         self.background = (
             None if background is None else np.asarray(background, dtype=np.float64)
         )
-        self.sigma = _resolve_sigma(names, background, normalizers)
+        self.sigma = _resolve_sigma(names, background, normalizers, frozenset(self.ir.categorical))
         self.weights = np.array([(weights or {}).get(name, 1.0) for name in names])
         self.value_policy = value_policy or {}
         self._rust_cache = {}
@@ -991,6 +991,7 @@ class Explainer:
                 cost = _cost_of_row(
                     x, warm.x_cf, self.sigma, self.weights, sparsity_weight,
                     self.compiled.allow_missing,
+                    categorical=frozenset(self.ir.categorical),
                 )
                 incumbent = (cost, warm.x_cf)
 
@@ -1474,6 +1475,8 @@ class Explainer:
                 delta = self.compiled.allow_missing[j][0]
             elif x_nan:  # NaN -> value priced by delta_from_miss
                 delta = self.compiled.allow_missing[j][1]
+            elif j in self.ir.categorical:  # a category change costs one flat unit
+                delta = 1.0
             else:
                 delta = abs(x_cf[j] - x[j])
             distance += self.weights[j] * delta / self.sigma[j]
@@ -1521,6 +1524,7 @@ def _resolve_sigma(
     names: tuple[str, ...],
     background: FloatArray | None,
     normalizers: FloatArray | dict[str, float] | None,
+    categorical: frozenset[int] = frozenset(),
 ) -> FloatArray:
     if normalizers is not None:
         if isinstance(normalizers, dict):
@@ -1531,7 +1535,7 @@ def _resolve_sigma(
         else:
             sigma = np.asarray(normalizers, dtype=np.float64)
     elif background is not None:
-        sigma = fit_normalizers(np.asarray(background, dtype=np.float64))
+        sigma = fit_normalizers(np.asarray(background, dtype=np.float64), categorical)
     else:
         raise TreecfError("provide either background (to fit normalizers) or normalizers")
     if len(sigma) != len(names) or np.any(sigma <= 0):

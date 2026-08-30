@@ -376,6 +376,7 @@ impl Ctx<'_> {
             self.weights,
             self.lam,
             &self.deltas,
+            &self.ens.cardinality,
         )
     }
 
@@ -1531,7 +1532,7 @@ mod tests {
                 row[f] = domains[f][idx[level]].value;
             }
             if accepts(&ens, None, 0.0, &cons, &x, interval.0, interval.1, &row) {
-                let cost = cost_of_row(&x, &row, &[1.0; 3], &[1.0; 3], lam, &deltas);
+                let cost = cost_of_row(&x, &row, &[1.0; 3], &[1.0; 3], lam, &deltas, &[0; 3]);
                 if best.is_none_or(|b| cost < b) {
                     best = Some(cost);
                 }

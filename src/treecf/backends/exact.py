@@ -213,6 +213,7 @@ def solve_exact(
     start = time.monotonic()
     order_pairs = _validate(compiled, value_policies)
     lo_t, hi_t = interval
+    categorical = frozenset(ir.categorical)
     if_ir = plausibility[0] if plausibility is not None else None
     min_total_path = plausibility[1] if plausibility is not None else 0.0
 
@@ -485,7 +486,9 @@ def solve_exact(
                 variant = row.copy()
                 variant[a] = t
                 variant[b] = t
-                cost = _cost_of_row(x, variant, sigma, weights, lam, compiled.allow_missing)
+                cost = _cost_of_row(
+                    x, variant, sigma, weights, lam, compiled.allow_missing, categorical
+                )
                 if cost < best_cost and accepts(variant):
                     best_cost = cost
                     best_row = variant
@@ -500,7 +503,9 @@ def solve_exact(
                 variant = repaired.copy()
                 variant[a] = t
                 variant[b] = t
-                cost = _cost_of_row(x, variant, sigma, weights, lam, compiled.allow_missing)
+                cost = _cost_of_row(
+                    x, variant, sigma, weights, lam, compiled.allow_missing, categorical
+                )
                 if cost < best_cost:
                     best_cost = cost
                     best_t = t
@@ -578,7 +583,9 @@ def solve_exact(
             row[j] = state.value
             accepted = finish(row)
             if accepted is not None:
-                cost = _cost_of_row(x, accepted, sigma, weights, lam, compiled.allow_missing)
+                cost = _cost_of_row(
+                    x, accepted, sigma, weights, lam, compiled.allow_missing, categorical
+                )
                 if cost < incumbent_cost:
                     incumbent_cost = cost
                     incumbent_row = accepted

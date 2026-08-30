@@ -47,3 +47,25 @@ def test_all_nan_column_warns_and_returns_one() -> None:
     with pytest.warns(DegenerateFeatureWarning):
         sigma = fit_normalizers(col.reshape(-1, 1))
     assert sigma[0] == 1.0
+
+
+def test_categorical_features_get_unit_normalizers() -> None:
+    # column 1 is a constant code column: without the categorical marker it
+    # would warn as degenerate; with it, sigma is 1.0 outright and no warning
+    # escapes (the suite runs with warnings-as-errors)
+    rng = np.random.default_rng(0)
+    X = np.column_stack([rng.normal(size=200), np.full(200, 3.0)])
+    sigma = fit_normalizers(X, categorical={1})
+    assert sigma[1] == 1.0
+    assert sigma[0] > 0
+
+
+def test_cost_of_row_prices_a_category_change_flat() -> None:
+    from treecf.backends._exact_domains import _cost_of_row
+
+    x = np.array([0.0, 10.0])
+    row = np.array([4.0, 10.0])  # code 0 -> 4: four codes away, still one unit
+    flat = _cost_of_row(x, row, np.ones(2), np.ones(2), 0.25, {}, categorical=frozenset({0}))
+    assert flat == 0.25 + 1.0
+    numeric = _cost_of_row(x, row, np.ones(2), np.ones(2), 0.25, {})
+    assert numeric == 0.25 + 4.0
