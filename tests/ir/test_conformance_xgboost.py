@@ -82,3 +82,76 @@ def test_multiclass_raises() -> None:
     clf.fit(X, y3)
     with pytest.raises(UnsupportedModelError, match="multi"):
         parse_model(clf)
+
+
+def _categorical_training(seed: int, cardinalities: dict[int, int]) -> tuple:
+    from ..conftest import make_synthetic
+
+    X, y, _ = make_synthetic(seed=seed, nan_frac=0.1)
+    rng = np.random.default_rng(seed)
+    for j, k in cardinalities.items():
+        codes = rng.integers(0, k, size=len(X)).astype(np.float64)
+        codes[rng.random(len(X)) < 0.1] = np.nan
+        X[:, j] = codes
+        y = np.where(np.isnan(codes), y, (y + (codes % 2)) % 2)
+    feature_types = ["c" if j in cardinalities else "q" for j in range(X.shape[1])]
+    return X, y, feature_types
+
+
+def _cat_dmatrix(A: np.ndarray, feature_types: list[str]) -> object:
+    return xgb.DMatrix(
+        A,
+        feature_names=[f"f{i}" for i in range(A.shape[1])],
+        feature_types=feature_types,
+        enable_categorical=True,
+    )
+
+
+def test_native_categorical_conformance() -> None:
+    X, y, feature_types = _categorical_training(seed=21, cardinalities={1: 5, 3: 9})
+    dtrain = _cat_dmatrix(X, feature_types)
+    dtrain.set_label(y)
+    booster = xgb.train(
+        {"objective": "binary:logistic", "max_depth": 4, "tree_method": "hist", "seed": 3},
+        dtrain,
+        num_boost_round=20,
+    )
+    ir = parse_model(booster)
+    assert set(ir.categorical) == {1, 3}
+    assert any(node.categories is not None for tree in ir.trees for node in tree.nodes)
+    assert_conformance(
+        ir, X, lambda A: booster.predict(_cat_dmatrix(A, feature_types))
+    )  # probes include NaN and unseen codes
+
+
+def test_sklearn_wrapper_categorical_with_pandas_names() -> None:
+    pd = pytest.importorskip("pandas")
+    rng = np.random.default_rng(23)
+    n = 700
+    names = ["clerk", "manager", "nurse", "smith", "guard"]
+    frame = pd.DataFrame(
+        {
+            "num": rng.normal(size=n),
+            "occupation": pd.Categorical(rng.choice(names, size=n), categories=names),
+        }
+    )
+    y = ((frame["occupation"].cat.codes % 2).to_numpy() ^ (frame["num"] > 0)).astype(int)
+    clf = xgb.XGBClassifier(
+        n_estimators=10, max_depth=3, enable_categorical=True, tree_method="hist"
+    )
+    clf.fit(frame, y)
+    ir = parse_model(clf)
+    assert 1 in ir.categorical
+    X = np.column_stack(
+        [frame["num"].to_numpy(), frame["occupation"].cat.codes.to_numpy(dtype=np.float64)]
+    )
+    types = ["q", "c"]
+
+    def predict(A: np.ndarray) -> np.ndarray:
+        dm = xgb.DMatrix(
+            A, feature_names=["num", "occupation"], feature_types=types,
+            enable_categorical=True,
+        )
+        return clf.get_booster().predict(dm)
+
+    assert_conformance(ir, X, predict, n_random=2000)
