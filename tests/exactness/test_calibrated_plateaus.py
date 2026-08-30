@@ -1,4 +1,4 @@
-"""Plateau-aware exactness for calibrated-space targets (0.2.4, T3).
+"""Plateau-aware exactness for calibrated-space targets.
 
 A step calibrator maps every raw score inside a pooled block to one shared
 level, so a calibrated target whose bound sits exactly on a plateau level is

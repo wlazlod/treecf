@@ -32,13 +32,13 @@ def parse_sklearn(model: object) -> EnsembleIR:
         return _parse_gradient_boosting(model)
     if kind in ("HistGradientBoostingClassifier", "HistGradientBoostingRegressor"):
         return _parse_hist_gradient_boosting(model)
-    raise UnsupportedModelError(f"sklearn model {kind} not supported in v0.1")
+    raise UnsupportedModelError(f"sklearn model {kind} not supported")
 
 
 def _parse_random_forest(model: Any) -> EnsembleIR:
     classifier = type(model).__name__.endswith("Classifier")
     if classifier and model.n_classes_ > 2:
-        raise UnsupportedModelError("multiclass forests are not supported in v0.1")
+        raise UnsupportedModelError("multiclass forests are not supported")
     n = len(model.estimators_)
     trees = tuple(
         _tree_from_arrays(est.tree_, scale=1.0 / n, classifier=classifier)
@@ -57,7 +57,7 @@ def _parse_random_forest(model: Any) -> EnsembleIR:
 def _parse_gradient_boosting(model: Any) -> EnsembleIR:
     classifier = type(model).__name__.endswith("Classifier")
     if classifier and model.n_classes_ > 2:
-        raise UnsupportedModelError("multiclass gradient boosting is not supported in v0.1")
+        raise UnsupportedModelError("multiclass gradient boosting is not supported")
     base_score = float(
         model._raw_predict_init(np.zeros((1, model.n_features_in_), dtype=np.float64))[0, 0]
     )
@@ -79,7 +79,7 @@ def _parse_gradient_boosting(model: Any) -> EnsembleIR:
 def _parse_hist_gradient_boosting(model: Any) -> EnsembleIR:
     classifier = type(model).__name__.endswith("Classifier")
     if classifier and len(model.classes_) > 2:
-        raise UnsupportedModelError("multiclass HistGradientBoosting is not supported in v0.1")
+        raise UnsupportedModelError("multiclass HistGradientBoosting is not supported")
     baseline = float(np.ravel(model._baseline_prediction)[0])
     trees = []
     for predictors in model._predictors:

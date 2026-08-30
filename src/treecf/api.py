@@ -675,7 +675,7 @@ class Explainer:
         replaces ``warm_start``'s N sequential per-row (or, in seeds mode,
         per-attempt) genetic warm passes with a single vectorized one across
         every row — see ``treecf.batch.explain_batch`` for exactly which
-        modes it covers and which keep 0.2.0's per-solve behavior.
+        modes it covers and which keep per-solve warm starts.
         ``node_budget``/``gap`` thread through to every solve unchanged; see
         ``Explainer.explain``. A ``KeyboardInterrupt`` during any batch solve
         discards whatever the batch has not yet finished — there is no

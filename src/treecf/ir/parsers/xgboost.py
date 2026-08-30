@@ -45,12 +45,12 @@ def parse_xgboost_dump(dump: dict[str, Any]) -> EnsembleIR:
 
     objective = learner["objective"]["name"]
     if objective not in _OBJECTIVE_LINKS:
-        raise UnsupportedModelError(f"objective {objective!r} not supported in v0.1")
+        raise UnsupportedModelError(f"objective {objective!r} not supported")
     link = _OBJECTIVE_LINKS[objective]
 
     model_param = learner["learner_model_param"]
     if int(model_param.get("num_class", "0")) > 1:
-        raise UnsupportedModelError("multiclass models are not supported in v0.1")
+        raise UnsupportedModelError("multiclass models are not supported")
 
     n_features = int(model_param["num_feature"])
     base_output = _parse_base_score(model_param["base_score"])
@@ -78,7 +78,7 @@ def _parse_base_score(raw: str) -> float:
     if text.startswith("["):
         values = [v for v in text.strip("[]").split(",") if v.strip()]
         if len(values) != 1:
-            raise UnsupportedModelError(f"multi-output base_score {raw!r} not supported in v0.1")
+            raise UnsupportedModelError(f"multi-output base_score {raw!r} not supported")
         return float(values[0])
     return float(text)
 
@@ -114,7 +114,7 @@ def _parse_tree(tree: dict[str, Any]) -> Tree:
             continue
         if split_type is not None and split_type[i] != 0:
             raise UnsupportedModelError(
-                f"categorical split at node {i} not supported in v0.1"
+                f"categorical split at node {i} not supported"
             )
         nodes.append(
             Node(

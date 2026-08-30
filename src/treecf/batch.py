@@ -118,7 +118,7 @@ class BatchRecord:
     region: RecourseRegion | None = None  # set by explain_batch(..., region=True)
     proof: str = "heuristic"  # mirrors Counterfactual.proof / Infeasible.proof
     solver_stats: dict[str, object] = field(default_factory=dict)  # exact-backend only
-    # Calibrated-target provenance and read-out (0.2.4). The fingerprint is one
+    # Calibrated-target provenance and read-out. The fingerprint is one
     # value repeated per record on purpose: every JSON line stays self-contained
     # for a validator who receives only a slice of the file.
     calibrator_fingerprint: str | None = None
@@ -290,11 +290,11 @@ class BatchResult:
                     blocked_lever=raw["blocked_lever"],
                     coalition=raw.get("coalition"),  # absent in pre-coalition files
                     region=region,
-                    # pre-0.2.2 files carry neither field; default by feasibility
+                    # files without a proof field default by feasibility
                     proof=raw.get(
                         "proof", "heuristic" if raw["feasible"] else "search_exhausted"
                     ),
-                    # absent in files written before 0.2.4
+                    # records without these fields default to None
                     calibrator_fingerprint=raw.get("calibrator_fingerprint"),
                     score_calibrated=raw.get("score_calibrated"),
                     solver_stats={
@@ -408,18 +408,18 @@ def explain_batch(
     per-row genetic warm passes with a single vectorized one across every row
     (one ``Explainer._solve_batch`` call, ``min(time_budget_s * 0.25, 2.0)``)
     -- for ``diversity="seeds"`` every attempt of a row shares that one
-    incumbent instead of each attempt warm-starting its own (so, unlike
-    0.2.0, a batch run with ``n_per_example > 1`` is not required to explore
+    incumbent instead of each attempt warm-starting its own (so a batch run
+    with ``n_per_example > 1`` is not required to explore
     as many distinct warm starts per row as an equivalent sequence of
     ``explain`` calls would; with ``n_per_example=1`` the result matches a
     sequential ``explain(..., backend="exact")`` call exactly). A row whose
     warm draw is infeasible gets no incumbent and runs unwarmed -- there is
     no per-row genetic fallback. For ``diversity="lever-blocking"`` only the
     primary solve (the unrestricted plan) uses the shared incumbent; the
-    per-lever frozen clones keep 0.2.0's own per-solve ``warm_start`` (their
+    per-lever frozen clones keep their own per-solve ``warm_start`` (their
     constraint set differs by one ``Freeze``, so the primary's incumbent does
     not necessarily still verify for them). ``diversity="coalitions"``
-    likewise keeps 0.2.0's per-coalition-solver behavior throughout -- each
+    likewise keeps per-coalition-solver warm starts throughout -- each
     coalition's constraint set differs the same way. A ``KeyboardInterrupt``
     during any of this discards whatever the batch has not yet finished --
     there is no partial ``BatchResult``.

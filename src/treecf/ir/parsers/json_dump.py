@@ -31,5 +31,5 @@ def parse_dump(source: str | Path | dict[str, Any]) -> EnsembleIR:
 
         return parse_catboost_dump(data)
     raise UnsupportedModelError(
-        "unrecognized dump format; expected an XGBoost or LightGBM JSON model (v0.1)"
+        "unrecognized dump format; expected an XGBoost, LightGBM, or CatBoost JSON model"
     )

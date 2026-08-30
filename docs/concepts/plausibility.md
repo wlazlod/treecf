@@ -20,5 +20,5 @@ The genetic backend evaluates the same score directly.
 boolean per forest leaf — roughly doubling model size for a typical 100-tree
 forest. `plausibility=None` costs nothing.
 
-**v0.1 restriction**: plausibility cannot be combined with `AllowMissing` or
+**Limitation**: plausibility cannot be combined with `AllowMissing` or
 NaN factual values (isolation forests define no NaN routing).

@@ -4,7 +4,7 @@ Missing-value routing depends on each node's ``missing_type``:
 - "NaN": NaN follows ``default_left``.
 - "None": LightGBM substitutes 0.0 for NaN, so ``missing_left`` is resolved to
   the side that 0.0 takes (``0.0 <= threshold``).
-- "Zero" (``zero_as_missing``): unsupported in v0.1 — zeros and NaN collapse
+- "Zero" (``zero_as_missing``): unsupported — zeros and NaN collapse
   into one state that the IR cannot represent
 
 ``boost_from_average`` folds the intercept into leaf values, so base_score = 0.
@@ -42,11 +42,11 @@ def parse_lightgbm(model: object) -> EnsembleIR:
 def parse_lightgbm_dump(dump: dict[str, Any]) -> EnsembleIR:
     """Parse the dict produced by ``Booster.dump_model()`` (or its JSON serialization)."""
     if int(dump.get("num_tree_per_iteration", 1)) > 1:
-        raise UnsupportedModelError("multiclass LightGBM models are not supported in v0.1")
+        raise UnsupportedModelError("multiclass LightGBM models are not supported")
 
     objective = str(dump.get("objective", "")).split(" ")[0]
     if objective not in _OBJECTIVE_LINKS:
-        raise UnsupportedModelError(f"objective {objective!r} not supported in v0.1")
+        raise UnsupportedModelError(f"objective {objective!r} not supported")
     link = _OBJECTIVE_LINKS[objective]
 
     n_features = int(dump["max_feature_idx"]) + 1
@@ -84,7 +84,7 @@ def _walk(node: dict[str, Any], nodes: list[Node]) -> int:
     decision = node["decision_type"]
     if decision != "<=":
         raise UnsupportedModelError(
-            f"categorical split (decision_type {decision!r}) not supported in v0.1"
+            f"categorical split (decision_type {decision!r}) not supported"
         )
     threshold = float(node["threshold"])
     op = SplitOp.LE
@@ -102,7 +102,7 @@ def _walk(node: dict[str, Any], nodes: list[Node]) -> int:
         missing_left = threshold >= 0.0  # LightGBM substitutes 0.0 for NaN
     else:
         raise UnsupportedModelError(
-            f"missing_type {missing_type!r} (zero_as_missing) not supported in v0.1"
+            f"missing_type {missing_type!r} (zero_as_missing) not supported"
         )
 
     nodes.append(None)  # type: ignore[arg-type]  # placeholder until children are walked

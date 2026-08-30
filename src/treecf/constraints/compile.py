@@ -447,7 +447,7 @@ def _validated_binary(c: Equals, index: dict[str, int]) -> int:
         raise ConstraintValidationError(f"Equals references unknown feature {c.feature!r}")
     if c.value not in (0.0, 1.0):
         raise ConstraintValidationError(
-            f"Equals({c.feature!r}): only binary values 0/1 are supported in v0.1, "
+            f"Equals({c.feature!r}): only binary values 0/1 are supported, "
             f"got {c.value}"
         )
     return index[c.feature]

@@ -90,7 +90,7 @@ a buffer when recourse is downstream.
 (once per band for a bands ladder) and threads it through every row — the
 calibrator's `interval_inverse` is never re-invoked per row.
 
-## Calibrator provenance (0.2.4)
+## Calibrator provenance
 
 Certificates for calibrated targets record *which* calibrator produced the
 stored raw interval, without embedding it:
@@ -116,8 +116,8 @@ report["calibrator_match"]   # fingerprints agree AND re-inverting the stored
                              # calibrated bounds reproduces the stored raw interval
 ```
 
-Without `calibrator=`, `check_certificate` behaves exactly as in 0.2.3 (no
-`calibrator_match` key). Batch records carry the same fingerprint per row
+Without `calibrator=`, `check_certificate` runs its usual checks and adds no
+`calibrator_match` key. Batch records carry the same fingerprint per row
 (`BatchRecord.calibrator_fingerprint`), so each JSON line stays
 self-contained. Remember what the engine actually consumed: the raw
 *interval*, not the calibrator — provenance ties the interval to its source,

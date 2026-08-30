@@ -37,5 +37,6 @@ def parse_model(model: object) -> EnsembleIR:
 
         return parse_catboost(model)
     raise UnsupportedModelError(
-        f"cannot parse {type(model)!r}; supported in v0.1: xgboost/lightgbm models, JSON dumps"
+        f"cannot parse {type(model)!r}; supported: XGBoost/LightGBM/CatBoost/sklearn "
+        "models and JSON dumps"
     )

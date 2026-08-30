@@ -1,4 +1,4 @@
-"""probcal calibrator matrix on real boosted models (0.2.4, T4).
+"""probcal calibrator matrix on real boosted models.
 
 Every cell fits a real probcal calibrator on a model's scores, asks the exact
 backend for a counterfactual against a calibrated target, and re-verifies the

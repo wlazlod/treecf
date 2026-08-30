@@ -45,7 +45,7 @@ def parse_catboost(model: object) -> EnsembleIR:
 def parse_catboost_dump(dump: dict[str, Any]) -> EnsembleIR:
     scale, bias = dump["scale_and_bias"]
     if len(bias) != 1:
-        raise UnsupportedModelError("multiclass CatBoost models are not supported in v0.1")
+        raise UnsupportedModelError("multiclass CatBoost models are not supported")
 
     info = dump.get("model_info", {})
     loss = (
@@ -54,11 +54,11 @@ def parse_catboost_dump(dump: dict[str, Any]) -> EnsembleIR:
         or ""
     )
     if loss not in _LOSS_LINKS:
-        raise UnsupportedModelError(f"loss function {loss!r} not supported in v0.1")
+        raise UnsupportedModelError(f"loss function {loss!r} not supported")
 
     float_features = dump["features_info"]["float_features"]
     if "cat_features" in dump["features_info"] and dump["features_info"]["cat_features"]:
-        raise UnsupportedModelError("categorical features are not supported in v0.1")
+        raise UnsupportedModelError("categorical features are not supported")
     flat_of = {f["feature_index"]: f["flat_feature_index"] for f in float_features}
     missing_left_of = {
         f["feature_index"]: f.get("nan_value_treatment", "AsIs") != "AsTrue"
@@ -105,7 +105,7 @@ def _expand_oblivious(
         split = splits[bit]
         if split.get("split_type") != "FloatFeature":
             raise UnsupportedModelError(
-                f"split_type {split.get('split_type')!r} not supported in v0.1"
+                f"split_type {split.get('split_type')!r} not supported"
             )
         feature_index = int(split["float_feature_index"])
         nodes.append(None)  # type: ignore[arg-type]  # placeholder
