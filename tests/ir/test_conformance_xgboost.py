@@ -155,3 +155,22 @@ def test_sklearn_wrapper_categorical_with_pandas_names() -> None:
         return clf.get_booster().predict(dm)
 
     assert_conformance(ir, X, predict, n_random=2000)
+
+
+def test_declared_cardinality_beyond_training_codes() -> None:
+    """Codes the model never saw but the caller declares valid route out-of-set."""
+    from treecf.ir.parsers.xgboost import parse_xgboost
+
+    X, y, feature_types = _categorical_training(seed=25, cardinalities={1: 4})
+    dtrain = _cat_dmatrix(X, feature_types)
+    dtrain.set_label(y)
+    booster = xgb.train(
+        {"objective": "binary:logistic", "max_depth": 3, "tree_method": "hist", "seed": 4},
+        dtrain,
+        num_boost_round=15,
+    )
+    ir = parse_xgboost(booster, categories={"f1": [f"c{i}" for i in range(6)]})
+    assert ir.categorical[1].cardinality == 6
+    assert_conformance(
+        ir, X, lambda A: booster.predict(_cat_dmatrix(A, feature_types))
+    )  # probes now include codes 4 and 5

@@ -128,3 +128,19 @@ def test_pandas_categorical_names_are_recovered() -> None:
         [frame["num"].to_numpy(), frame["occupation"].cat.codes.to_numpy(dtype=np.float64)]
     )
     assert_conformance(ir, X, clf.booster_.predict, n_random=2000)
+
+
+def test_declared_cardinality_beyond_training_codes() -> None:
+    """Codes the model never saw but the caller declares valid route out-of-set."""
+    from treecf.ir.parsers.lightgbm import parse_lightgbm
+
+    X, y = _categorical_training(seed=14, cardinalities={1: 4}, nan_frac=0.0)
+    booster = lgb.train(
+        {**_params("binary"), "min_data_per_group": 1},
+        lgb.Dataset(X, label=y, categorical_feature=[1], free_raw_data=False),
+        num_boost_round=15,
+    )
+    name = booster.feature_name()[1]
+    ir = parse_lightgbm(booster, categories={name: [f"c{i}" for i in range(6)]})
+    assert ir.categorical[1].cardinality == 6
+    assert_conformance(ir, X, booster.predict)  # probes now include codes 4 and 5

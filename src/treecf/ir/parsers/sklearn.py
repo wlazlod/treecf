@@ -16,22 +16,27 @@ leaf values; see ``parse_isolation_forest``.
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
+import numpy.typing as npt
 
 from treecf._errors import UnsupportedModelError
-from treecf.ir.model import EnsembleIR, Link, Node, SplitOp, Tree
+from treecf.ir.model import CategoricalFeature, EnsembleIR, Link, Node, SplitOp, Tree
 
 
-def parse_sklearn(model: object) -> EnsembleIR:
+def parse_sklearn(
+    model: object, categories: Mapping[str, Sequence[str]] | None = None
+) -> EnsembleIR:
     kind = type(model).__name__
     if kind in ("RandomForestClassifier", "RandomForestRegressor"):
         return _parse_random_forest(model)
     if kind in ("GradientBoostingClassifier", "GradientBoostingRegressor"):
         return _parse_gradient_boosting(model)
     if kind in ("HistGradientBoostingClassifier", "HistGradientBoostingRegressor"):
-        return _parse_hist_gradient_boosting(model)
+        return _parse_hist_gradient_boosting(model, categories)
     raise UnsupportedModelError(f"sklearn model {kind} not supported")
 
 
@@ -76,23 +81,133 @@ def _parse_gradient_boosting(model: Any) -> EnsembleIR:
     )
 
 
-def _parse_hist_gradient_boosting(model: Any) -> EnsembleIR:
+def _parse_hist_gradient_boosting(
+    model: Any, categories: Mapping[str, Sequence[str]] | None = None
+) -> EnsembleIR:
     classifier = type(model).__name__.endswith("Classifier")
     if classifier and len(model.classes_) > 2:
         raise UnsupportedModelError("multiclass HistGradientBoosting is not supported")
     baseline = float(np.ravel(model._baseline_prediction)[0])
+    n_features = int(model.n_features_in_)
+    names = _names(model)
+
+    is_cat_attr = getattr(model, "is_categorical_", None)
+    is_cat = (
+        np.zeros(n_features, dtype=bool)
+        if is_cat_attr is None
+        else np.asarray(is_cat_attr, dtype=bool)
+    )
+    context = _hgb_categorical_context(model, is_cat, names, categories) if is_cat.any() else None
+
     trees = []
     for predictors in model._predictors:
         if len(predictors) != 1:
             raise UnsupportedModelError("multi-output HistGradientBoosting is not supported")
-        trees.append(_tree_from_hist_nodes(predictors[0].nodes))
+        trees.append(_tree_from_hist_nodes(predictors[0].nodes, predictors[0], context))
     return EnsembleIR(
         trees=tuple(trees),
         base_score=baseline,
         link=Link.SIGMOID if classifier else Link.IDENTITY,
-        n_features=int(model.n_features_in_),
-        feature_names=_names(model),
+        n_features=n_features,
+        feature_names=names,
         meta={"source": "sklearn", "estimator": type(model).__name__},
+        categorical={} if context is None else context.metadata,
+    )
+
+
+@dataclass(frozen=True)
+class _HgbCategoricalContext:
+    """Everything needed to lower HGB categorical nodes into user-code space.
+
+    ``perm`` maps a predictor feature index to the original column (the fitted
+    preprocessor reorders columns: encoded categoricals first, numericals
+    after). ``position_codes[j]`` maps a bitset position to the user-facing
+    code for original column ``j``; ``unknown_codes[j]`` are the codes inside
+    ``[0, cardinality)`` the model never saw — its predictor routes them like
+    missing values, so nodes with ``missing_go_to_left`` absorb them into
+    their member set.
+    """
+
+    perm: tuple[int, ...]
+    position_codes: dict[int, tuple[int, ...]]
+    unknown_codes: dict[int, frozenset[int]]
+    metadata: dict[int, CategoricalFeature]
+
+
+def _hgb_categorical_context(
+    model: Any,
+    is_cat: npt.NDArray[np.bool_],
+    names: tuple[str, ...],
+    categories: Mapping[str, Sequence[str]] | None,
+) -> _HgbCategoricalContext:
+    cat_orig = [int(j) for j in np.flatnonzero(is_cat)]
+    num_orig = [int(j) for j in np.flatnonzero(~is_cat)]
+    preprocessor = getattr(model, "_preprocessor", None)
+    if preprocessor is not None:
+        # fitted preprocessing reorders columns to [categoricals..., numericals...]
+        # and ordinal-encodes each categorical: bitset positions index the
+        # encoder's sorted category values, and unknown values become NaN
+        perm = tuple(cat_orig + num_orig)
+        value_lists = [np.asarray(v) for v in preprocessor.named_transformers_["encoder"].categories_]
+    else:
+        # no preprocessor: bitset positions index the bin mapper's sorted
+        # category values directly, in original column order
+        perm = tuple(range(len(is_cat)))
+        bin_thresholds = getattr(model, "_bin_mapper", None)
+        if bin_thresholds is None:
+            raise UnsupportedModelError(
+                "HistGradientBoosting model exposes neither a fitted preprocessor "
+                "nor a bin mapper; its categorical layout cannot be recovered"
+            )
+        value_lists = [np.asarray(bin_thresholds.bin_thresholds_[j]) for j in cat_orig]
+
+    position_codes: dict[int, tuple[int, ...]] = {}
+    unknown_codes: dict[int, frozenset[int]] = {}
+    metadata: dict[int, CategoricalFeature] = {}
+    for j, values in zip(cat_orig, value_lists, strict=True):
+        # NaN appears as a trailing category when training data had missing
+        # values; it encodes to NaN (the missing route), never to a position
+        values = np.asarray(
+            [v for v in values if not (isinstance(v, float) and math.isnan(v))]
+        )
+        display: tuple[str, ...] | None = None
+        user_list = categories.get(names[j]) if categories else None
+        if values.dtype.kind in "OUS":  # trained on string categories
+            if user_list is None:
+                raise UnsupportedModelError(
+                    f"feature {names[j]!r} was trained on string categories; pass "
+                    "categories= to the Explainer so codes can be assigned"
+                )
+            display = tuple(str(v) for v in user_list)
+            lookup = {name: code for code, name in enumerate(display)}
+            missing = [str(v) for v in values if str(v) not in lookup]
+            if missing:
+                raise UnsupportedModelError(
+                    f"feature {names[j]!r}: categories= does not list trained "
+                    f"category values {missing!r}"
+                )
+            codes = tuple(lookup[str(v)] for v in values)
+        else:
+            floats = values.astype(np.float64)
+            if np.any(floats != np.floor(floats)) or np.any(floats < 0):
+                raise UnsupportedModelError(
+                    f"feature {names[j]!r}: categorical values must be "
+                    "non-negative integer codes"
+                )
+            codes = tuple(int(v) for v in floats)
+            if user_list is not None:
+                display = tuple(str(v) for v in user_list)
+        cardinality = max((max(codes) + 1) if codes else 1, len(display) if display else 0)
+        if display is not None and len(display) < cardinality:
+            display = None
+        position_codes[j] = codes
+        unknown_codes[j] = frozenset(range(cardinality)) - frozenset(codes)
+        metadata[j] = CategoricalFeature(cardinality=cardinality, categories=display)
+    return _HgbCategoricalContext(
+        perm=perm,
+        position_codes=position_codes,
+        unknown_codes=unknown_codes,
+        metadata=metadata,
     )
 
 
@@ -163,24 +278,57 @@ def _tree_from_arrays(tree: Any, scale: float, classifier: bool) -> Tree:
     return Tree(nodes=tuple(nodes))
 
 
-def _tree_from_hist_nodes(nodes_array: Any) -> Tree:
+def _tree_from_hist_nodes(
+    nodes_array: Any, predictor: Any, context: _HgbCategoricalContext | None
+) -> Tree:
+    field_names = nodes_array.dtype.names or ()
+    has_categorical_fields = "is_categorical" in field_names
     nodes = []
     for i, row in enumerate(nodes_array):
         if row["is_leaf"]:
             nodes.append(Node(i, None, None, None, None, None, None, float(row["value"])))
-        else:
+            continue
+        predictor_feature = int(row["feature_idx"])
+        feature = context.perm[predictor_feature] if context is not None else predictor_feature
+        missing_left = bool(row["missing_go_to_left"])
+        if has_categorical_fields and bool(row["is_categorical"]):
+            assert context is not None  # a categorical node implies categorical metadata
+            words = predictor.raw_left_cat_bitsets[int(row["bitset_idx"])]
+            positions = [
+                w * 32 + b for w, word in enumerate(words) for b in range(32) if word >> b & 1
+            ]
+            codes = context.position_codes[feature]
+            members = {codes[pos] for pos in positions if pos < len(codes)}
+            if missing_left:
+                # the predictor routes values it never saw like missing values;
+                # missing goes left here, so the unseen codes join the set
+                members |= context.unknown_codes[feature]
             nodes.append(
                 Node(
                     node_id=i,
-                    feature=int(row["feature_idx"]),
-                    threshold=float(row["num_threshold"]),
-                    op=SplitOp.LE,
-                    missing_left=bool(row["missing_go_to_left"]),
+                    feature=feature,
+                    threshold=None,
+                    op=None,
+                    missing_left=missing_left,
                     left=int(row["left"]),
                     right=int(row["right"]),
                     value=None,
+                    categories=frozenset(members),
                 )
             )
+            continue
+        nodes.append(
+            Node(
+                node_id=i,
+                feature=feature,
+                threshold=float(row["num_threshold"]),
+                op=SplitOp.LE,
+                missing_left=missing_left,
+                left=int(row["left"]),
+                right=int(row["right"]),
+                value=None,
+            )
+        )
     return Tree(nodes=tuple(nodes))
 
 

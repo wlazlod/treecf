@@ -78,22 +78,21 @@ def probe_matrix(
 def _categorize(
     ir: EnsembleIR, X: FloatArray, rng: np.random.Generator, include_nan: bool
 ) -> FloatArray:
-    """Overwrite categorical columns with codes, unseen codes, and NaN holes.
+    """Overwrite categorical columns with valid codes and NaN holes.
 
     Random real values are not legal category codes; every categorical
-    coordinate becomes an integral code in ``[0, cardinality + 2)`` — the top
-    two deliberately unseen — with NaN kept where the row already had one.
+    coordinate becomes an integral code in ``[0, cardinality)`` — the input
+    contract the API validates — with NaN kept where the row already had one.
+    Unseen-but-valid codes are probed by declaring a cardinality larger than
+    the training data used (via a parser's ``categories`` argument).
     """
     for j, info in ir.categorical.items():
         col = X[:, j]
         was_nan = np.isnan(col)
         already_code = (
-            np.isfinite(col)
-            & (col == np.floor(col))
-            & (col >= 0.0)
-            & (col < info.cardinality + 2)
+            np.isfinite(col) & (col == np.floor(col)) & (col >= 0.0) & (col < info.cardinality)
         )
-        codes = rng.integers(0, info.cardinality + 2, size=len(col)).astype(np.float64)
+        codes = rng.integers(0, info.cardinality, size=len(col)).astype(np.float64)
         replacement = np.where(already_code, col, codes)
         X[:, j] = np.where(was_nan & include_nan, np.nan, replacement)
     return X
