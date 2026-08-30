@@ -148,7 +148,8 @@ def _hgb_categorical_context(
         # and ordinal-encodes each categorical: bitset positions index the
         # encoder's sorted category values, and unknown values become NaN
         perm = tuple(cat_orig + num_orig)
-        value_lists = [np.asarray(v) for v in preprocessor.named_transformers_["encoder"].categories_]
+        encoder = preprocessor.named_transformers_["encoder"]
+        value_lists = [np.asarray(v) for v in encoder.categories_]
     else:
         # no preprocessor: bitset positions index the bin mapper's sorted
         # category values directly, in original column order

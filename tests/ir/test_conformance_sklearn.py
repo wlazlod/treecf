@@ -224,7 +224,7 @@ def test_hist_gradient_boosting_string_categories_need_a_code_map() -> None:
         max_iter=10, max_depth=3, random_state=0, categorical_features="from_dtype"
     )
     clf.fit(frame, y)
-    with pytest.raises(UnsupportedModelError, match="pass\ncategories= |categories="):
+    with pytest.raises(UnsupportedModelError, match="categories"):
         parse_model(clf)
     from treecf.ir.parsers.sklearn import parse_sklearn
 
