@@ -6,11 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 <!-- Release checklist:
-  1. Bump the version in pyproject.toml, src/treecf/__init__.py (__version__),
-     rust/Cargo.toml, and CITATION.cff (version AND date-released).
-  2. Regenerate rust/Cargo.lock (any cargo build) and uv.lock (uv sync).
-  3. Move entries under a dated ## [x.y.z] heading below.
-  4. Tag vX.Y.Z -> release.yml builds, smoke-tests, and publishes.
+  1. Run `uv run python scripts/bump_version.py X.Y.Z` (rewrites every version
+     location, promotes [Unreleased], refreshes both lockfiles).
+  2. Review the diff.
+  3. Tag vX.Y.Z -> release.yml checks version consistency, builds, smoke-tests,
+     and publishes.
 -->
 
 ## [Unreleased]

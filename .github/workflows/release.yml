@@ -16,8 +16,22 @@ on:
           - pypi
 
 jobs:
+  version-consistency:
+    # a missed version location fails the release before any wheel is built
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - uses: dtolnay/rust-toolchain@stable
+      - run: uv python install 3.12
+      - run: uv sync --all-extras --dev
+      - run: uv run pytest tests/test_version_everywhere.py
+
   wheels:
     name: wheel ${{ matrix.platform.name }}
+    needs: [version-consistency]
     runs-on: ${{ matrix.platform.runner }}
     strategy:
       fail-fast: false
@@ -73,6 +87,7 @@ jobs:
 
   sdist:
     name: sdist
+    needs: [version-consistency]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
