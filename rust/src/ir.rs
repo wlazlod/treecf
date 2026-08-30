@@ -36,6 +36,7 @@ pub struct Ensemble {
     pub set_words: Vec<u64>,
     pub cardinality: Vec<u32>,
     cells: OnceLock<Vec<Vec<Cell>>>, // lazy: pure function of the split structure
+    blocks: OnceLock<Vec<Vec<Vec<u32>>>>, // lazy: category blocks per feature
 }
 
 impl Ensemble {
@@ -100,6 +101,7 @@ impl Ensemble {
             set_words: Vec::new(),
             cardinality: vec![0; n_features],
             cells: OnceLock::new(),
+            blocks: OnceLock::new(),
         })
     }
 
@@ -168,6 +170,12 @@ impl Ensemble {
     /// Routing-atomic cells per feature, computed once and cached.
     pub fn feature_cells(&self) -> &[Vec<Cell>] {
         self.cells.get_or_init(|| crate::cells::feature_cells(self))
+    }
+
+    /// Category blocks per feature (empty for numeric), computed once and cached.
+    pub fn category_blocks(&self) -> &[Vec<Vec<u32>>] {
+        self.blocks
+            .get_or_init(|| crate::cells::category_blocks_joint(&[self]))
     }
 
     /// Leaf value reached by `x` in the tree rooted at `root`.

@@ -162,6 +162,78 @@ pub fn feature_cells_joint(ensembles: &[&Ensemble]) -> Vec<Vec<Cell>> {
     pairs.iter().map(|p| build_cells(p)).collect()
 }
 
+/// Category blocks per feature across ensembles — port of
+/// `treecf.aim.cells.category_blocks`. Indexed by feature; numeric features get
+/// an empty vec. Two codes share a block iff no split in any ensemble separates
+/// them: set-membership splits partition by membership, numeric splits on a
+/// categorical feature (an isolation forest trained on raw codes) partition by
+/// threshold side. Blocks are ordered by smallest member (codes scan
+/// ascending), members ascend, and a block's representative is its first entry.
+///
+/// Panics where Python raises `ValueError` (cardinality disagreement), matching
+/// the `feature_cells_joint` convention.
+pub fn category_blocks_joint(ensembles: &[&Ensemble]) -> Vec<Vec<Vec<u32>>> {
+    let n_features = ensembles[0].n_features;
+    let mut cardinality = vec![0u32; n_features];
+    for ens in ensembles {
+        for (j, slot) in cardinality.iter_mut().enumerate() {
+            let k = ens.cardinality[j];
+            if k > 0 {
+                if *slot == 0 {
+                    *slot = k;
+                } else {
+                    assert_eq!(
+                        *slot, k,
+                        "ensembles disagree on the cardinality of feature {j}"
+                    );
+                }
+            }
+        }
+    }
+    let mut out = Vec::with_capacity(n_features);
+    for (j, &card) in cardinality.iter().enumerate() {
+        let k = card as usize;
+        if k == 0 {
+            out.push(Vec::new());
+            continue;
+        }
+        let mut signatures: Vec<Vec<bool>> = vec![Vec::new(); k];
+        for ens in ensembles {
+            for i in 0..ens.feature.len() {
+                if ens.feature[i] != j as i32 {
+                    continue;
+                }
+                if ens.node_set[i] >= 0 {
+                    for (code, sig) in signatures.iter_mut().enumerate() {
+                        sig.push(ens.set_contains(ens.node_set[i], code as f64));
+                    }
+                } else if ens.is_lt[i] {
+                    for (code, sig) in signatures.iter_mut().enumerate() {
+                        sig.push((code as f64) < ens.threshold[i]);
+                    }
+                } else {
+                    for (code, sig) in signatures.iter_mut().enumerate() {
+                        sig.push((code as f64) <= ens.threshold[i]);
+                    }
+                }
+            }
+        }
+        let mut blocks: Vec<Vec<u32>> = Vec::new();
+        let mut seen: Vec<usize> = Vec::new(); // block index -> a code carrying its signature
+        for code in 0..k {
+            match seen.iter().position(|&c| signatures[c] == signatures[code]) {
+                Some(b) => blocks[b].push(code as u32),
+                None => {
+                    seen.push(code);
+                    blocks.push(vec![code as u32]);
+                }
+            }
+        }
+        out.push(blocks);
+    }
+    out
+}
+
 /// Index of the unique cell containing `x` — port of `treecf.aim.cells.cell_index`.
 ///
 /// Panics where Python raises `ValueError`. The cells partition the whole line,
@@ -177,6 +249,7 @@ pub fn cell_index(cells: &[Cell], x: f64) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ir::Link;
 
     #[test]
     fn lt_le_collision_yields_singleton() {
@@ -253,5 +326,108 @@ mod tests {
         assert_eq!(cell_index(&cells, 0.0), 0);
         assert_eq!(cell_index(&cells, 1.0), 1);
         assert_eq!(cell_index(&cells, 1.5), 2);
+    }
+
+    /// One set stump per word list, all on feature 0, cardinality `k`.
+    fn set_ens(sets: &[u64], k: u32) -> Ensemble {
+        let n = sets.len().max(1);
+        let mut feature = Vec::new();
+        let mut node_set = Vec::new();
+        let mut left = Vec::new();
+        let mut right = Vec::new();
+        let mut value = Vec::new();
+        let mut roots = Vec::new();
+        for (t, _) in sets.iter().enumerate() {
+            let base = (t * 3) as u32;
+            roots.push(base);
+            feature.extend_from_slice(&[0, -1, -1]);
+            node_set.extend_from_slice(&[t as i32, -1, -1]);
+            left.extend_from_slice(&[base + 1, 0, 0]);
+            right.extend_from_slice(&[base + 2, 0, 0]);
+            value.extend_from_slice(&[0.0, -1.0, 1.0]);
+        }
+        if sets.is_empty() {
+            roots.push(0);
+            feature.push(-1);
+            node_set.push(-1);
+            left.push(0);
+            right.push(0);
+            value.push(0.0);
+        }
+        let n_nodes = feature.len();
+        Ensemble::new(
+            feature,
+            vec![0.0; n_nodes],
+            vec![false; n_nodes],
+            vec![false; n_nodes],
+            left,
+            right,
+            value,
+            roots,
+            0.0,
+            Link::Identity,
+            n,
+        )
+        .unwrap()
+        .with_categories(
+            node_set,
+            (0..=sets.len() as u32).collect(),
+            sets.to_vec(),
+            {
+                let mut c = vec![0; n];
+                c[0] = k;
+                c
+            },
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn no_splits_one_block() {
+        let e = set_ens(&[], 4);
+        assert_eq!(e.category_blocks()[0], vec![vec![0, 1, 2, 3]]);
+    }
+
+    #[test]
+    fn one_set_two_blocks_numbered_by_smallest_member() {
+        let e = set_ens(&[0b101], 4); // {0, 2}
+        assert_eq!(e.category_blocks()[0], vec![vec![0, 2], vec![1, 3]]);
+    }
+
+    #[test]
+    fn two_sets_refine_to_singletons() {
+        let e = set_ens(&[0b101, 0b1100], 4); // {0,2} then {2,3}
+        assert_eq!(
+            e.category_blocks()[0],
+            vec![vec![0], vec![1], vec![2], vec![3]]
+        );
+    }
+
+    #[test]
+    fn joint_blocks_refine_and_numeric_splits_partition_codes() {
+        let a = set_ens(&[0b101], 4);
+        // a numeric stump on the same feature at 1.5 (an isolation forest would)
+        let b = {
+            let mut e = Ensemble::new(
+                vec![0, -1, -1],
+                vec![1.5, 0.0, 0.0],
+                vec![false, false, false],
+                vec![false, false, false],
+                vec![1, 0, 0],
+                vec![2, 0, 0],
+                vec![0.0, -1.0, 1.0],
+                vec![0],
+                0.0,
+                Link::Identity,
+                1,
+            )
+            .unwrap();
+            e = e
+                .with_categories(vec![-1, -1, -1], vec![0], vec![], vec![4])
+                .unwrap();
+            e
+        };
+        let joint = category_blocks_joint(&[&a, &b]);
+        assert_eq!(joint[0], vec![vec![0], vec![1], vec![2], vec![3]]);
     }
 }

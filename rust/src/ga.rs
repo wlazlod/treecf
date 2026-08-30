@@ -82,16 +82,26 @@ pub fn solve_genetic(
         })
         .collect();
 
-    // per-feature candidate pools: nearest point of every MODEL cell to the anchor
+    // per-feature candidate pools: nearest point of every MODEL cell to the
+    // anchor; categorical features pool their block representatives plus the
+    // factual code (codes only — Gaussian jitter never touches them)
     let anchor: Vec<f64> = x
         .iter()
         .map(|&v| if v.is_nan() { 0.0 } else { v })
         .collect();
     let all_cells = ens.feature_cells();
+    let all_blocks = ens.category_blocks();
+    let is_cat: Vec<bool> = (0..p).map(|j| ens.cardinality[j] > 0).collect();
     let pools: Vec<Vec<f64>> = (0..p)
         .map(|j| {
             if fixed[j] {
                 Vec::new()
+            } else if is_cat[j] {
+                let mut pool: Vec<f64> = all_blocks[j].iter().map(|b| b[0] as f64).collect();
+                if !x[j].is_nan() && !pool.contains(&x[j]) {
+                    pool.push(x[j]);
+                }
+                pool
             } else {
                 all_cells[j]
                     .iter()
@@ -101,18 +111,24 @@ pub fn solve_genetic(
         })
         .collect();
 
-    let mutate_value =
-        |rng: &mut Pcg64Mcg, current: f64, pool: &[f64], sigma_j: f64, nan_allowed: bool| -> f64 {
-            let roll: f64 = rng.random();
-            if nan_allowed && roll < 0.15 {
-                return f64::NAN;
-            }
-            if !pool.is_empty() && roll < 0.6 {
-                return pool[rng.random_range(0..pool.len())];
-            }
-            let base = if current.is_nan() { 0.0 } else { current };
-            base + normal.sample(rng) * sigma_j.max(1e-9)
-        };
+    let mutate_value = |rng: &mut Pcg64Mcg,
+                        current: f64,
+                        pool: &[f64],
+                        sigma_j: f64,
+                        nan_allowed: bool,
+                        is_cat_j: bool|
+     -> f64 {
+        let roll: f64 = rng.random();
+        if nan_allowed && roll < 0.15 {
+            return f64::NAN;
+        }
+        if !pool.is_empty() && (roll < 0.6 || is_cat_j) {
+            // a categorical coordinate only ever takes a pooled code
+            return pool[rng.random_range(0..pool.len())];
+        }
+        let base = if current.is_nan() { 0.0 } else { current };
+        base + normal.sample(rng) * sigma_j.max(1e-9)
+    };
 
     // --- initialization: factual + single-feature cell moves + NaN flips + background mixes ---
     let mut pop: Vec<f64> = Vec::new();
@@ -154,7 +170,14 @@ pub fn solve_genetic(
             let k = rng.random_range(1..(mutable.len() + 1).max(2));
             let picks = sample_without_replacement(&mut rng, &mutable, k.min(mutable.len()));
             for jj in picks {
-                row[jj] = mutate_value(&mut rng, x[jj], &pools[jj], sigma[jj], can_be_nan[jj]);
+                row[jj] = mutate_value(
+                    &mut rng,
+                    x[jj],
+                    &pools[jj],
+                    sigma[jj],
+                    can_be_nan[jj],
+                    is_cat[jj],
+                );
             }
         }
         push_row(&mut pop, &row);
@@ -228,8 +251,14 @@ pub fn solve_genetic(
             for &jj in &mutable {
                 let roll: f64 = rng.random();
                 if roll < 0.15 {
-                    child[jj] =
-                        mutate_value(&mut rng, child[jj], &pools[jj], sigma[jj], can_be_nan[jj]);
+                    child[jj] = mutate_value(
+                        &mut rng,
+                        child[jj],
+                        &pools[jj],
+                        sigma[jj],
+                        can_be_nan[jj],
+                        is_cat[jj],
+                    );
                 } else if roll < 0.30 {
                     child[jj] = x[jj]; // revert-to-factual: drives sparsity
                 }
