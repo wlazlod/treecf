@@ -35,6 +35,27 @@ pub struct Constraints {
     pub implications: Vec<(u32, f64, u32, f64)>, // cond_idx, cond_val, cons_idx, cons_val
     pub onehot: Vec<Vec<u32>>,
     pub allow_missing: Vec<(u32, f64, f64)>, // (feature, delta_to, delta_from), index-sorted
+    // (feature, allowed-code bitset words), index-sorted; an empty word list
+    // means the declared set is empty (nothing is allowed on that feature)
+    pub allowed_categories: Vec<(u32, Vec<u64>)>,
+}
+
+/// Membership of `v` in an allowed-code bitset: an integral code whose bit is
+/// set. Non-integral values are never members; codes beyond the words are not.
+#[inline]
+pub(crate) fn code_allowed(words: &[u64], v: f64) -> bool {
+    if !v.is_finite() {
+        return false;
+    }
+    let code = v as i64;
+    if code as f64 != v || code < 0 {
+        return false;
+    }
+    let word = (code >> 6) as usize;
+    if word >= words.len() {
+        return false;
+    }
+    (words[word] >> (code & 63)) & 1 == 1
 }
 
 /// Python `max(a, b)`: returns b only if b > a. Two consequences both mirrors
@@ -184,6 +205,12 @@ impl Constraints {
                 return false; // NaN sum compares false -> infeasible, like numpy
             }
         }
+        for (j, words) in &self.allowed_categories {
+            let v = row[*j as usize];
+            if !v.is_nan() && !code_allowed(words, v) {
+                return false;
+            }
+        }
         true
     }
 
@@ -237,6 +264,19 @@ impl Constraints {
                     v = hi[j];
                 }
                 row[j] = v;
+            }
+        }
+        for (j, words) in &self.allowed_categories {
+            let j = *j as usize;
+            // keep an allowed code; else the smallest allowed code (deterministic)
+            if words.is_empty() {
+                continue; // nothing legal to write; check rejects
+            }
+            if !row[j].is_nan() && !code_allowed(words, row[j]) {
+                if let Some(word) = words.iter().position(|&w| w != 0) {
+                    let bit = words[word].trailing_zeros() as usize;
+                    row[j] = (word * 64 + bit) as f64;
+                }
             }
         }
         // cyclic projection: boxes intersected with halfspaces, a few sweeps
@@ -345,6 +385,7 @@ mod tests {
             implications: vec![],
             onehot: vec![],
             allow_missing: vec![],
+            allowed_categories: vec![],
         }
     }
 

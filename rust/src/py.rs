@@ -151,6 +151,13 @@ pub struct RustConstraints {
 impl RustConstraints {
     #[new]
     #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (
+        n_features, freeze, range_idx, range_lo, range_hi, equals_idx, equals_val,
+        mono_idx, mono_dir, lin_offsets, lin_indices, lin_coefs, lin_op, lin_rhs,
+        lin_policy, imp_cond_idx, imp_cond_val, imp_cons_idx, imp_cons_val,
+        oh_offsets, oh_indices, am_idx, am_to, am_from,
+        ac_idx=None, ac_offsets=None, ac_words=None
+    ))]
     fn new(
         n_features: usize,
         freeze: PyReadonlyArray1<u32>,
@@ -176,6 +183,9 @@ impl RustConstraints {
         am_idx: PyReadonlyArray1<u32>,
         am_to: PyReadonlyArray1<f64>,
         am_from: PyReadonlyArray1<f64>,
+        ac_idx: Option<PyReadonlyArray1<u32>>,
+        ac_offsets: Option<PyReadonlyArray1<u32>>,
+        ac_words: Option<PyReadonlyArray1<u64>>,
     ) -> PyResult<Self> {
         let lin_offsets = lin_offsets.as_slice()?;
         let lin_indices = lin_indices.as_slice()?;
@@ -235,6 +245,16 @@ impl RustConstraints {
             .zip(mono_dir.as_slice()?)
             .map(|(&j, &d)| (j, d))
             .collect();
+        let mut allowed_categories = Vec::new();
+        if let (Some(ac_idx), Some(ac_offsets), Some(ac_words)) = (ac_idx, ac_offsets, ac_words) {
+            let idx = ac_idx.as_slice()?;
+            let offsets = ac_offsets.as_slice()?;
+            let words = ac_words.as_slice()?;
+            for (k, &j) in idx.iter().enumerate() {
+                let (start, end) = (offsets[k] as usize, offsets[k + 1] as usize);
+                allowed_categories.push((j, words[start..end].to_vec()));
+            }
+        }
         Ok(Self {
             inner: Constraints {
                 n_features,
@@ -246,6 +266,7 @@ impl RustConstraints {
                 implications,
                 onehot,
                 allow_missing,
+                allowed_categories,
             },
         })
     }

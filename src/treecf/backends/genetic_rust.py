@@ -91,6 +91,9 @@ def build_rust_constraints(compiled: CompiledConstraints) -> Any:
         flat["am_idx"],
         flat["am_to"],
         flat["am_from"],
+        ac_idx=flat["ac_idx"],
+        ac_offsets=flat["ac_offsets"],
+        ac_words=flat["ac_words"],
     )
 
 

@@ -69,8 +69,18 @@ def solve_genetic(
         if not mutable[j]:
             pools.append(np.empty(0))
         elif is_cat[j]:
-            pool = [float(block[0]) for block in blocks[j]]
-            if not math.isnan(x[j]) and float(x[j]) not in pool:
+            allowed = compiled.allowed_categories.get(j)
+            pool = []
+            for block in blocks[j]:
+                # each block's smallest allowed member stands for the block;
+                # a block with no allowed member is unreachable and dropped
+                members = block if allowed is None else [c for c in block if c in allowed]
+                if members:
+                    pool.append(float(members[0]))
+            factual_ok = not math.isnan(x[j]) and (
+                allowed is None or (x[j] == int(x[j]) and int(x[j]) in allowed)
+            )
+            if factual_ok and float(x[j]) not in pool:
                 pool.append(float(x[j]))
             pools.append(np.array(pool))
         else:
@@ -213,5 +223,7 @@ def _mutate_value(
     if len(pool) > 0 and (roll < 0.6 or is_cat):
         # a categorical coordinate only ever takes a pooled code
         return float(pool[rng.integers(0, len(pool))])
+    if is_cat:  # an empty categorical pool (all codes banned): nothing to move to
+        return current
     base = 0.0 if math.isnan(current) else current
     return float(base + rng.normal(scale=max(sigma_j, 1e-9)))

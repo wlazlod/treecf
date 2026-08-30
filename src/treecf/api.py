@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, cast
 import numpy as np
 import numpy.typing as npt
 
-from treecf._errors import TreecfError, TreecfWarning
+from treecf._errors import ConstraintValidationError, TreecfError, TreecfWarning
 from treecf.aim.cells import cell_index, feature_cells
 from treecf.constraints.compile import compile_constraints
 from treecf.constraints.objects import Constraint
@@ -401,7 +401,7 @@ class Explainer:
     ) -> None:
         self.ir = model if isinstance(model, EnsembleIR) else parse_model(model)
         names = self.ir.feature_names
-        self.compiled = compile_constraints(constraints, names)
+        self.compiled = compile_constraints(constraints, names, self.ir.categorical)
         self.plausibility = plausibility
         if plausibility is not None:
             if plausibility.if_ir.n_features != self.ir.n_features:
@@ -421,6 +421,11 @@ class Explainer:
         for name, policy in self.value_policy.items():
             if name not in names:
                 raise TreecfError(f"value_policy references unknown feature {name!r}")
+            if names.index(name) in self.ir.categorical:
+                raise ConstraintValidationError(
+                    f"value_policy({name!r}): {name!r} is a categorical feature — its "
+                    "values are codes already; use AllowedCategories to restrict them"
+                )
             if isinstance(policy, str) and policy not in ("raw", "integer"):
                 raise TreecfError(f"unknown value policy {policy!r} for {name!r}")
 

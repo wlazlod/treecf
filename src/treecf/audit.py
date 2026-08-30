@@ -27,6 +27,7 @@ import numpy.typing as npt
 
 from treecf._errors import TreecfError, TreecfWarning
 from treecf.constraints.objects import (
+    AllowedCategories,
     AllowMissing,
     Constraint,
     Equals,
@@ -169,6 +170,12 @@ def _constraint_record(c: Constraint, index: dict[str, int]) -> bytes:
     if isinstance(c, OneHot):
         members = sorted(index[name] for name in c.features)
         return b"OneHot\x00" + b"".join(struct.pack("<I", j) for j in members)
+    if isinstance(c, AllowedCategories):
+        codes = sorted(entry for entry in c.allowed if isinstance(entry, int))
+        names = sorted(entry for entry in c.allowed if isinstance(entry, str))
+        body = b"".join(struct.pack("<q", code) for code in codes)
+        body += b"".join(name.encode("utf-8") + b"\x00" for name in names)
+        return b"AllowedCategories\x00" + struct.pack("<I", index[c.feature]) + body
     assert isinstance(c, AllowMissing)
     delta_from = c.delta_miss if c.delta_from_miss is None else c.delta_from_miss
     return b"AllowMissing\x00" + struct.pack("<Idd", index[c.feature], c.delta_miss, delta_from)

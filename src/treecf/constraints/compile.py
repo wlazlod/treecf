@@ -10,14 +10,16 @@ exist elsewhere.
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import numpy as np
 import numpy.typing as npt
 
 from treecf._errors import ConstraintValidationError
 from treecf.constraints.objects import (
+    AllowedCategories,
     AllowMissing,
     Constraint,
     Equals,
@@ -28,6 +30,9 @@ from treecf.constraints.objects import (
     OneHot,
     Range,
 )
+
+if TYPE_CHECKING:
+    from treecf.ir.model import CategoricalFeature
 
 FloatArray = npt.NDArray[np.float64]
 BoolArray = npt.NDArray[np.bool_]
@@ -86,6 +91,8 @@ class CompiledConstraints:
     # ``constraints`` so recompiling a clone from ``constraints`` re-derives them
     # exactly once (idempotent)
     derived_ranges: tuple[Range, ...] = ()
+    # name-resolved AllowedCategories sets, intersected across declarations
+    allowed_categories: dict[int, frozenset[int]] = field(default_factory=dict)
 
     def check_matrix(self, X: FloatArray, x: FloatArray) -> BoolArray:
         """Vectorized feasibility of candidate rows against every constraint."""
@@ -127,6 +134,9 @@ class CompiledConstraints:
             # exact float equality is intentional: repair writes literal 0.0/1.0,
             # and a tolerance would mask genuinely broken candidates
             ok &= X[:, list(group)].sum(axis=1) == 1.0
+        for j, allowed in sorted(self.allowed_categories.items()):
+            col = X[:, j]
+            ok &= np.isnan(col) | np.isin(col, sorted(allowed))
         return ok
 
     def repair_matrix(self, X: FloatArray, x: FloatArray) -> FloatArray:
@@ -148,6 +158,13 @@ class CompiledConstraints:
                 X[nan_col, j] = x[j]
             valid = ~np.isnan(X[:, j])
             X[valid, j] = np.clip(X[valid, j], lo[j], hi[j])
+        for j, allowed in sorted(self.allowed_categories.items()):
+            if not allowed:
+                continue  # nothing legal to write; check_matrix rejects
+            col = X[:, j]
+            # keep an allowed code; else the smallest allowed code (deterministic)
+            bad = ~np.isnan(col) & ~np.isin(col, sorted(allowed))
+            X[bad, j] = float(min(allowed))
         # cyclic projection: boxes intersected with halfspaces, a few sweeps
         for _ in range(_REPAIR_ROUNDS):
             for lin in self.linears:
@@ -274,6 +291,16 @@ class CompiledConstraints:
                 if total != 1.0:
                     label = f"OneHot({', '.join(c.features)})"
                     items.append((label, f"{label} violated at the factual (sum={total:g})"))
+            elif isinstance(c, AllowedCategories):
+                j = index[c.feature]
+                v = float(x[j])
+                allowed = self.allowed_categories.get(j, frozenset())
+                is_member = math.isfinite(v) and v == int(v) and int(v) in allowed
+                if not math.isnan(v) and not is_member:
+                    label = f"AllowedCategories({c.feature!r})"
+                    items.append(
+                        (label, f"{label}: factual's category not in allowed set (value={v:g})")
+                    )
         for lin in self.linears:
             label = _format_linear(lin)
             vals = [float(x[j]) for j in lin.indices]
@@ -301,17 +328,28 @@ class CompiledConstraints:
 
 
 def compile_constraints(
-    constraints: Sequence[Constraint], feature_names: Sequence[str]
+    constraints: Sequence[Constraint],
+    feature_names: Sequence[str],
+    categorical: Mapping[int, CategoricalFeature] | None = None,
 ) -> CompiledConstraints:
-    """Validate the constraint set against the feature space and freeze it."""
+    """Validate the constraint set against the feature space and freeze it.
+
+    ``categorical`` carries the model's per-feature categorical metadata:
+    interval-style constraints on a categorical feature are rejected here (its
+    codes are labels without order), and ``AllowedCategories`` entries are
+    resolved against it.
+    """
     names = tuple(feature_names)
     index = {name: j for j, name in enumerate(names)}
+    cats = dict(categorical or {})
+    cat_names = {names[j] for j in cats}
 
     linears: list[ResolvedLinear] = []
     derived: list[Range] = []
     implications: list[ResolvedImplication] = []
     onehot_groups: list[tuple[int, ...]] = []
     allow_missing: dict[int, tuple[float, float]] = {}
+    allowed_categories: dict[int, frozenset[int]] = {}
     binary: set[int] = set()
     frozen_names: set[str] = set()
 
@@ -320,6 +358,12 @@ def compile_constraints(
             raise ConstraintValidationError(f"{owner} references unknown feature {name!r}")
         return index[name]
 
+    def reject_categorical(name: str, kind: str, instead: str) -> None:
+        if name in cat_names:
+            raise ConstraintValidationError(
+                f"{kind}({name!r}): {name!r} is a categorical feature — {instead}"
+            )
+
     for c in constraints:
         kind = type(c).__name__
         if isinstance(c, Freeze):
@@ -327,18 +371,65 @@ def compile_constraints(
             frozen_names.add(c.feature)
         elif isinstance(c, Range):
             resolve(c.feature, kind)
+            reject_categorical(
+                c.feature, kind, "use AllowedCategories to restrict its codes"
+            )
             if c.lo > c.hi:
                 raise ConstraintValidationError(f"Range({c.feature!r}): lo {c.lo} > hi {c.hi}")
         elif isinstance(c, Monotone):
             resolve(c.feature, kind)
+            reject_categorical(
+                c.feature, kind, "codes have no order; use AllowedCategories instead"
+            )
             if c.direction not in ("increase", "decrease"):
                 raise ConstraintValidationError(
                     f"Monotone({c.feature!r}): direction must be 'increase' or 'decrease', "
                     f"got {c.direction!r}"
                 )
         elif isinstance(c, Equals):
+            reject_categorical(
+                c.feature, kind, "Equals is a binary-feature construct; use AllowedCategories"
+            )
             binary.add(_validated_binary(c, index))
+        elif isinstance(c, AllowedCategories):
+            j = resolve(c.feature, kind)
+            if j not in cats:
+                raise ConstraintValidationError(
+                    f"AllowedCategories({c.feature!r}): {c.feature!r} is a numeric "
+                    "feature — use Range to bound it"
+                )
+            info = cats[j]
+            codes: set[int] = set()
+            for entry in c.allowed:
+                if isinstance(entry, str):
+                    if info.categories is None:
+                        raise ConstraintValidationError(
+                            f"AllowedCategories({c.feature!r}): {entry!r} is a category "
+                            "name but the model carries no names — pass categories= to "
+                            "the Explainer or use integer codes"
+                        )
+                    if entry not in info.categories:
+                        raise ConstraintValidationError(
+                            f"AllowedCategories({c.feature!r}): unknown category "
+                            f"name {entry!r}"
+                        )
+                    codes.add(info.categories.index(entry))
+                else:
+                    if not 0 <= int(entry) < info.cardinality:
+                        raise ConstraintValidationError(
+                            f"AllowedCategories({c.feature!r}): code {entry} outside "
+                            f"[0, {info.cardinality})"
+                        )
+                    codes.add(int(entry))
+            resolved_set = frozenset(codes)
+            if j in allowed_categories:  # several declarations intersect
+                resolved_set = allowed_categories[j] & resolved_set
+            allowed_categories[j] = resolved_set
         elif isinstance(c, Linear):
+            for name in c.coefficients:
+                reject_categorical(
+                    name, kind, "codes have no arithmetic; use AllowedCategories instead"
+                )
             if c.op not in _LINEAR_OPS:
                 raise ConstraintValidationError(f"Linear op must be one of {_LINEAR_OPS}")
             if c.missing_policy not in _MISSING_POLICIES:
@@ -391,6 +482,11 @@ def compile_constraints(
                 )
             )
         elif isinstance(c, Implies):
+            for part in (c.condition, c.consequence):
+                reject_categorical(
+                    part.feature, kind,
+                    "Implies is a binary-feature construct; use AllowedCategories",
+                )
             cond = _validated_binary(c.condition, index)
             cons = _validated_binary(c.consequence, index)
             binary.update((cond, cons))
@@ -403,6 +499,10 @@ def compile_constraints(
                 )
             )
         elif isinstance(c, OneHot):
+            for name in c.features:
+                reject_categorical(
+                    name, kind, "OneHot is a binary-feature construct; use AllowedCategories"
+                )
             if len(c.features) < 2:
                 raise ConstraintValidationError("OneHot needs at least two features")
             group = tuple(resolve(name, kind) for name in c.features)
@@ -439,6 +539,7 @@ def compile_constraints(
         allow_missing=allow_missing,
         binary_features=frozenset(binary),
         derived_ranges=tuple(derived),
+        allowed_categories=allowed_categories,
     )
 
 

@@ -97,8 +97,32 @@ pub fn solve_genetic(
             if fixed[j] {
                 Vec::new()
             } else if is_cat[j] {
-                let mut pool: Vec<f64> = all_blocks[j].iter().map(|b| b[0] as f64).collect();
-                if !x[j].is_nan() && !pool.contains(&x[j]) {
+                // each block's smallest allowed member stands for the block; a
+                // block with no allowed member is unreachable and dropped
+                let allowed = cons
+                    .allowed_categories
+                    .iter()
+                    .find(|(idx, _)| *idx as usize == j)
+                    .map(|(_, words)| words.as_slice());
+                let mut pool: Vec<f64> = Vec::new();
+                for block in &all_blocks[j] {
+                    let member = match allowed {
+                        None => block.first().copied(),
+                        Some(words) => block
+                            .iter()
+                            .copied()
+                            .find(|&c| crate::constraints::code_allowed(words, c as f64)),
+                    };
+                    if let Some(code) = member {
+                        pool.push(code as f64);
+                    }
+                }
+                let factual_ok = !x[j].is_nan()
+                    && match allowed {
+                        None => true,
+                        Some(words) => crate::constraints::code_allowed(words, x[j]),
+                    };
+                if factual_ok && !pool.contains(&x[j]) {
                     pool.push(x[j]);
                 }
                 pool
@@ -125,6 +149,10 @@ pub fn solve_genetic(
         if !pool.is_empty() && (roll < 0.6 || is_cat_j) {
             // a categorical coordinate only ever takes a pooled code
             return pool[rng.random_range(0..pool.len())];
+        }
+        if is_cat_j {
+            // an empty categorical pool (all codes banned): nothing to move to
+            return current;
         }
         let base = if current.is_nan() { 0.0 } else { current };
         base + normal.sample(rng) * sigma_j.max(1e-9)
@@ -489,6 +517,7 @@ mod tests {
             implications: vec![],
             onehot: vec![],
             allow_missing: vec![],
+            allowed_categories: vec![],
         }
     }
 

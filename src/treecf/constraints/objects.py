@@ -120,6 +120,28 @@ class OneHot:
 
 
 @dataclass(frozen=True)
+class AllowedCategories:
+    """The categorical feature may only take the listed category codes or names.
+
+    Entries are integer codes (``0..cardinality-1``) or display names resolved
+    through the model's category names. Only valid on a categorical feature;
+    several declarations on one feature intersect.
+
+    Attributes:
+        feature: The categorical feature name to restrict.
+        allowed: The permitted codes (ints) or category names (strs).
+    """
+
+    feature: str
+    allowed: tuple[int | str, ...]
+
+    def __init__(self, feature: str, allowed: object) -> None:
+        object.__setattr__(self, "feature", feature)
+        items = (allowed,) if isinstance(allowed, int | str) else tuple(allowed)  # type: ignore[arg-type]
+        object.__setattr__(self, "allowed", items)
+
+
+@dataclass(frozen=True)
 class AllowMissing:
     """NaN is a feasible counterfactual value for this feature.
 
@@ -139,4 +161,14 @@ class AllowMissing:
     delta_from_miss: float | None = None
 
 
-Constraint = Freeze | Monotone | Range | Linear | Equals | Implies | OneHot | AllowMissing
+Constraint = (
+    Freeze
+    | Monotone
+    | Range
+    | Linear
+    | Equals
+    | Implies
+    | OneHot
+    | AllowMissing
+    | AllowedCategories
+)

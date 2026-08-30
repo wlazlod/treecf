@@ -68,6 +68,7 @@ pub(crate) fn cons_base(p: usize) -> Constraints {
         implications: vec![],
         onehot: vec![],
         allow_missing: vec![],
+        allowed_categories: vec![],
     }
 }
 

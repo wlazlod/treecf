@@ -56,6 +56,9 @@ def rust_constraints(compiled: CompiledConstraints) -> object:
         flat["am_idx"],
         flat["am_to"],
         flat["am_from"],
+        ac_idx=flat["ac_idx"],
+        ac_offsets=flat["ac_offsets"],
+        ac_words=flat["ac_words"],
     )
 
 
@@ -251,3 +254,36 @@ class TestProjectionRepairBitwise:
             [Linear({"g0": 1.0}, op=">=", rhs=100.0)],
             [[2.12, 0.0, 0.0, 0.0], [150.0, 0.0, 0.0, 0.0]],
         )
+
+
+class TestAllowedCategoriesConformance:
+    """Membership checks and the smallest-allowed repair rule match bitwise."""
+
+    @staticmethod
+    def _compiled(allowed: tuple[int, ...]) -> CompiledConstraints:
+        from treecf.constraints import AllowedCategories
+        from treecf.ir.model import CategoricalFeature
+
+        return compile_constraints(
+            [AllowedCategories(NAMES[1], allowed)],
+            NAMES,
+            {1: CategoricalFeature(cardinality=70)},
+        )
+
+    @pytest.mark.parametrize("seed", range(5))
+    def test_check_and_repair_bitwise(self, seed: int) -> None:
+        compiled = self._compiled((1, 3, 65))  # a member beyond one bitset word
+        rng = np.random.default_rng(seed)
+        X = rng.normal(scale=3.0, size=(200, len(NAMES)))
+        X[:, 1] = rng.integers(0, 72, size=200).astype(np.float64)
+        X[rng.random(200) < 0.2, 1] = 1.5  # non-integral pollution
+        x = np.zeros(len(NAMES))
+        x[1] = 3.0
+        assert_check_and_repair_match(compiled, X, x)
+
+    def test_empty_allowed_set_matches(self) -> None:
+        compiled = self._compiled(())
+        X = np.zeros((3, len(NAMES)))
+        X[:, 1] = [0.0, 2.0, 69.0]
+        x = np.zeros(len(NAMES))
+        assert_check_and_repair_match(compiled, X, x)
