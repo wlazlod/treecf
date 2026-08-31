@@ -48,9 +48,10 @@ integer-valuedness — and returns them **for human review**; nothing is ever
 auto-applied:
 
 ```python
+# exp, X_bg: the docs explainer and its background rows
 import treecf
 
-result = treecf.suggest_constraints(X_train, feature_names=names)
+result = treecf.suggest_constraints(X_bg, feature_names=exp.ir.feature_names)
 for s in result[:20]:
     print(s.as_code())     # constraint("n_active_loans <= n_loans_total")  # support=1.0000, n=48211
 

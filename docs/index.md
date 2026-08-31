@@ -7,6 +7,7 @@ model's raw output lands in a target interval?"* — for XGBoost, LightGBM, CatB
 scikit-learn tree ensembles.
 
 ```python
+# docs: no-run — model / X_train stand in for your own trained model and data
 from treecf import Explainer, Freeze, Target
 
 exp = Explainer(model, background=X_train, constraints=[Freeze("age")])

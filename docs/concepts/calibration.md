@@ -37,6 +37,8 @@ treecf imports no calibration library. Any object with these two members
 works (e.g. a probcal calibrator):
 
 ```python
+from typing import Protocol
+
 class SupportsIntervalInverse(Protocol):
     is_monotone_: bool
     def interval_inverse(
@@ -53,14 +55,20 @@ non-monotone map need not be an interval.
 ## Usage
 
 ```python
-target = treecf.Target.calibrated(cal, op="<=", value=0.02)   # calibrated PD ≤ 2%
-result = explainer.explain(x, target=target)
+# exp, x, cal: the docs explainer, one rejected applicant, a fitted calibrator
+import treecf
+
+cal_target = treecf.Target.calibrated(cal, op="<=", value=0.02)   # calibrated PD ≤ 2%
+result = exp.explain(x, target=cal_target, seed=0)
 ```
 
 Masterscales defined on calibrated PD invert per band:
 
 ```python
-target = treecf.Target.bands(
+# cal: a fitted calibrator from the docs vocabulary
+import treecf
+
+bands = treecf.Target.bands(
     {"A": (0.0, 0.005), "B": (0.005, 0.02), "C": (0.02, 0.10)},
     space="calibrated",
     calibrator=cal,
@@ -76,7 +84,10 @@ log-odds *before* inversion, so the produced counterfactual survives any
 future drift of magnitude ≤ m:
 
 ```python
-target = treecf.Target.calibrated(cal, op="<=", value=0.02, buffer_logit=0.1)
+# cal: a fitted calibrator from the docs vocabulary
+import treecf
+
+buffered = treecf.Target.calibrated(cal, op="<=", value=0.02, buffer_logit=0.1)
 ```
 
 The trade is explicit: robustness paid in recourse difficulty. Two further
@@ -111,7 +122,12 @@ it. What it does not prove: that the interval is correct — for that, pass the
 calibrator back:
 
 ```python
-report = explainer.check_certificate(cert, calibrator=cal)
+# exp, x, cal: the docs explainer, one rejected applicant, a fitted calibrator
+import treecf
+
+cal_res = exp.explain(x, target=treecf.Target.calibrated(cal, op="<=", value=0.02), seed=0)
+cert = exp.certificate(x, cal_res, treecf.Target.calibrated(cal, op="<=", value=0.02))
+report = exp.check_certificate(cert, calibrator=cal)
 report["calibrator_match"]   # fingerprints agree AND re-inverting the stored
                              # calibrated bounds reproduces the stored raw interval
 ```
@@ -129,7 +145,10 @@ Results for calibrated targets carry `score_calibrated` — the calibrator's
 probability at the counterfactual (and, on certificates, at the factual):
 
 ```python
-res = explainer.explain(x, target=treecf.Target.calibrated(cal, op="<=", value=0.02))
+# exp, x, cal: the docs explainer, one rejected applicant, a fitted calibrator
+import treecf
+
+res = exp.explain(x, target=treecf.Target.calibrated(cal, op="<=", value=0.02), seed=0)
 res.score_raw          # what the engine optimized and verified against
 res.score_calibrated   # g(sigmoid(score_raw)) — presentational
 ```
@@ -148,6 +167,7 @@ walks through the pairing from the other side. The trio that covers most
 policies:
 
 ```python
+# docs: no-run — a worked probcal session; scores/y/model/X are your own data
 import probcal, treecf
 
 cal = probcal.BetaCalibrator().fit(scores, y)
