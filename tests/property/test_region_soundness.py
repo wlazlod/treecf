@@ -368,3 +368,53 @@ def test_narrowing_the_target_can_strictly_widen_a_later_feature() -> None:
             z = x_cf.copy()
             z[1] = _finite(edge)
             assert exp._verify(x_cf, z, interval) is None
+
+
+class TestCategoricalRegionSoundness:
+    """Every sampled (grown code x numeric point) combination stays in-target."""
+
+    @given(seed=st.integers(min_value=0, max_value=200))
+    @settings(max_examples=30, deadline=None)
+    def test_sampled_points_stay_in_target(self, seed: int) -> None:
+        from treecf.constraints.compile import compile_constraints
+        from treecf.regions import _recourse_region
+
+        from ..conftest import make_random_mixed_ir
+
+        rng = np.random.default_rng(seed)
+        ir = make_random_mixed_ir(
+            rng, n_features=4, n_trees=4, depth=3, categorical={1: 5, 3: 6}
+        )
+        compiled = compile_constraints((), ir.feature_names, ir.categorical)
+        x = np.array(
+            [
+                float(rng.normal()),
+                float(rng.integers(0, 5)),
+                float(rng.normal()),
+                float(rng.integers(0, 6)),
+            ]
+        )
+        score = raw_score(ir, x)
+        interval = (score - 0.5, score + 0.5)
+        region = _recourse_region(ir, x, x, interval, compiled, None, 0.0)
+
+        numeric_choices = []
+        for j in (0, 2):
+            lo, hi = float(region.lo[j]), float(region.hi[j])
+            points = {x[j]}
+            if math.isfinite(lo):
+                points.add(lo)
+            if math.isfinite(hi):
+                points.add(hi)
+            numeric_choices.append(sorted(points))
+        for code1 in region.cat_sets.get(1, (int(x[1]),)):
+            for code3 in region.cat_sets.get(3, (int(x[3]),)):
+                for v0 in numeric_choices[0]:
+                    for v2 in numeric_choices[1]:
+                        point = np.array([v0, float(code1), v2, float(code3)])
+                        assert region.contains(point)
+                        s = raw_score(ir, point)
+                        assert interval[0] <= s <= interval[1], (
+                            f"seed {seed}: certified point {point} scores {s} "
+                            f"outside {interval}"
+                        )

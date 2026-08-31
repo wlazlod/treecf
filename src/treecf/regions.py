@@ -29,13 +29,13 @@ costs proportionally more.
 from __future__ import annotations
 
 import math
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 
 import numpy as np
 import numpy.typing as npt
 
-from treecf.aim.cells import Cell, cell_index
+from treecf.aim.cells import Cell, category_blocks, cell_index
 from treecf.backends._exact_domains import _constraint_cells
 from treecf.backends._exact_orderpairs import _achievable_bounds, _intersect_cell
 from treecf.constraints.compile import CompiledConstraints, ResolvedLinear
@@ -83,6 +83,12 @@ class RecourseRegion:
     hi: FloatArray
     feature_intervals: dict[str, tuple[float, float]]
     certified: bool  # always True in this release; the field is reserved
+    # certified category sets for categorical features: codes by feature name
+    # (public), the same sets keyed by feature index (what ``contains`` reads),
+    # and display names for the codes where the model carries them
+    feature_categories: dict[str, tuple[int, ...]] = field(default_factory=dict)
+    cat_sets: dict[int, tuple[int, ...]] = field(default_factory=dict)
+    category_names: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
     def contains(self, x: FloatArray) -> bool:
         """Whether ``x`` lies inside the region, coordinate by coordinate.
@@ -102,6 +108,10 @@ class RecourseRegion:
             xj = float(x[j])
             if math.isnan(self.lo[j]):
                 if not math.isnan(xj):
+                    return False
+                continue
+            if j in self.cat_sets:
+                if math.isnan(xj) or xj != int(xj) or int(xj) not in self.cat_sets[j]:
                     return False
                 continue
             if math.isnan(xj) or not (self.lo[j] <= xj <= self.hi[j]):
@@ -129,6 +139,14 @@ class RecourseRegion:
                 out[name] = f"≥ {lo:.3g}"
             else:
                 out[name] = f"in [{lo:.3g}, {hi:.3g}]"
+        for name, codes in self.feature_categories.items():
+            names = self.category_names.get(name)
+            rendered = (
+                ", ".join(names[c] for c in codes)
+                if names is not None
+                else ", ".join(str(c) for c in codes)
+            )
+            out[name] = f"∈ {{{rendered}}}"
         return out
 
 
@@ -176,7 +194,12 @@ def _degenerate_features(
 
 
 def _tree_interval_bracket(
-    nodes: tuple[Node, ...], idx: int, lo: FloatArray, hi: FloatArray, is_nan: BoolArray
+    nodes: tuple[Node, ...],
+    idx: int,
+    lo: FloatArray,
+    hi: FloatArray,
+    is_nan: BoolArray,
+    cat_sets: Mapping[int, set[int]] | None = None,
 ) -> tuple[float, float] | None:
     """``[min, max]`` leaf value reachable from ``nodes[idx]`` over the box, or
     ``None`` if the box cannot be soundly bracketed at all.
@@ -200,26 +223,51 @@ def _tree_interval_bracket(
         assert node.value is not None
         return node.value, node.value
     f = node.feature
-    assert node.threshold is not None and node.left is not None and node.right is not None
+    assert node.left is not None and node.right is not None
     if is_nan[f]:
         if node.missing_left is None:
             return None
         child = node.left if node.missing_left else node.right
-        return _tree_interval_bracket(nodes, child, lo, hi, is_nan)
-    threshold = node.threshold
-    lo_f, hi_f = float(lo[f]), float(hi[f])
-    if node.op is SplitOp.LT:
-        all_left, all_right = hi_f < threshold, lo_f >= threshold
+        return _tree_interval_bracket(nodes, child, lo, hi, is_nan, cat_sets)
+    members: tuple[int, ...] | None = None
+    if cat_sets is not None and f in cat_sets:
+        members = tuple(sorted(cat_sets[f]))
+    elif node.categories is not None:
+        # a set split on a coordinate no set tracks: the box pins it to one code
+        members = (int(lo[f]),)
+    if members is not None:
+        # a categorical coordinate holds a SET of codes, not an interval: route
+        # each member and take a side only when every member agrees
+        left_any = False
+        right_any = False
+        for code in members:
+            if node.categories is not None:
+                goes_left = code in node.categories
+            elif node.op is SplitOp.LT:
+                goes_left = code < node.threshold  # type: ignore[operator]
+            else:
+                goes_left = code <= node.threshold  # type: ignore[operator]
+            if goes_left:
+                left_any = True
+            else:
+                right_any = True
+        all_left, all_right = not right_any, not left_any
     else:
-        all_left, all_right = hi_f <= threshold, lo_f > threshold
+        assert node.threshold is not None
+        threshold = node.threshold
+        lo_f, hi_f = float(lo[f]), float(hi[f])
+        if node.op is SplitOp.LT:
+            all_left, all_right = hi_f < threshold, lo_f >= threshold
+        else:
+            all_left, all_right = hi_f <= threshold, lo_f > threshold
     if all_left:
-        return _tree_interval_bracket(nodes, node.left, lo, hi, is_nan)
+        return _tree_interval_bracket(nodes, node.left, lo, hi, is_nan, cat_sets)
     if all_right:
-        return _tree_interval_bracket(nodes, node.right, lo, hi, is_nan)
-    left = _tree_interval_bracket(nodes, node.left, lo, hi, is_nan)
+        return _tree_interval_bracket(nodes, node.right, lo, hi, is_nan, cat_sets)
+    left = _tree_interval_bracket(nodes, node.left, lo, hi, is_nan, cat_sets)
     if left is None:
         return None
-    right = _tree_interval_bracket(nodes, node.right, lo, hi, is_nan)
+    right = _tree_interval_bracket(nodes, node.right, lo, hi, is_nan, cat_sets)
     if right is None:
         return None
     lmin, lmax = left
@@ -410,15 +458,21 @@ def _recourse_region(
     lo_b = np.where(np.isnan(lo_b), -math.inf, lo_b)
     hi_b = np.where(np.isnan(hi_b), math.inf, hi_b)
     degenerate = _degenerate_features(compiled, frozen, lo_b, hi_b, x_cf)
+    # categorical coordinates are always pinned for the numeric machinery
+    # (lo = hi = the counterfactual's code); their growth is a separate
+    # channel over category blocks
+    degenerate = degenerate | frozenset(ir.categorical)
+    cat_candidates = _categorical_candidates(ir, if_ir, compiled, frozen, x_cf)
 
     if _rust_available():
-        box_lo, box_hi = compute_region_rust(
+        box_lo, box_hi, grown_sets = compute_region_rust(
             ir, x_cf, interval, compiled, lo_b, hi_b, degenerate, if_ir, min_total_path,
-            cache=cache,
+            cat_candidates, cache=cache,
         )
     else:
-        box_lo, box_hi = _grow_box(
+        box_lo, box_hi, grown_sets = _grow_box(
             ir, x_cf, interval, compiled, if_ir, min_total_path, degenerate, lo_b, hi_b,
+            cat_candidates,
         )
 
     feature_intervals = {
@@ -426,9 +480,58 @@ def _recourse_region(
         for j in range(len(x_cf))
         if j not in degenerate
     }
+    cat_sets = {j: tuple(sorted(members)) for j, members in sorted(grown_sets.items())}
+    feature_categories = {
+        compiled.feature_names[j]: codes for j, codes in cat_sets.items()
+    }
+    category_names = {
+        compiled.feature_names[j]: ir.categorical[j].categories
+        for j in cat_sets
+        if ir.categorical[j].categories is not None
+    }
     return RecourseRegion(
-        lo=box_lo, hi=box_hi, feature_intervals=feature_intervals, certified=True
+        lo=box_lo,
+        hi=box_hi,
+        feature_intervals=feature_intervals,
+        certified=True,
+        feature_categories=feature_categories,
+        cat_sets=cat_sets,
+        category_names=category_names,  # type: ignore[arg-type]
     )
+
+
+def _categorical_candidates(
+    ir: EnsembleIR,
+    if_ir: EnsembleIR | None,
+    compiled: CompiledConstraints,
+    frozen: BoolArray,
+    x_cf: FloatArray,
+) -> dict[int, list[tuple[int, ...]]]:
+    """Per growable categorical feature, its blocks' admissible members.
+
+    Growth adds one block's admissible members at a time; a frozen feature, a
+    NaN counterfactual coordinate, or a feature whose allowed set admits no
+    code outside the counterfactual's own has nothing to grow. Block order is
+    the canonical ascending-smallest-member order.
+    """
+    if not ir.categorical:
+        return {}
+    blocks = category_blocks(ir) if if_ir is None else category_blocks(ir, if_ir)
+    candidates: dict[int, list[tuple[int, ...]]] = {}
+    for j in sorted(ir.categorical):
+        if frozen[j] or math.isnan(x_cf[j]):
+            continue
+        allowed = compiled.allowed_categories.get(j)
+        per_block: list[tuple[int, ...]] = []
+        for block in blocks[j]:
+            members = tuple(
+                c for c in block if allowed is None or c in allowed
+            )
+            if members:
+                per_block.append(members)
+        if per_block:
+            candidates[j] = per_block
+    return candidates
 
 
 def _grow_box(
@@ -441,7 +544,8 @@ def _grow_box(
     degenerate: frozenset[int],
     lo_b: FloatArray,
     hi_b: FloatArray,
-) -> tuple[FloatArray, FloatArray]:
+    cat_candidates: dict[int, list[tuple[int, ...]]] | None = None,
+) -> tuple[FloatArray, FloatArray, dict[int, set[int]]]:
     """Pure-Python growth loop -- the reference ``_recourse_region`` falls
     back to when the Rust extension is unavailable, and the fixture-golden
     freeze in ``tests/exactness/test_exact_golden.py`` pins directly."""
@@ -455,6 +559,8 @@ def _grow_box(
     box_lo = x_cf.astype(np.float64).copy()
     box_hi = x_cf.astype(np.float64).copy()
     is_nan_arr: BoolArray = np.isnan(x_cf)
+    cat_candidates = cat_candidates or {}
+    cat_sets: dict[int, set[int]] = {j: {int(x_cf[j])} for j in sorted(cat_candidates)}
 
     # Per-tree brackets are cached between growth attempts: widening one
     # feature can only change the brackets of trees that split on it, so only
@@ -462,13 +568,14 @@ def _grow_box(
     # every tree in ascending index — the same additions `_ensemble_bracket`
     # performs — so the accept/reject decisions are identical, just cheaper.
     model_cache = [
-        _tree_interval_bracket(tree.nodes, 0, box_lo, box_hi, is_nan_arr) for tree in ir.trees
+        _tree_interval_bracket(tree.nodes, 0, box_lo, box_hi, is_nan_arr, cat_sets)
+        for tree in ir.trees
     ]
     if_cache = (
         []
         if if_ir is None
         else [
-            _tree_interval_bracket(tree.nodes, 0, box_lo, box_hi, is_nan_arr)
+            _tree_interval_bracket(tree.nodes, 0, box_lo, box_hi, is_nan_arr, cat_sets)
             for tree in if_ir.trees
         ]
     )
@@ -493,14 +600,14 @@ def _grow_box(
             saved = [(t, model_cache[t]) for t in model_on[j]]
             for t in model_on[j]:
                 model_cache[t] = _tree_interval_bracket(
-                    ir.trees[t].nodes, 0, box_lo, box_hi, is_nan_arr
+                    ir.trees[t].nodes, 0, box_lo, box_hi, is_nan_arr, cat_sets
                 )
             saved_if: list[tuple[int, tuple[float, float] | None]] = []
             if if_ir is not None:
                 saved_if = [(t, if_cache[t]) for t in if_on[j]]
                 for t in if_on[j]:
                     if_cache[t] = _tree_interval_bracket(
-                        if_ir.trees[t].nodes, 0, box_lo, box_hi, is_nan_arr
+                        if_ir.trees[t].nodes, 0, box_lo, box_hi, is_nan_arr, cat_sets
                     )
 
             def retract() -> None:
@@ -528,7 +635,8 @@ def _grow_box(
         return oracle
 
     open_set = {j for j in range(p) if j not in degenerate}
-    while open_set:
+    open_cats = set(cat_candidates)
+    while open_set or open_cats:
         still_open: set[int] = set()
         for j in sorted(open_set):
             cells = grids[j]
@@ -539,8 +647,26 @@ def _grow_box(
             if grew_up or grew_down:
                 still_open.add(j)
         open_set = still_open
+        # after the numeric pass: one block at a time per categorical feature,
+        # ascending feature index, ascending block order
+        still_open_cats: set[int] = set()
+        for j in sorted(open_cats):
+            oracle_j = make_oracle(j)
+            grew_cat = False
+            for members in cat_candidates[j]:
+                new_members = [c for c in members if c not in cat_sets[j]]
+                if not new_members:
+                    continue
+                cat_sets[j].update(new_members)
+                if oracle_j():
+                    grew_cat = True
+                else:
+                    cat_sets[j].difference_update(new_members)
+            if grew_cat:
+                still_open_cats.add(j)
+        open_cats = still_open_cats
 
-    return box_lo, box_hi
+    return box_lo, box_hi, cat_sets
 
 
 def _trees_on_feature(ir: EnsembleIR, n_features: int) -> list[list[int]]:

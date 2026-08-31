@@ -50,6 +50,9 @@ const SIGNAL_CHECK_INTERVAL: u64 = 64;
 pub struct RegionBox {
     pub lo: Vec<f64>,
     pub hi: Vec<f64>,
+    /// Certified category sets, aligned with the caller's open categorical
+    /// features (ascending member codes); empty when none were requested.
+    pub cat_sets: Vec<Vec<u32>>,
 }
 
 // --------------------------------------------------------------- oracle ---
@@ -63,6 +66,7 @@ fn tree_interval_bracket(
     lo: &[f64],
     hi: &[f64],
     is_nan: &[bool],
+    cat_sets: &[Vec<u32>],
 ) -> Option<(f64, f64)> {
     let i = node as usize;
     if ens.feature[i] < 0 {
@@ -79,23 +83,56 @@ fn tree_interval_bracket(
         } else {
             ens.right[i]
         };
-        return tree_interval_bracket(ens, missing_defined, child, lo, hi, is_nan);
+        return tree_interval_bracket(ens, missing_defined, child, lo, hi, is_nan, cat_sets);
     }
-    let threshold = ens.threshold[i];
-    let (lo_f, hi_f) = (lo[f], hi[f]);
-    let (all_left, all_right) = if ens.is_lt[i] {
-        (hi_f < threshold, lo_f >= threshold)
+    // a categorical coordinate holds a SET of codes, not an interval: route
+    // each member and take a side only when every member agrees; a set split
+    // on a coordinate no set tracks is pinned to one code by the box
+    let pinned = [lo[f] as u32];
+    let members: Option<&[u32]> = if !cat_sets[f].is_empty() {
+        Some(&cat_sets[f])
+    } else if ens.node_set[i] >= 0 {
+        Some(&pinned)
     } else {
-        (hi_f <= threshold, lo_f > threshold)
+        None
+    };
+    let (all_left, all_right) = if let Some(members) = members {
+        let mut left_any = false;
+        let mut right_any = false;
+        for &code in members {
+            let goes_left = if ens.node_set[i] >= 0 {
+                ens.set_contains(ens.node_set[i], code as f64)
+            } else if ens.is_lt[i] {
+                (code as f64) < ens.threshold[i]
+            } else {
+                (code as f64) <= ens.threshold[i]
+            };
+            if goes_left {
+                left_any = true;
+            } else {
+                right_any = true;
+            }
+        }
+        (!right_any, !left_any)
+    } else {
+        let threshold = ens.threshold[i];
+        let (lo_f, hi_f) = (lo[f], hi[f]);
+        if ens.is_lt[i] {
+            (hi_f < threshold, lo_f >= threshold)
+        } else {
+            (hi_f <= threshold, lo_f > threshold)
+        }
     };
     if all_left {
-        return tree_interval_bracket(ens, missing_defined, ens.left[i], lo, hi, is_nan);
+        return tree_interval_bracket(ens, missing_defined, ens.left[i], lo, hi, is_nan, cat_sets);
     }
     if all_right {
-        return tree_interval_bracket(ens, missing_defined, ens.right[i], lo, hi, is_nan);
+        return tree_interval_bracket(ens, missing_defined, ens.right[i], lo, hi, is_nan, cat_sets);
     }
-    let (lmin, lmax) = tree_interval_bracket(ens, missing_defined, ens.left[i], lo, hi, is_nan)?;
-    let (rmin, rmax) = tree_interval_bracket(ens, missing_defined, ens.right[i], lo, hi, is_nan)?;
+    let (lmin, lmax) =
+        tree_interval_bracket(ens, missing_defined, ens.left[i], lo, hi, is_nan, cat_sets)?;
+    let (rmin, rmax) =
+        tree_interval_bracket(ens, missing_defined, ens.right[i], lo, hi, is_nan, cat_sets)?;
     Some((py_min(lmin, rmin), py_max(lmax, rmax)))
 }
 
@@ -109,11 +146,13 @@ fn ensemble_bracket(
     lo: &[f64],
     hi: &[f64],
     is_nan: &[bool],
+    cat_sets: &[Vec<u32>],
 ) -> Option<(f64, f64)> {
     let mut total_min = ens.base_score;
     let mut total_max = ens.base_score;
     for &root in &ens.tree_roots {
-        let (tmin, tmax) = tree_interval_bracket(ens, missing_defined, root, lo, hi, is_nan)?;
+        let (tmin, tmax) =
+            tree_interval_bracket(ens, missing_defined, root, lo, hi, is_nan, cat_sets)?;
         total_min += tmin;
         total_max += tmax;
     }
@@ -161,7 +200,9 @@ fn box_feasible(
     hi: &[f64],
     is_nan: &[bool],
 ) -> bool {
-    let Some((score_min, score_max)) = ensemble_bracket(ens, missing_defined, lo, hi, is_nan)
+    let empty: Vec<Vec<u32>> = vec![Vec::new(); ens.n_features];
+    let Some((score_min, score_max)) =
+        ensemble_bracket(ens, missing_defined, lo, hi, is_nan, &empty)
     else {
         return false;
     };
@@ -169,7 +210,9 @@ fn box_feasible(
         return false;
     }
     if let Some((if_ens, if_missing_defined)) = if_pair {
-        let Some((if_min, _if_max)) = ensemble_bracket(if_ens, if_missing_defined, lo, hi, is_nan)
+        let if_empty: Vec<Vec<u32>> = vec![Vec::new(); if_ens.n_features];
+        let Some((if_min, _if_max)) =
+            ensemble_bracket(if_ens, if_missing_defined, lo, hi, is_nan, &if_empty)
         else {
             return false;
         };
@@ -197,11 +240,14 @@ impl BracketCache {
         lo: &[f64],
         hi: &[f64],
         is_nan: &[bool],
+        cat_sets: &[Vec<u32>],
     ) -> Self {
         let brackets = ens
             .tree_roots
             .iter()
-            .map(|&root| tree_interval_bracket(ens, missing_defined, root, lo, hi, is_nan))
+            .map(|&root| {
+                tree_interval_bracket(ens, missing_defined, root, lo, hi, is_nan, cat_sets)
+            })
             .collect();
         let n_trees = ens.tree_roots.len();
         let mut on_feature: Vec<Vec<usize>> = vec![Vec::new(); ens.n_features];
@@ -229,6 +275,7 @@ impl BracketCache {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn update(
         &mut self,
         ens: &Ensemble,
@@ -237,13 +284,21 @@ impl BracketCache {
         lo: &[f64],
         hi: &[f64],
         is_nan: &[bool],
+        cat_sets: &[Vec<u32>],
     ) -> Vec<(usize, Option<(f64, f64)>)> {
         let mut saved = Vec::with_capacity(self.on_feature[j].len());
         for k in 0..self.on_feature[j].len() {
             let t = self.on_feature[j][k];
             saved.push((t, self.brackets[t]));
-            self.brackets[t] =
-                tree_interval_bracket(ens, missing_defined, ens.tree_roots[t], lo, hi, is_nan);
+            self.brackets[t] = tree_interval_bracket(
+                ens,
+                missing_defined,
+                ens.tree_roots[t],
+                lo,
+                hi,
+                is_nan,
+                cat_sets,
+            );
         }
         saved
     }
@@ -318,6 +373,7 @@ fn try_grow(
     linears: &[LinearC],
     x_cf: &[f64],
     is_nan: &[bool],
+    cat_sets: &[Vec<u32>],
     model_cache: &mut BracketCache,
     if_cache: &mut Option<BracketCache>,
 ) -> bool {
@@ -330,10 +386,18 @@ fn try_grow(
     } else {
         box_lo[j] = candidate;
     }
-    let saved = model_cache.update(ens, missing_defined, j, box_lo, box_hi, is_nan);
+    let saved = model_cache.update(ens, missing_defined, j, box_lo, box_hi, is_nan, cat_sets);
     let mut saved_if: Vec<(usize, Option<(f64, f64)>)> = Vec::new();
     if let (Some((if_ens, if_missing_defined)), Some(cache)) = (if_pair, if_cache.as_mut()) {
-        saved_if = cache.update(if_ens, if_missing_defined, j, box_lo, box_hi, is_nan);
+        saved_if = cache.update(
+            if_ens,
+            if_missing_defined,
+            j,
+            box_lo,
+            box_hi,
+            is_nan,
+            cat_sets,
+        );
     }
     let ok = 'feasible: {
         let Some((score_min, score_max)) = model_cache.total(ens.base_score) else {
@@ -396,6 +460,8 @@ pub fn recourse_region(
     open_set: &[usize],
     if_pair: Option<(&Ensemble, &[bool])>,
     min_total_path: f64,
+    cat_open: &[usize],
+    cat_blocks: &[Vec<Vec<u32>>],
     probe: InterruptProbe<'_>,
 ) -> SearchOutcome<RegionBox> {
     let ensembles: Vec<&Ensemble> = match if_pair {
@@ -407,16 +473,36 @@ pub fn recourse_region(
     let mut box_lo = x_cf.to_vec();
     let mut box_hi = x_cf.to_vec();
     let is_nan_arr: Vec<bool> = x_cf.iter().map(|v| v.is_nan()).collect();
-    let mut model_cache = BracketCache::new(ens, missing_defined, &box_lo, &box_hi, &is_nan_arr);
+    // certified member sets, indexed by FEATURE (empty = untracked coordinate)
+    let mut cat_sets: Vec<Vec<u32>> = vec![Vec::new(); ens.n_features];
+    for &j in cat_open {
+        cat_sets[j] = vec![x_cf[j] as u32];
+    }
+    let mut model_cache = BracketCache::new(
+        ens,
+        missing_defined,
+        &box_lo,
+        &box_hi,
+        &is_nan_arr,
+        &cat_sets,
+    );
     let mut if_cache = if_pair.map(|(if_ens, if_missing_defined)| {
-        BracketCache::new(if_ens, if_missing_defined, &box_lo, &box_hi, &is_nan_arr)
+        BracketCache::new(
+            if_ens,
+            if_missing_defined,
+            &box_lo,
+            &box_hi,
+            &is_nan_arr,
+            &cat_sets,
+        )
     });
 
     let mut open: Vec<usize> = open_set.to_vec();
+    let mut open_cats: Vec<usize> = cat_open.to_vec();
     // Every feature costs exactly two attempts, so counting the pair at once
     // polls on the same attempt numbers as counting them one by one would.
     let mut attempts: u64 = 0;
-    while !open.is_empty() {
+    while !open.is_empty() || !open_cats.is_empty() {
         let mut still_open: Vec<usize> = Vec::new();
         for &j in &open {
             let cells = &grids[j];
@@ -436,6 +522,7 @@ pub fn recourse_region(
                 &cons.linears,
                 x_cf,
                 &is_nan_arr,
+                &cat_sets,
                 &mut model_cache,
                 &mut if_cache,
             );
@@ -455,6 +542,7 @@ pub fn recourse_region(
                 &cons.linears,
                 x_cf,
                 &is_nan_arr,
+                &cat_sets,
                 &mut model_cache,
                 &mut if_cache,
             );
@@ -467,11 +555,102 @@ pub fn recourse_region(
             }
         }
         open = still_open;
+        // after the numeric pass: one block at a time per categorical feature,
+        // ascending feature index, ascending block order
+        let mut still_open_cats: Vec<usize> = Vec::new();
+        for (k, &j) in cat_open.iter().enumerate() {
+            if !open_cats.contains(&j) {
+                continue;
+            }
+            let mut grew_cat = false;
+            for members in &cat_blocks[k] {
+                let new_members: Vec<u32> = members
+                    .iter()
+                    .copied()
+                    .filter(|c| !cat_sets[j].contains(c))
+                    .collect();
+                if new_members.is_empty() {
+                    continue;
+                }
+                cat_sets[j].extend(new_members.iter().copied());
+                let saved = model_cache.update(
+                    ens,
+                    missing_defined,
+                    j,
+                    &box_lo,
+                    &box_hi,
+                    &is_nan_arr,
+                    &cat_sets,
+                );
+                let mut saved_if: Vec<(usize, Option<(f64, f64)>)> = Vec::new();
+                if let (Some((if_ens, if_missing_defined)), Some(cache)) =
+                    (if_pair, if_cache.as_mut())
+                {
+                    saved_if = cache.update(
+                        if_ens,
+                        if_missing_defined,
+                        j,
+                        &box_lo,
+                        &box_hi,
+                        &is_nan_arr,
+                        &cat_sets,
+                    );
+                }
+                let ok = 'feasible: {
+                    let Some((score_min, score_max)) = model_cache.total(ens.base_score) else {
+                        break 'feasible false;
+                    };
+                    if score_min < interval.0 || score_max > interval.1 {
+                        break 'feasible false;
+                    }
+                    if let (Some((if_ens, _)), Some(cache)) = (if_pair, if_cache.as_ref()) {
+                        let Some((if_min, _if_max)) = cache.total(if_ens.base_score) else {
+                            break 'feasible false;
+                        };
+                        if if_min < min_total_path {
+                            break 'feasible false;
+                        }
+                    }
+                    cons.linears
+                        .iter()
+                        .all(|lin| linear_holds(lin, x_cf, &box_lo, &box_hi))
+                };
+                if ok {
+                    grew_cat = true;
+                } else {
+                    model_cache.restore(&saved);
+                    if let Some(cache) = if_cache.as_mut() {
+                        cache.restore(&saved_if);
+                    }
+                    for c in &new_members {
+                        cat_sets[j].retain(|m| m != c);
+                    }
+                }
+                attempts += 1;
+                if attempts % SIGNAL_CHECK_INTERVAL == 0 && probe() {
+                    return SearchOutcome::Interrupted;
+                }
+            }
+            if grew_cat {
+                still_open_cats.push(j);
+            }
+        }
+        open_cats = still_open_cats;
+        if open.is_empty() && open_cats.is_empty() {
+            break;
+        }
     }
 
+    let mut grown: Vec<Vec<u32>> = Vec::with_capacity(cat_open.len());
+    for &j in cat_open {
+        let mut members = cat_sets[j].clone();
+        members.sort_unstable();
+        grown.push(members);
+    }
     SearchOutcome::Done(RegionBox {
         lo: box_lo,
         hi: box_hi,
+        cat_sets: grown,
     })
 }
 
@@ -572,6 +751,8 @@ mod tests {
             &open_set,
             None,
             0.0,
+            &[],
+            &[],
             &mut || false,
         ));
         let second = done(recourse_region(
@@ -585,6 +766,8 @@ mod tests {
             &open_set,
             None,
             0.0,
+            &[],
+            &[],
             &mut || false,
         ));
         assert_eq!(first.lo, second.lo);
@@ -715,6 +898,8 @@ mod tests {
             &[0],
             None,
             0.0,
+            &[],
+            &[],
             &mut || false,
         ));
         // g must never cross into the unrouted subtree (g >= 1.0): the (unsound)
@@ -774,6 +959,8 @@ mod tests {
             &open_set,
             None,
             0.0,
+            &[],
+            &[],
             probe,
         )
     }
@@ -855,6 +1042,8 @@ mod tests {
             &[0, 1, 2],
             None,
             0.0,
+            &[],
+            &[],
             &mut || false,
         ));
         let lo_bits: Vec<u64> = region.lo.iter().map(|v| v.to_bits()).collect();

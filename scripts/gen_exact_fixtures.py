@@ -384,8 +384,8 @@ SCENARIO_BUILDERS = (
 
 
 def _write_region(payload: dict[str, Any]) -> None:
-    lo, hi = fixture_utils.solve_region_payload(payload)
-    payload["golden"] = fixture_utils.region_golden_block(lo, hi)
+    lo, hi, cat_sets = fixture_utils.solve_region_payload(payload)
+    payload["golden"] = fixture_utils.region_golden_block(lo, hi, cat_sets)
     out = fixture_utils.REGION_FIXTURES_DIR / f"{payload['name']}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     with open(out, "w", encoding="utf-8") as fh:
@@ -456,11 +456,26 @@ def _scenario_region_04_order_pair() -> dict[str, Any]:
     )
 
 
+def _scenario_region_05_categorical() -> dict[str, Any]:
+    """A mixed categorical model with an allowed-set restriction: growth adds
+    admissible blocks as certified category sets alongside numeric widening."""
+    rng = np.random.default_rng(4030)
+    ir = make_random_mixed_ir(rng, n_features=4, n_trees=5, depth=3, categorical={1: 5, 3: 7})
+    x = np.array([0.5, 2.0, -0.3, 4.0])
+    constraints = [{"type": "AllowedCategories", "feature": "x1", "allowed": [0, 1, 2, 4]}]
+    score = raw_score(ir, x)
+    interval = (score - 0.4, score + 0.4)
+    return fixture_utils.build_region_fixture_payload(
+        "region-05-categorical", ir, x, x.copy(), interval, constraints,
+    )
+
+
 REGION_SCENARIO_BUILDERS = (
     _scenario_region_01_genetic_widened,
     _scenario_region_02_exact_found,
     _scenario_region_03_plausibility,
     _scenario_region_04_order_pair,
+    _scenario_region_05_categorical,
 )
 
 

@@ -223,6 +223,18 @@ class BatchResult:
                                 for name, pair in record.region.feature_intervals.items()
                             },
                             "certified": record.region.certified,
+                            "feature_categories": {
+                                name: list(codes)
+                                for name, codes in record.region.feature_categories.items()
+                            },
+                            "cat_sets": {
+                                str(j): list(codes)
+                                for j, codes in record.region.cat_sets.items()
+                            },
+                            "category_names": {
+                                name: list(names)
+                                for name, names in record.region.category_names.items()
+                            },
                         }
                     ),
                 }
@@ -267,6 +279,19 @@ class BatchResult:
                         for name, pair in raw_region["feature_intervals"].items()
                     },
                     certified=bool(raw_region["certified"]),
+                    # absent in files written without category sets
+                    feature_categories={
+                        name: tuple(int(c) for c in codes)
+                        for name, codes in raw_region.get("feature_categories", {}).items()
+                    },
+                    cat_sets={
+                        int(j): tuple(int(c) for c in codes)
+                        for j, codes in raw_region.get("cat_sets", {}).items()
+                    },
+                    category_names={
+                        name: tuple(str(n) for n in names)
+                        for name, names in raw_region.get("category_names", {}).items()
+                    },
                 )
             )
             records.append(

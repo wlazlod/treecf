@@ -93,6 +93,7 @@ EXPECTED_REGION_FIXTURE_IDS = frozenset(
         "region-02-exact-found",
         "region-03-plausibility",
         "region-04-order-pair",
+        "region-05-categorical",
     }
 )
 
@@ -104,8 +105,8 @@ def test_region_growth_matches_golden_fixture(path: Path) -> None:
     vs-golden three ways at once, the same split ``test_exact_golden.py`` /
     ``test_exact_parity.py`` keep for the exact backend."""
     fixture = fixture_utils.load_region_fixture(path)
-    lo, hi = fixture_utils.run_region_fixture(fixture)
-    problems = fixture_utils.diff_region_golden(fixture, lo, hi)
+    lo, hi, cat_sets = fixture_utils.run_region_fixture(fixture)
+    problems = fixture_utils.diff_region_golden(fixture, lo, hi, cat_sets)
     assert not problems, f"{fixture.name}:\n" + "\n".join(problems)
 
 

@@ -27,19 +27,33 @@ REGION_FIXTURES = fixture_utils.region_fixture_paths()
 FloatPair = tuple[np.ndarray, np.ndarray]
 
 
-def _rust_lo_hi(fixture: fixture_utils.RegionFixture) -> FloatPair:
+def _rust_grow(fixture: fixture_utils.RegionFixture):
+    from treecf.regions import _categorical_candidates
+
     degenerate, lo_b, hi_b = fixture_utils.region_degenerate_and_bounds(fixture)
+    cat_candidates = {}
+    if fixture.ir.categorical:
+        frozen = fixture.compiled.instance_bounds(fixture.x)[2]
+        degenerate = degenerate | frozenset(fixture.ir.categorical)
+        cat_candidates = _categorical_candidates(
+            fixture.ir, fixture.if_ir, fixture.compiled, frozen, fixture.x_cf
+        )
     min_total_path = fixture.min_total_path if fixture.min_total_path is not None else 0.0
     return compute_region_rust(
         fixture.ir, fixture.x_cf, fixture.interval, fixture.compiled, lo_b, hi_b,
-        degenerate, fixture.if_ir, min_total_path,
+        degenerate, fixture.if_ir, min_total_path, cat_candidates,
     )
+
+
+def _rust_lo_hi(fixture: fixture_utils.RegionFixture) -> FloatPair:
+    lo, hi, _cat_sets = _rust_grow(fixture)
+    return lo, hi
 
 
 @pytest.mark.parametrize("path", REGION_FIXTURES, ids=[p.stem for p in REGION_FIXTURES])
 def test_rust_matches_python_and_golden_bitwise(path) -> None:
     fixture = fixture_utils.load_region_fixture(path)
-    py_lo, py_hi = fixture_utils.run_region_fixture(fixture)
+    py_lo, py_hi, py_sets = fixture_utils.run_region_fixture(fixture)
     rs_lo, rs_hi = _rust_lo_hi(fixture)
 
     # rust vs python
@@ -48,7 +62,9 @@ def test_rust_matches_python_and_golden_bitwise(path) -> None:
 
     # rust vs the committed golden (same comparator test_exact_golden.py's
     # region checks use for python vs golden, so all three agree transitively)
-    problems = fixture_utils.diff_region_golden(fixture, rs_lo, rs_hi)
+    _rs_lo2, _rs_hi2, rs_sets = _rust_grow(fixture)
+    assert {k: set(v) for k, v in py_sets.items()} == rs_sets
+    problems = fixture_utils.diff_region_golden(fixture, rs_lo, rs_hi, rs_sets)
     assert not problems, f"{fixture.name} (rust vs golden):\n" + "\n".join(problems)
 
 

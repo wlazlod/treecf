@@ -775,7 +775,9 @@ fn debug_domains_raw<'py>(
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 #[pyo3(signature = (ensemble, missing_defined, constraints, x_cf, lo_t, hi_t,
                     lo_b, hi_b, open_set,
-                    if_ensemble=None, if_missing_defined=None, min_total_path=None))]
+                    if_ensemble=None, if_missing_defined=None, min_total_path=None,
+                    cat_open=None, cat_feat_offsets=None, cat_block_offsets=None,
+                    cat_members=None))]
 fn compute_region_raw<'py>(
     py: Python<'py>,
     ensemble: &RustEnsemble,
@@ -790,7 +792,16 @@ fn compute_region_raw<'py>(
     if_ensemble: Option<&RustEnsemble>,
     if_missing_defined: Option<PyReadonlyArray1<u8>>,
     min_total_path: Option<f64>,
-) -> PyResult<(Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>)> {
+    cat_open: Option<PyReadonlyArray1<u32>>,
+    cat_feat_offsets: Option<PyReadonlyArray1<u32>>,
+    cat_block_offsets: Option<PyReadonlyArray1<u32>>,
+    cat_members: Option<PyReadonlyArray1<u32>>,
+) -> PyResult<(
+    Bound<'py, PyArray1<f64>>,
+    Bound<'py, PyArray1<f64>>,
+    Bound<'py, PyArray1<u32>>,
+    Bound<'py, PyArray1<u32>>,
+)> {
     let x_cf_own = x_cf.as_slice()?.to_vec();
     let lo_b_own = lo_b.as_slice()?.to_vec();
     let hi_b_own = hi_b.as_slice()?.to_vec();
@@ -804,6 +815,30 @@ fn compute_region_raw<'py>(
         Some(arr) => Some(arr.as_slice()?.iter().map(|&b| b != 0).collect()),
         None => None,
     };
+    // unpack the two-level CSR of the categorical channel: per open feature,
+    // its blocks' admissible member codes
+    let mut cat_open_own: Vec<usize> = Vec::new();
+    let mut cat_blocks_own: Vec<Vec<Vec<u32>>> = Vec::new();
+    if let (Some(cat_open), Some(feat_offsets), Some(block_offsets), Some(members)) = (
+        &cat_open,
+        &cat_feat_offsets,
+        &cat_block_offsets,
+        &cat_members,
+    ) {
+        let feat_offsets = feat_offsets.as_slice()?;
+        let block_offsets = block_offsets.as_slice()?;
+        let members = members.as_slice()?;
+        for (k, &j) in cat_open.as_slice()?.iter().enumerate() {
+            cat_open_own.push(j as usize);
+            let mut blocks: Vec<Vec<u32>> = Vec::new();
+            for b in feat_offsets[k] as usize..feat_offsets[k + 1] as usize {
+                blocks.push(
+                    members[block_offsets[b] as usize..block_offsets[b + 1] as usize].to_vec(),
+                );
+            }
+            cat_blocks_own.push(blocks);
+        }
+    }
     let ens = &ensemble.inner;
     let cons = &constraints.inner;
     let if_pair = match (if_ensemble, &if_missing_defined_own) {
@@ -832,6 +867,8 @@ fn compute_region_raw<'py>(
             &open_set_own,
             if_pair,
             min_total_path.unwrap_or(0.0),
+            &cat_open_own,
+            &cat_blocks_own,
             &mut probe,
         )
     });
@@ -848,7 +885,19 @@ fn compute_region_raw<'py>(
                 .expect("interrupt probe always stores the pending PyErr"));
         }
     };
-    Ok((result.lo.into_pyarray(py), result.hi.into_pyarray(py)))
+    let mut grown_offsets: Vec<u32> = Vec::with_capacity(result.cat_sets.len() + 1);
+    grown_offsets.push(0);
+    let mut grown_members: Vec<u32> = Vec::new();
+    for members in &result.cat_sets {
+        grown_members.extend_from_slice(members);
+        grown_offsets.push(grown_members.len() as u32);
+    }
+    Ok((
+        result.lo.into_pyarray(py),
+        result.hi.into_pyarray(py),
+        grown_offsets.into_pyarray(py),
+        grown_members.into_pyarray(py),
+    ))
 }
 
 #[pymodule]

@@ -374,3 +374,71 @@ class TestBatchRegion:
         batch = exp.explain_batch(X, TARGET, backend="python", seed=0)
         for record in batch:
             assert record.region is None
+
+
+class TestCategoricalRegions:
+    """Category sets are grown, rendered, and honored by membership checks."""
+
+    @staticmethod
+    def _region(constraints=(), interval_width=0.4):
+        from treecf.constraints.compile import compile_constraints
+        from treecf.ir.evaluate import raw_score
+        from treecf.ir.model import CategoricalFeature, EnsembleIR, Link, Node, Tree
+        from treecf.regions import _recourse_region
+
+        tree = Tree(
+            nodes=(
+                Node(0, 0, None, None, True, 1, 2, None, categories=frozenset({2, 3})),
+                Node(1, None, None, None, None, None, None, 1.0),
+                Node(2, None, None, None, None, None, None, 0.0),
+            )
+        )
+        ir = EnsembleIR(
+            trees=(tree,),
+            base_score=0.0,
+            link=Link.IDENTITY,
+            n_features=1,
+            feature_names=("occupation",),
+            meta={},
+            categorical={
+                0: CategoricalFeature(
+                    cardinality=5,
+                    categories=("clerk", "manager", "nurse", "smith", "guard"),
+                )
+            },
+        )
+        compiled = compile_constraints(constraints, ir.feature_names, ir.categorical)
+        x = np.array([2.0])
+        score = raw_score(ir, x)
+        interval = (score - interval_width, score + interval_width)
+        return _recourse_region(ir, x, x, interval, compiled, None, 0.0)
+
+    def test_grows_the_routing_equivalent_codes(self) -> None:
+        # codes 2 and 3 share a block (both in the split set): the whole block
+        # is certified; the other block scores 0 and stays out
+        region = self._region(interval_width=0.4)
+        assert region.feature_categories == {"occupation": (2, 3)}
+        assert region.cat_sets == {0: (2, 3)}
+
+    def test_wide_interval_admits_every_code(self) -> None:
+        region = self._region(interval_width=2.0)
+        assert region.feature_categories == {"occupation": (0, 1, 2, 3, 4)}
+
+    def test_allowed_categories_excludes_blocks(self) -> None:
+        from treecf.constraints import AllowedCategories
+
+        region = self._region(
+            constraints=[AllowedCategories("occupation", (1, 2))], interval_width=2.0
+        )
+        assert region.feature_categories == {"occupation": (1, 2)}
+
+    def test_contains_checks_membership(self) -> None:
+        region = self._region(interval_width=0.4)
+        assert region.contains(np.array([3.0]))
+        assert not region.contains(np.array([0.0]))
+        assert not region.contains(np.array([2.5]))
+        assert not region.contains(np.array([np.nan]))
+
+    def test_describe_renders_names(self) -> None:
+        region = self._region(interval_width=0.4)
+        assert region.describe()["occupation"] == "∈ {nurse, smith}"
