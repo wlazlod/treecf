@@ -863,11 +863,324 @@ def _format_plan(
     return "\n".join(lines)
 
 
+def plot_region(
+    explainer: Any,
+    x: Any,
+    result: Any,
+    *,
+    ax: Any = None,
+    units: str = "sigma",
+    order: str = "index",
+    annotate: bool = True,
+    fmt: str = "{:.3g}",
+    max_features: int | None = None,
+) -> Any:
+    """Per-feature view of a certified recourse region: how far each value can
+    move while staying certified, and what stopped it.
+
+    Each widened numeric feature draws its certified interval as a thick bar
+    (``units="sigma"``: one shared axis in sigma-units from the factual, so
+    every factual sits at 0; ``units="raw"``: small multiples, one strip per
+    feature on its own scale). The factual is a hollow circle, the
+    counterfactual a filled marker, and the instance bounds faint whiskers. A
+    finite bar end carries a cap saying what limited it: a bracket where the
+    end coincides with an instance bound (a constraint stopped it), a plain
+    tick where the model's own routing did; an infinite end runs to the axis
+    edge with an open arrow. Categorical features draw one tile per category
+    code — filled when certified, outlined at the factual's code, marked at
+    the counterfactual's, hatched where a declared allowed set excludes the
+    code; the tiles are nominal, so their positions carry no meaning. The
+    legend records that the region is certified but not necessarily maximal.
+
+    Parameters
+    ----------
+    explainer : Explainer
+        The explainer that produced the result (bounds, normalizers, names).
+    x : array-like
+        The factual row the region is anchored at.
+    result : Counterfactual or (RecourseRegion, array-like)
+        A result carrying ``region``, or an explicit ``(region, x_cf)`` pair.
+    ax : matplotlib axes, optional
+        Target axes for ``units="sigma"``; ignored for ``units="raw"``.
+    units : {"sigma", "raw"}
+        Shared sigma-unit axis, or per-feature raw-value strips.
+    order : {"index", "cost"}
+        Row order: ascending feature index, or descending cost contribution.
+    annotate : bool
+        Annotate raw values at the bar ends.
+    fmt : str
+        Format string for annotations.
+    max_features : int, optional
+        Cap on rows; the rest are summarized as ``"(+k more)"``.
+
+    Returns
+    -------
+    matplotlib axes, or an array of axes for ``units="raw"``.
+
+    Raises
+    ------
+    MissingExtraError
+        If matplotlib is not installed.
+    TreecfError
+        If the result carries no region, or an argument is unrecognized.
+    """
+    plt = _import_pyplot()
+    import numpy as np
+
+    from treecf._errors import TreecfError
+
+    if isinstance(result, tuple):
+        region, x_cf = result
+    else:
+        region = getattr(result, "region", None)
+        x_cf = getattr(result, "x_cf", None)
+    if region is None:
+        raise TreecfError("result has no region; pass region=True to explain")
+    if units not in ("sigma", "raw"):
+        raise TreecfError(f"unknown units {units!r}; use 'sigma' or 'raw'")
+    if order not in ("index", "cost"):
+        raise TreecfError(f"unknown order {order!r}; use 'index' or 'cost'")
+
+    x = np.asarray(x, dtype=np.float64)
+    x_cf = np.asarray(x_cf, dtype=np.float64)
+    names = tuple(explainer.ir.feature_names)
+    index = {name: j for j, name in enumerate(names)}
+    sigma = np.asarray(explainer.sigma, dtype=np.float64)
+    weights = np.asarray(explainer.weights, dtype=np.float64)
+    lo_b, hi_b, _frozen = explainer.compiled.instance_bounds(x)
+    lo_b = np.where(np.isnan(lo_b), -math.inf, lo_b)
+    hi_b = np.where(np.isnan(hi_b), math.inf, hi_b)
+
+    rows: list[tuple[int, str, str]] = []  # (feature index, name, kind)
+    for name in region.feature_intervals:
+        rows.append((index[name], name, "numeric"))
+    for name in getattr(region, "feature_categories", {}):
+        rows.append((index[name], name, "categorical"))
+
+    def cost_of(j: int) -> float:
+        if math.isnan(x[j]) or math.isnan(x_cf[j]) or x[j] == x_cf[j]:
+            return 0.0
+        delta = 1.0 if j in explainer.ir.categorical else abs(x_cf[j] - x[j])
+        return float(weights[j] * delta / sigma[j])
+
+    if order == "index":
+        rows.sort(key=lambda row: row[0])
+    else:
+        rows.sort(key=lambda row: (-cost_of(row[0]), row[0]))
+    total_rows = len(rows)
+    hidden = 0
+    if max_features is not None and total_rows > max_features:
+        hidden = total_rows - max_features
+        rows = rows[:max_features]
+
+    if units == "raw":
+        _, axes = plt.subplots(
+            len(rows), 1, figsize=(7, 1.1 * max(2, len(rows))), squeeze=False
+        )
+        axes = axes[:, 0]
+        for strip, (j, name, kind) in zip(axes, rows, strict=True):
+            _region_row(
+                strip, explainer, region, x, x_cf, j, name, kind,
+                sigma_units=False, y=0.0, lo_b=lo_b, hi_b=hi_b,
+                annotate=annotate, fmt=fmt,
+            )
+            strip.set_yticks([0.0])
+            strip.set_yticklabels([name])
+        _region_legend(axes[0])
+        axes[0].set_title(f"certified recourse region — {total_rows} feature(s)")
+        if hidden:
+            axes[-1].annotate(
+                f"(+{hidden} more)", xy=(0.99, 0.02), xycoords="axes fraction",
+                ha="right", fontsize=8, color="0.4",
+            )
+        return axes
+
+    if ax is None:
+        _, ax = plt.subplots(figsize=(7, 0.6 * max(2, len(rows))))
+    for i, (j, name, kind) in enumerate(rows):
+        _region_row(
+            ax, explainer, region, x, x_cf, j, name, kind,
+            sigma_units=True, y=float(len(rows) - 1 - i), lo_b=lo_b, hi_b=hi_b,
+            annotate=annotate, fmt=fmt,
+        )
+    ax.set_yticks([float(len(rows) - 1 - i) for i in range(len(rows))])
+    ax.set_yticklabels([name for _, name, _ in rows])
+    ax.set_xlabel("distance from the factual (sigma units)")
+    ax.set_title(f"certified recourse region — {total_rows} feature(s)")
+    if hidden:
+        ax.annotate(
+            f"(+{hidden} more)", xy=(0.99, 0.02), xycoords="axes fraction",
+            ha="right", fontsize=8, color="0.4",
+        )
+    _region_legend(ax)
+    return ax
+
+
+_CAP_MODEL = "stopped by the model"
+_CAP_CONSTRAINT = "stopped by a constraint"
+_CAP_CAVEAT = "certified, not necessarily maximal"
+
+
+def _constraint_limited(endpoint: float, bound: float) -> bool:
+    """The endpoint sits at the instance bound, within the one-float32-ulp
+    stepping region growth itself uses for open cell edges."""
+    import numpy as np
+
+    if not math.isfinite(bound):
+        return False
+    if endpoint == bound:
+        return True
+    with np.errstate(over="ignore"):
+        b32 = np.float32(bound)
+        ulp = abs(float(np.nextafter(b32, np.float32(math.inf))) - float(b32))
+    return abs(endpoint - bound) <= max(ulp, 4.0 * math.ulp(abs(bound)))
+
+
+def _region_row(
+    ax: Any,
+    explainer: Any,
+    region: Any,
+    x: Any,
+    x_cf: Any,
+    j: int,
+    name: str,
+    kind: str,
+    *,
+    sigma_units: bool,
+    y: float,
+    lo_b: Any,
+    hi_b: Any,
+    annotate: bool,
+    fmt: str,
+) -> None:
+    import numpy as np
+
+    if kind == "categorical":
+        _categorical_tiles(ax, explainer, region, x, x_cf, j, name, y)
+        return
+
+    sigma_j = float(explainer.sigma[j]) if sigma_units else 1.0
+    anchor = float(x[j]) if sigma_units else 0.0
+
+    def to_axis(value: float) -> float:
+        if not math.isfinite(value):
+            return value
+        return (value - anchor) / sigma_j if sigma_units else value
+
+    lo, hi = region.feature_intervals[name]
+    bound_lo, bound_hi = float(lo_b[j]), float(hi_b[j])
+
+    # faint whiskers for the instance bounds (finite parts only)
+    finite_lo = to_axis(bound_lo) if math.isfinite(bound_lo) else None
+    finite_hi = to_axis(bound_hi) if math.isfinite(bound_hi) else None
+    if finite_lo is not None or finite_hi is not None:
+        span = [v for v in (finite_lo, to_axis(lo), to_axis(hi), finite_hi) if v is not None]
+        span = [v for v in span if math.isfinite(v)]
+        if span:
+            ax.plot(
+                [min(span), max(span)], [y, y],
+                color="0.85", linewidth=1.0, zorder=1, solid_capstyle="butt",
+            )
+
+    seg_lo = to_axis(lo)
+    seg_hi = to_axis(hi)
+    finite_points = [v for v in (seg_lo, seg_hi, 0.0 if sigma_units else float(x[j]))
+                     if math.isfinite(v)]
+    draw_lo = seg_lo if math.isfinite(seg_lo) else min(finite_points, default=0.0) - 1.0
+    draw_hi = seg_hi if math.isfinite(seg_hi) else max(finite_points, default=0.0) + 1.0
+    ax.plot([draw_lo, draw_hi], [y, y], color="C0", linewidth=5, zorder=2,
+            solid_capstyle="butt")
+
+    for endpoint, drawn, side in ((lo, draw_lo, "lo"), (hi, draw_hi, "hi")):
+        if not math.isfinite(endpoint):
+            marker = "<" if side == "lo" else ">"
+            ax.plot([drawn], [y], marker=marker, markerfacecolor="none",
+                    markeredgecolor="C0", markersize=9, zorder=3,
+                    label="_region_open_end")
+            continue
+        bound = float(lo_b[j]) if side == "lo" else float(hi_b[j])
+        if _constraint_limited(endpoint, bound):
+            ax.plot([drawn], [y], marker="$[$" if side == "lo" else "$]$",
+                    color="C3", markersize=11, zorder=4, label="_cap_constraint")
+        else:
+            ax.plot([drawn], [y], marker="|", color="C0", markersize=11,
+                    markeredgewidth=2.5, zorder=4, label="_cap_model")
+        if annotate:
+            ax.annotate(
+                fmt.format(endpoint), xy=(drawn, y), xytext=(0, 8),
+                textcoords="offset points", ha="center", fontsize=7, color="0.35",
+            )
+
+    factual_pos = 0.0 if sigma_units else float(x[j])
+    if math.isfinite(factual_pos):
+        ax.plot([factual_pos], [y], marker="o", markerfacecolor="none",
+                markeredgecolor="0.2", markersize=7, zorder=5)
+    cf_pos = to_axis(float(x_cf[j]))
+    if math.isfinite(cf_pos):
+        ax.plot([cf_pos], [y], marker="o", color="C0", markersize=5, zorder=6)
+    del np
+
+
+def _categorical_tiles(
+    ax: Any, explainer: Any, region: Any, x: Any, x_cf: Any, j: int, name: str, y: float
+) -> None:
+    """Nominal tiles, one per category code, in axes-fraction x at data y."""
+    from matplotlib.patches import Rectangle
+    from matplotlib.transforms import blended_transform_factory
+
+    info = explainer.ir.categorical[j]
+    certified = set(region.feature_categories.get(name, ()))
+    allowed = explainer.compiled.allowed_categories.get(j)
+    trans = blended_transform_factory(ax.transAxes, ax.transData)
+    k = info.cardinality
+    pad = 0.08
+    width = (1.0 - 2 * pad) / k
+    for code in range(k):
+        left = pad + code * width
+        excluded = allowed is not None and code not in allowed
+        in_set = code in certified
+        face = "C0" if in_set else "none"
+        tile = Rectangle(
+            (left + 0.06 * width, y - 0.28), 0.88 * width, 0.56,
+            transform=trans,
+            facecolor=face, alpha=0.55 if in_set else 1.0,
+            edgecolor="0.2" if code == int(x[j]) else "0.6",
+            linewidth=2.2 if code == int(x[j]) else 0.8,
+            hatch="///" if excluded else None,
+        )
+        ax.add_patch(tile)
+        if code == int(x_cf[j]):
+            ax.plot([left + 0.5 * width], [y], marker="o", color="C0",
+                    markersize=5, zorder=6, transform=trans)
+        label = (
+            str(info.categories[code])
+            if info.categories is not None and code < len(info.categories)
+            else str(code)
+        )
+        ax.annotate(
+            label, xy=(left + 0.5 * width, y - 0.42), xycoords=trans,
+            ha="center", fontsize=6, color="0.35",
+        )
+
+
+def _region_legend(ax: Any) -> None:
+    from matplotlib.lines import Line2D
+
+    handles = [
+        Line2D([], [], marker="|", color="C0", markersize=10, markeredgewidth=2.5,
+               linestyle="none", label=_CAP_MODEL),
+        Line2D([], [], marker="$[$", color="C3", markersize=10, linestyle="none",
+               label=_CAP_CONSTRAINT),
+        Line2D([], [], linestyle="none", label=_CAP_CAVEAT),
+    ]
+    ax.legend(handles=handles, loc="best", fontsize=7, frameon=False)
+
+
 def _categorical_info(explainer: Any) -> dict[str, Any]:
     """Per-feature categorical metadata keyed by name, when the explainer has any."""
     ir = getattr(explainer, "ir", None)
     categorical = getattr(ir, "categorical", None)
-    if not categorical:
+    if ir is None or not categorical:
         return {}
     return {ir.feature_names[j]: info for j, info in categorical.items()}
 
