@@ -36,6 +36,8 @@ ALLOWED_LINE = re.compile(r"__version__|schema_version")
 VERSION_LITERAL = re.compile(r"\b0\.\d+\.\d+\b")
 RELEASE_SCOPING = re.compile(r"\bv0\.\d+\b")
 WORKITEM_ID = re.compile(r"\b[TCSDVG]\d\b")
+# matplotlib's colour-cycle strings ("C0".."C9") are code, not shorthand
+_QUOTED_COLOR = re.compile(r"""["']C\d["']""")
 
 
 def _tracked_files() -> list[Path]:
@@ -58,7 +60,7 @@ def _violations(pattern: re.Pattern[str], files: list[Path]) -> list[str]:
         for lineno, line in enumerate(text.splitlines(), start=1):
             if ALLOWED_LINE.search(line):
                 continue
-            if pattern.search(line):
+            if pattern.search(_QUOTED_COLOR.sub("", line)):
                 hits.append(f"{rel}:{lineno}: {line.strip()}")
     return hits
 

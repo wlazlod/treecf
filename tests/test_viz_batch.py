@@ -249,9 +249,9 @@ class TestRecourseBurden:
         assert len(axes[0].lines) == 2  # A and B both have >= 1 feasible row
 
     def test_zero_feasible_group_has_a_bar_but_no_line(self) -> None:
-        from treecf.viz_batch import plot_recourse_burden
-
         from dataclasses import replace as dc_replace
+
+        from treecf.viz_batch import plot_recourse_burden
 
         records = [
             _rec(0, 0, {"a": (0.0, 2.0)}, 2.0),

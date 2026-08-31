@@ -530,7 +530,7 @@ def plot_recourse_burden(
 
     positions = np.arange(len(table), dtype=np.float64)
     for i, entry in enumerate(table):
-        n = int(entry["n"])
+        n = int(entry["n"])  # type: ignore[call-overload]
         members = by_group.get(entry["group"], [])
         has = sum(1 for b, _ in members if b is not None)
         certified_no = sum(1 for b, certified in members if b is None and certified)
