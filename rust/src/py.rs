@@ -713,6 +713,7 @@ fn debug_domains_raw<'py>(
         Some(if_e) => vec![ens, &if_e.inner],
     };
     let grids = crate::exact::domains::constraint_cells(cons, &ensembles);
+    let blocks = crate::cells::category_blocks_joint(&ensembles);
     let domains = crate::exact::domains::build_domains(
         &grids,
         &x_own,
@@ -721,6 +722,7 @@ fn debug_domains_raw<'py>(
         &weights_own,
         lam,
         &policies,
+        &blocks,
     );
 
     let mut offsets: Vec<u32> = Vec::with_capacity(domains.len() + 1);

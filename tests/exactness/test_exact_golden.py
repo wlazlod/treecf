@@ -45,6 +45,9 @@ EXPECTED_FIXTURE_IDS = frozenset(
         "09-warm-start-off",
         "10-certified-infeasible",
         "11-value-policies",
+        "12-categorical-blocks",
+        "13-categorical-allowed",
+        "14-categorical-frozen-nan",
     }
 )
 

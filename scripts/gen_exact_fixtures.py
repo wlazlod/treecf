@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import numpy as np
 
-from tests.conftest import make_random_ir
+from tests.conftest import make_random_ir, make_random_mixed_ir
 from tests.exactness import fixture_utils
 from tests.parity.harness import build_constraints
 from treecf.api import Grid
@@ -295,6 +295,49 @@ def _scenario_11_value_policies() -> dict[str, Any]:
     )
 
 
+def _scenario_12_categorical_blocks() -> dict[str, Any]:
+    """Mixed numeric + categorical ensemble: block domains drive the search."""
+    rng = np.random.default_rng(3026)
+    ir = make_random_mixed_ir(rng, n_features=4, n_trees=5, depth=3, categorical={1: 5, 3: 8})
+    x = np.array([0.5, 2.0, -0.3, 6.0])
+    lo = raw_score(ir, x) + 0.15
+    return fixture_utils.build_fixture_payload(
+        "12-categorical-blocks", ir, x, (lo, float("inf")), [], lam=0.05,
+    )
+
+
+def _scenario_13_categorical_allowed() -> dict[str, Any]:
+    """AllowedCategories narrows the block domains; NaN factual on a numeric feature."""
+    rng = np.random.default_rng(3027)
+    ir = make_random_mixed_ir(rng, n_features=4, n_trees=5, depth=3, categorical={1: 6})
+    x = np.array([0.2, 4.0, np.nan, 1.1])
+    lo = raw_score(ir, np.nan_to_num(x, nan=0.0)) + 0.1
+    constraints = [
+        {"type": "AllowedCategories", "feature": "x1", "allowed": [0, 2, 4]},
+        {"type": "AllowMissing", "feature": "x2", "delta_miss": 0.3},
+    ]
+    return fixture_utils.build_fixture_payload(
+        "13-categorical-allowed", ir, x, (lo, float("inf")), constraints, lam=0.05,
+    )
+
+
+def _scenario_14_categorical_frozen_nan() -> dict[str, Any]:
+    """A frozen categorical, an AllowMissing categorical, and a plain one."""
+    rng = np.random.default_rng(3028)
+    ir = make_random_mixed_ir(
+        rng, n_features=4, n_trees=4, depth=3, categorical={0: 4, 1: 5, 3: 3}
+    )
+    x = np.array([1.0, 3.0, 0.4, 2.0])
+    lo = raw_score(ir, x) + 0.1
+    constraints = [
+        {"type": "Freeze", "feature": "x0"},
+        {"type": "AllowMissing", "feature": "x1", "delta_miss": 0.4},
+    ]
+    return fixture_utils.build_fixture_payload(
+        "14-categorical-frozen-nan", ir, x, (lo, float("inf")), constraints, lam=0.05,
+    )
+
+
 # One builder per fixture, in file order. Exposed as a module constant (not just
 # a literal inside main()) so tests can call each builder twice and diff the
 # payload dicts directly -- the double-generation determinism check without
@@ -311,6 +354,9 @@ SCENARIO_BUILDERS = (
     _scenario_09_warm_start_off,
     _scenario_10_certified_infeasible,
     _scenario_11_value_policies,
+    _scenario_12_categorical_blocks,
+    _scenario_13_categorical_allowed,
+    _scenario_14_categorical_frozen_nan,
 )
 
 

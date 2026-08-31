@@ -193,7 +193,7 @@ def _fixture_from_payload(
     ir = decode_ensemble(payload["ensemble"])
     if_ir = decode_ensemble(payload["if_ensemble"]) if payload.get("if_ensemble") else None
     constraints = build_constraints(payload["constraints"])
-    compiled = compile_constraints(constraints, ir.feature_names)
+    compiled = compile_constraints(constraints, ir.feature_names, ir.categorical)
     interval_raw = decode_floats(payload["interval"])
     incumbent_raw = payload.get("incumbent")
     incumbent = (
@@ -326,7 +326,7 @@ def _region_fixture_from_payload(
     ir = decode_ensemble(payload["ensemble"])
     if_ir = decode_ensemble(payload["if_ensemble"]) if payload.get("if_ensemble") else None
     constraints = build_constraints(payload["constraints"])
-    compiled = compile_constraints(constraints, ir.feature_names)
+    compiled = compile_constraints(constraints, ir.feature_names, ir.categorical)
     interval_raw = decode_floats(payload["interval"])
     golden = golden or {}
     golden_lo = golden.get("lo")

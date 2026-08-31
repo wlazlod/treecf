@@ -226,3 +226,35 @@ def test_probability_target_is_not_the_calibrated_target(gbc_setup) -> None:
     prob_interval = Target.probability(op="<=", value=t).raw_interval(Link.SIGMOID)
     cal_interval = Target.calibrated(platt, op="<=", value=t).raw_interval(Link.SIGMOID)
     assert prob_interval != pytest.approx(cal_interval)
+
+
+@pytest.fixture(scope="module")
+def lgbm_categorical_setup():
+    lgb = pytest.importorskip("lightgbm")
+    X, y = _dataset()
+    rng = np.random.default_rng(7)
+    X = X.copy()
+    codes = rng.integers(0, 5, size=len(X)).astype(np.float64)
+    X[:, 2] = codes
+    y = (y.astype(int) | ((codes == 4) & (rng.random(len(X)) < 0.6))).astype(int)
+    model = lgb.LGBMClassifier(
+        n_estimators=30, num_leaves=4, random_state=0, verbose=-1, min_data_per_group=1,
+    ).fit(X, y, categorical_feature=[2])
+    scores = model.predict_proba(X)[:, 1]
+    return model, X, y, scores
+
+
+@pytest.fixture(scope="module")
+def lgbm_categorical_cals(lgbm_categorical_setup):
+    model, X, y, scores = lgbm_categorical_setup
+    return _calibrators(scores, y, model, X)
+
+
+@pytest.mark.parametrize("buffer_logit", BUFFERS, ids=["buf0", "buf0.2"])
+@pytest.mark.parametrize("op", ("<=", ">="))
+@pytest.mark.parametrize("cal_key", ("platt", "isotonic"))
+def test_lgbm_categorical_matrix(
+    lgbm_categorical_setup, lgbm_categorical_cals, cal_key: str, op: str, buffer_logit: float
+) -> None:
+    """Calibrated targets solve exactly over a model with a native categorical lever."""
+    _run_matrix_cell(lgbm_categorical_setup, lgbm_categorical_cals, cal_key, op, buffer_logit)

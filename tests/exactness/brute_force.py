@@ -100,16 +100,24 @@ def solve_brute_force(
             continue
         if j in blocks:
             # categorical: one representative per block (plus keep/NaN); cost is
-            # flat within a block, so the smallest member stands for all of it
+            # flat within a block, so the smallest allowed member stands for all
+            # of it, and a declared allowed set filters both keep and blocks
+            allowed = compiled.allowed_categories.get(j)
             values = [math.nan] if allow else []
             if frozen[j]:
                 values.append(float(x[j]))
                 options.append(values)
                 continue
-            if not math.isnan(x[j]):
+            factual_ok = not math.isnan(x[j]) and (
+                allowed is None or (x[j] == int(x[j]) and int(x[j]) in allowed)
+            )
+            if factual_ok:
                 values.append(float(x[j]))
             for block in blocks[j]:
-                rep = float(block[0])
+                members = block if allowed is None else [c for c in block if c in allowed]
+                if not members:
+                    continue
+                rep = float(members[0])
                 if rep not in values:
                     values.append(rep)
             options.append(values)

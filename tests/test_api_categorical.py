@@ -159,3 +159,47 @@ class TestCategoriesArgumentAndValidation:
             exp.explain_batch(
                 np.array([[0.0], [1.5]]), Target.raw(op=">=", value=0.5)
             )
+
+
+class TestExactBackendCategorical:
+    def test_exact_proves_optimality_over_blocks(self) -> None:
+        exp = Explainer(_categorical_ir(frozenset({2, 3}), 5), normalizers=np.array([1.0]))
+        result = exp.explain(
+            np.array([0.0]), Target.raw(op=">=", value=0.5), backend="exact", seed=0
+        )
+        assert isinstance(result, Counterfactual)
+        assert result.proof == "optimal"
+        assert result.x_cf[0] == 2.0  # the block's smallest member
+        assert result.distance == 1.0
+
+    def test_off_target_allowed_set_certifies_infeasibility(self) -> None:
+        from treecf import AllowedCategories, Infeasible
+
+        exp = Explainer(
+            _categorical_ir(frozenset({2, 3}), 5),
+            normalizers=np.array([1.0]),
+            constraints=[AllowedCategories("occupation", (0, 1))],
+        )
+        result = exp.explain(
+            np.array([0.0]), Target.raw(op=">=", value=0.5), backend="exact", seed=0
+        )
+        assert isinstance(result, Infeasible)
+        assert result.proof == "certified"
+
+    def test_empty_allowed_set_certifies_before_any_expansion(self) -> None:
+        import pytest
+
+        from treecf import AllowedCategories, Infeasible, TreecfWarning
+
+        exp = Explainer(
+            _categorical_ir(frozenset({2, 3}), 5),
+            normalizers=np.array([1.0]),
+            constraints=[AllowedCategories("occupation", ())],
+        )
+        with pytest.warns(TreecfWarning, match="factual's category not in allowed set"):
+            result = exp.explain(
+                np.array([0.0]), Target.raw(op=">=", value=0.5), backend="exact", seed=0
+            )
+        assert isinstance(result, Infeasible)
+        assert result.proof == "certified"
+        assert result.solver_stats["nodes_expanded"] == 0

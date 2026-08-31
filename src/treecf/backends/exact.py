@@ -77,7 +77,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from treecf.aim.cells import Cell
+from treecf.aim.cells import Cell, category_blocks
 from treecf.api import ValuePolicy
 from treecf.backends._exact_bounds import _EnsembleBounds
 from treecf.backends._exact_domains import (
@@ -241,8 +241,9 @@ def solve_exact(
         if if_ir is None
         else _constraint_cells(compiled, ir, if_ir)
     )
-    domains = _build_domains(grids, x, compiled, sigma, weights, lam, value_policies)
-    order = _feature_order(grids, compiled)
+    blocks = category_blocks(ir) if if_ir is None else category_blocks(ir, if_ir)
+    domains = _build_domains(grids, x, compiled, sigma, weights, lam, value_policies, blocks)
+    order = _feature_order(grids, compiled, blocks)
     if any(not domains[j] for j in order):
         # Contradictory constraints left a feature with no legal value at all:
         # nothing to search, and nothing can be feasible.

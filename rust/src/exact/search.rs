@@ -279,6 +279,12 @@ impl<'a> EnsembleBounds<'a> {
                 } else {
                     right
                 }
+            } else if self.ens.node_set[idx] >= 0 {
+                if self.ens.set_contains(self.ens.node_set[idx], value) {
+                    left
+                } else {
+                    right
+                }
             } else if self.ens.is_lt[idx] {
                 if value < self.ens.threshold[idx] {
                     left
@@ -713,8 +719,18 @@ pub fn solve_exact(
         Some(if_ens) => vec![ens, if_ens],
     };
     let grids = constraint_cells(cons, &ensembles);
-    let domains = build_domains(&grids, x, cons, sigma, weights, lam, value_policies);
-    let order = feature_order(&grids, cons);
+    let blocks = crate::cells::category_blocks_joint(&ensembles);
+    let domains = build_domains(
+        &grids,
+        x,
+        cons,
+        sigma,
+        weights,
+        lam,
+        value_policies,
+        &blocks,
+    );
+    let order = feature_order(&grids, cons, &blocks);
     if order.iter().any(|&j| domains[j].is_empty()) {
         // Contradictory constraints left a feature with no legal value at all:
         // nothing to search, and nothing can be feasible.
@@ -1336,6 +1352,7 @@ mod tests {
         cons.onehot = vec![vec![0, 1]];
         cons.implications = vec![(0, 1.0, 2, 1.0)];
         let grids = constraint_cells(&cons, &[&ens]);
+        let blocks = crate::cells::category_blocks_joint(&[&ens]);
         let domains = build_domains(
             &grids,
             &[0.0, 1.0, 0.0],
@@ -1344,8 +1361,9 @@ mod tests {
             &[1.0; 3],
             0.0,
             &no_policies(3),
+            &blocks,
         );
-        let order = feature_order(&grids, &cons);
+        let order = feature_order(&grids, &cons, &blocks);
         assert_eq!(order.len(), 3);
 
         let mut assigned = vec![false; 3];
@@ -1513,6 +1531,7 @@ mod tests {
 
         // the brute-force best over the cartesian product of the domains
         let grids = constraint_cells(&cons, &[&ens]);
+        let blocks = crate::cells::category_blocks_joint(&[&ens]);
         let domains = build_domains(
             &grids,
             &x,
@@ -1521,8 +1540,9 @@ mod tests {
             &[1.0; 3],
             lam,
             &no_policies(3),
+            &blocks,
         );
-        let order = feature_order(&grids, &cons);
+        let order = feature_order(&grids, &cons, &blocks);
         let deltas = allow_missing_deltas(&cons);
         let mut best: Option<f64> = None;
         let mut idx = vec![0usize; order.len()];

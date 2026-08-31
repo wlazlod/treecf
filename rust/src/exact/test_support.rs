@@ -125,7 +125,17 @@ pub(crate) fn domains_of(
     policies: &[Option<ValuePolicy>],
 ) -> Vec<Vec<State>> {
     let grids = constraint_cells(cons, &[ens]);
-    build_domains(&grids, x, cons, &[1.0, 1.0], &[1.0, 1.0], lam, policies)
+    let blocks = crate::cells::category_blocks_joint(&[ens]);
+    build_domains(
+        &grids,
+        x,
+        cons,
+        &[1.0, 1.0],
+        &[1.0, 1.0],
+        lam,
+        policies,
+        &blocks,
+    )
 }
 
 pub(crate) const NAN_BITS: u64 = 0x7ff8000000000000;

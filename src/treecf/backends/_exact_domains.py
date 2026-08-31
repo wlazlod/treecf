@@ -29,6 +29,7 @@ from treecf.api import ValuePolicy, _snap
 from treecf.backends._exact_orderpairs import _achievable_bounds, _intersect_cell
 from treecf.constraints.compile import CompiledConstraints
 from treecf.constraints.objects import (
+    AllowedCategories,
     AllowMissing,
     Equals,
     Freeze,
@@ -223,6 +224,7 @@ def _build_domains(
     weights: FloatArray,
     lam: float,
     value_policies: Mapping[str, ValuePolicy] | None,
+    blocks: Mapping[int, tuple[tuple[int, ...], ...]] | None = None,
 ) -> list[list[_State]]:
     """Per-feature candidate states, each list sorted in canonical order
     (ascending cost, ties by ascending cell index, NaN last among ties).
@@ -309,6 +311,24 @@ def _build_domains(
         cells = grids[j]
         to_miss, from_miss = compiled.allow_missing.get(j, (0.0, 0.0))
         weight_j, sigma_j = float(weights[j]), float(sigma[j])
+
+        if blocks is not None and j in blocks:
+            domains.append(
+                _categorical_states(
+                    x_j,
+                    blocks[j],
+                    compiled.allowed_categories.get(j),
+                    frozen_j=bool(frozen[j]),
+                    allow_j=allow_j,
+                    suppressed=j in suppress_nan,
+                    weight_j=weight_j,
+                    sigma_j=sigma_j,
+                    lam=lam,
+                    to_miss=to_miss,
+                    from_miss=from_miss,
+                )
+            )
+            continue
 
         if frozen[j]:
             idx = len(cells) if x_nan else cell_index(cells, x_j)
@@ -421,12 +441,84 @@ def _build_domains(
     return domains
 
 
+def _categorical_states(
+    x_j: float,
+    blocks_j: tuple[tuple[int, ...], ...],
+    allowed: frozenset[int] | None,
+    *,
+    frozen_j: bool,
+    allow_j: bool,
+    suppressed: bool,
+    weight_j: float,
+    sigma_j: float,
+    lam: float,
+    to_miss: float,
+    from_miss: float,
+) -> list[_State]:
+    """Candidate states of a categorical feature: one per admissible block.
+
+    A block's representative is its smallest member that the declared allowed
+    set admits (cost is flat within a block, so the choice is free; smallest
+    is the determinism rule); a block with no admissible member contributes no
+    state, and an allowed set admitting nothing empties the whole domain — the
+    same certified-infeasible signal a contradictory numeric pin produces.
+    ``cell_idx`` carries the block index; the NaN state's sentinel index is
+    the block count, mirroring the numeric cells convention.
+    """
+    x_nan = math.isnan(x_j)
+    n_blocks = len(blocks_j)
+
+    def block_of(code: float) -> int:
+        for idx, block in enumerate(blocks_j):
+            if int(code) in block:
+                return idx
+        raise ValueError(f"code {code!r} not covered by blocks (should be impossible)")
+
+    if frozen_j:
+        idx = n_blocks if x_nan else block_of(x_j)
+        return [_State(x_j, 0.0, idx, x_nan)]
+
+    if x_nan and not allow_j:
+        if suppressed:
+            return []
+        return [_State(x_j, 0.0, n_blocks, True)]
+
+    states: list[_State] = []
+    keep_added = False
+    keep_block = -1
+    if not x_nan and (allowed is None or (x_j == int(x_j) and int(x_j) in allowed)):
+        keep_block = block_of(x_j)
+        states.append(_State(x_j, 0.0, keep_block, False))
+        keep_added = True
+
+    for block_idx, block in enumerate(blocks_j):
+        if keep_added and block_idx == keep_block:
+            continue  # the unchanged factual already represents its block
+        members = block if allowed is None else [c for c in block if c in allowed]
+        if not members:
+            continue
+        rep = float(members[0])
+        cost = _term_cost(
+            x_j, rep, weight_j, sigma_j, lam, to_miss, from_miss, is_cat=True
+        )
+        states.append(_State(rep, cost, block_idx, False))
+
+    if allow_j and not suppressed:
+        nan_cost = _term_cost(
+            x_j, math.nan, weight_j, sigma_j, lam, to_miss, from_miss, is_cat=True
+        )
+        states.append(_State(math.nan, nan_cost, n_blocks, True))
+
+    states.sort(key=_sort_key)
+    return states
+
+
 def _referenced_feature_indices(compiled: CompiledConstraints) -> frozenset[int]:
     """Feature indices touched by any constraint in the set, of any kind."""
     index = {name: j for j, name in enumerate(compiled.feature_names)}
     refs: set[int] = set()
     for c in compiled.constraints:
-        if isinstance(c, Freeze | Range | Monotone | Equals | AllowMissing):
+        if isinstance(c, Freeze | Range | Monotone | Equals | AllowMissing | AllowedCategories):
             refs.add(index[c.feature])
         elif isinstance(c, Linear):
             refs.update(index[name] for name in c.coefficients)
@@ -439,14 +531,20 @@ def _referenced_feature_indices(compiled: CompiledConstraints) -> frozenset[int]
 
 
 def _feature_order(
-    grids: tuple[tuple[Cell, ...], ...], compiled: CompiledConstraints
+    grids: tuple[tuple[Cell, ...], ...],
+    compiled: CompiledConstraints,
+    blocks: Mapping[int, tuple[tuple[int, ...], ...]] | None = None,
 ) -> list[int]:
     """Search order: descending split count in the joint grid, ties ascending
     feature index. Features with no split anywhere in the joint grid AND no
     referencing constraint are excluded — such a feature's domain is
-    trivially a single keep state, so it never needs to branch."""
+    trivially a single keep state, so it never needs to branch. A categorical
+    feature's split count is its block count minus one (blocks are its grid)."""
     referenced = _referenced_feature_indices(compiled)
-    split_counts = [len(cells) - 1 for cells in grids]
+    split_counts = [
+        len(blocks[j]) - 1 if blocks is not None and j in blocks else len(cells) - 1
+        for j, cells in enumerate(grids)
+    ]
     included = [j for j in range(len(grids)) if split_counts[j] > 0 or j in referenced]
     return sorted(included, key=lambda j: (-split_counts[j], j))
 
