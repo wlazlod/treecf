@@ -814,6 +814,7 @@ def _format_plan(
     """
     changes = plan.changes
     efforts = _change_effort(explainer, changes)
+    cat_info = _categorical_info(explainer)
     region = getattr(plan, "region", None)
     describe = getattr(region, "describe", None)
     region_phrases: Mapping[str, str] = {}
@@ -832,6 +833,10 @@ def _format_plan(
             parts.append(f"provide {f} = {fmt.format(dest)}")
         elif f in region_phrases:
             parts.append(region_phrases[f])
+        elif f in cat_info:
+            source_label = _code_label(cat_info[f], source)
+            dest_label = _code_label(cat_info[f], dest)
+            parts.append(f"{f}: {source_label} → {dest_label}")
         else:
             parts.append(f"{f} = {fmt.format(dest)}")
 
@@ -856,6 +861,24 @@ def _format_plan(
     j_suffix = f"(J={plan.distance:.3g})"
     lines[-1] = f"{lines[-1]} {j_suffix}" if lines[-1] else j_suffix
     return "\n".join(lines)
+
+
+def _categorical_info(explainer: Any) -> dict[str, Any]:
+    """Per-feature categorical metadata keyed by name, when the explainer has any."""
+    ir = getattr(explainer, "ir", None)
+    categorical = getattr(ir, "categorical", None)
+    if not categorical:
+        return {}
+    return {ir.feature_names[j]: info for j, info in categorical.items()}
+
+
+def _code_label(info: Any, value: float) -> str:
+    """A category code rendered by its display name when the model carries one."""
+    code = int(value)
+    names = getattr(info, "categories", None)
+    if names is not None and 0 <= code < len(names):
+        return str(names[code])
+    return str(code)
 
 
 def _import_pyplot() -> Any:

@@ -993,3 +993,66 @@ def test_plot_recourse_map_schematic_accept_label_matches_accept_screen_side() -
         # Reject sits on the same screen side as the factual's dot.
         assert (accept_fx > 0.5) == (plan_fx > 0.5)
         assert (reject_fx > 0.5) == (factual_fx > 0.5)
+
+
+class TestCategoricalChangeLabels:
+    """A category change renders as name-to-name, codes when names are absent."""
+
+    @staticmethod
+    def _explainer(names=("clerk", "manager", "nurse", "smith")):
+        from treecf import Explainer
+        from treecf.ir.model import CategoricalFeature, EnsembleIR, Link, Node, Tree
+
+        tree = Tree(
+            nodes=(
+                Node(0, 0, None, None, True, 1, 2, None, categories=frozenset({2, 3})),
+                Node(1, None, None, None, None, None, None, 1.0),
+                Node(2, None, None, None, None, None, None, 0.0),
+            )
+        )
+        ir = EnsembleIR(
+            trees=(tree,),
+            base_score=0.0,
+            link=Link.IDENTITY,
+            n_features=1,
+            feature_names=("occupation",),
+            meta={},
+            categorical={0: CategoricalFeature(cardinality=4, categories=names)},
+        )
+        return Explainer(ir, normalizers=np.ones(1))
+
+    def test_names_render_in_plan_labels(self) -> None:
+        from treecf.viz import _format_plan
+
+        exp = self._explainer()
+        cf = _cf(changes={"occupation": (0.0, 2.0)}, distance=1.0)
+        label = _format_plan(None, cf, exp)
+        assert "occupation: clerk → nurse" in label
+
+    def test_codes_render_when_names_are_absent(self) -> None:
+        from treecf.viz import _format_plan
+
+        exp = self._explainer(names=None)
+        cf = _cf(changes={"occupation": (0.0, 2.0)}, distance=1.0)
+        label = _format_plan(None, cf, exp)
+        assert "occupation: 0 → 2" in label
+
+    def test_region_set_phrase_wins_when_present(self) -> None:
+        from treecf.regions import RecourseRegion
+        from treecf.viz import _format_plan
+
+        exp = self._explainer()
+        region = RecourseRegion(
+            lo=np.array([2.0]),
+            hi=np.array([2.0]),
+            feature_intervals={},
+            certified=True,
+            feature_categories={"occupation": (2, 3)},
+            cat_sets={0: (2, 3)},
+            category_names={"occupation": ("clerk", "manager", "nurse", "smith")},
+        )
+        from dataclasses import replace as dc_replace
+
+        cf = dc_replace(_cf(changes={"occupation": (0.0, 2.0)}, distance=1.0), region=region)
+        label = _format_plan(None, cf, exp)
+        assert "∈ {nurse, smith}" in label
