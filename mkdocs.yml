@@ -31,9 +31,20 @@ plugins:
   - mkdocstrings:
       handlers:
         python:
+          paths: [src]
           options:
-            docstring_style: google
+            docstring_style: numpy
+            docstring_section_style: spacy
             show_source: true
+            show_root_heading: true
+            show_root_full_path: false
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+            members_order: source
+            merge_init_into_class: true
+            separate_signature: true
+            signature_crossrefs: true
+            show_signature_annotations: true
   - mkdocs-jupyter:
       execute: false  # notebooks are committed executed; CI re-executes them separately
 

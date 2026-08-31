@@ -35,11 +35,14 @@ class Plausibility:
     NaN-containing factual (isolation forests define no NaN routing). See
     [Plausibility](concepts/plausibility.md).
 
-    Attributes:
-        if_ir: The isolation forest, parsed through the same tree IR the
-            model uses.
-        max_anomaly_score: The upper bound on ``anomaly_score``; lower values
-            are stricter (closer to the training distribution).
+    Attributes
+    ----------
+    if_ir
+        The isolation forest, parsed through the same tree IR the
+        model uses.
+    max_anomaly_score
+        The upper bound on ``anomaly_score``; lower values
+        are stricter (closer to the training distribution).
     """
 
     if_ir: EnsembleIR
@@ -51,19 +54,25 @@ class Plausibility:
     ) -> Plausibility:
         """Build a ``Plausibility`` bound from a fitted isolation forest.
 
-        Args:
-            model_or_ir: A native isolation-forest model (currently
-                sklearn's ``IsolationForest``) or an already-parsed
-                ``EnsembleIR``.
-            max_anomaly_score: Upper bound on the isolation-forest anomaly
-                score, in ``(0, 1)``; lower is a stricter plausibility
-                requirement. Defaults to ``0.55``.
+        Parameters
+        ----------
+        model_or_ir
+            A native isolation-forest model (currently
+            sklearn's ``IsolationForest``) or an already-parsed
+            ``EnsembleIR``.
+        max_anomaly_score
+            Upper bound on the isolation-forest anomaly
+            score, in ``(0, 1)``; lower is a stricter plausibility
+            requirement. Defaults to ``0.55``.
 
-        Returns:
-            A ``Plausibility`` wrapping the parsed forest.
+        Returns
+        -------
+        A ``Plausibility`` wrapping the parsed forest.
 
-        Raises:
-            TreecfError: If ``max_anomaly_score`` is not in ``(0, 1)``.
+        Raises
+        ------
+        TreecfError
+            If ``max_anomaly_score`` is not in ``(0, 1)``.
         """
         if not 0.0 < max_anomaly_score < 1.0:
             raise TreecfError("max_anomaly_score must lie in (0, 1)")
@@ -107,11 +116,14 @@ class Plausibility:
         one that takes many (typical). A point is plausible under this bound
         iff its score is ``<= max_anomaly_score``.
 
-        Args:
-            x: A feature vector, aligned to the forest's feature order.
+        Parameters
+        ----------
+        x
+            A feature vector, aligned to the forest's feature order.
 
-        Returns:
-            The anomaly score at ``x``.
+        Returns
+        -------
+        The anomaly score at ``x``.
         """
         total = raw_score(self.if_ir, np.asarray(x, dtype=np.float64))
         mean_path = total / len(self.if_ir.trees)

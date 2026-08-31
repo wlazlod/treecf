@@ -171,44 +171,59 @@ def solve_exact(
     contract ``solve_exact_rust`` gives callers by polling for signals from
     inside the released GIL.
 
-    Args:
-        ir: Model whose score must land in ``interval``.
-        x: The factual row.
-        interval: Closed target interval ``(lo, hi)`` on the raw score.
-        compiled: Compiled constraint set; its ``check_matrix`` is the arbiter
-            that decides every completed row.
-        sigma: Per-feature scale divisors of the objective.
-        weights: Per-feature weights of the objective.
-        lam: Per-changed-feature penalty of the objective.
-        value_policies: Optional per-feature snapping rules for values that move.
-        plausibility: Optional ``(isolation forest, minimum total path length)``
-            pair; its splits also widen the cell grid.
-        node_budget: Maximum number of state assignments to attempt.
-        gap: Relative optimality gap to settle for. Above zero the search may
-            discard branches that could only improve on the incumbent by less
-            than this fraction, and says so through the proof it reports.
-        time_budget_s: Wall-clock budget, checked once per assignment.
-        incumbent: Optional ``(cost, row)`` warm start from another backend,
-            already costed by the caller on the same objective. The caller must
-            also have verified the row: the search takes its feasibility on
-            trust, prunes against its cost, and may hand it straight back.
+    Parameters
+    ----------
+    ir
+        Model whose score must land in ``interval``.
+    x
+        The factual row.
+    interval
+        Closed target interval ``(lo, hi)`` on the raw score.
+    compiled
+        Compiled constraint set; its ``check_matrix`` is the arbiter
+        that decides every completed row.
+    sigma
+        Per-feature scale divisors of the objective.
+    weights
+        Per-feature weights of the objective.
+    lam
+        Per-changed-feature penalty of the objective.
+    value_policies
+        Optional per-feature snapping rules for values that move.
+    plausibility
+        Optional ``(isolation forest, minimum total path length)``
+        pair; its splits also widen the cell grid.
+    node_budget
+        Maximum number of state assignments to attempt.
+    gap
+        Relative optimality gap to settle for. Above zero the search may
+        discard branches that could only improve on the incumbent by less
+        than this fraction, and says so through the proof it reports.
+    time_budget_s
+        Wall-clock budget, checked once per assignment.
+    incumbent
+        Optional ``(cost, row)`` warm start from another backend,
+        already costed by the caller on the same objective. The caller must
+        also have verified the row: the search takes its feasibility on
+        trust, prunes against its cost, and may hand it straight back.
 
-    Returns:
-        The best row found, the strength of the claim about it, the search
-        counters, which features were moved onto a policy grid, and the cost
-        of the returned row.
+    Returns
+    -------
+    The best row found, the strength of the claim about it, the search
+    counters, which features were moved onto a policy grid, and the cost
+    of the returned row.
 
-        There are two different ways to come back empty-handed, and callers
-        must tell them apart by ``stats["completed"]``, not by ``proof``. An
-        ``x_cf`` of None with ``completed`` True is a certificate: every
-        assignment the grid allows was tried and none was feasible, so no
-        counterfactual exists within the searched space — ``proof`` carries no
-        meaning in that case and should be ignored. An ``x_cf`` of None with
-        ``completed`` False only means the search never settled the whole
-        space, so nothing is proven either way: a budget ran out, or an order
-        pair was left undecided — several pairs sharing features that could
-        not be repaired one at a time, or a pair whose feature carries a value
-        policy.
+    There are two different ways to come back empty-handed, and callers
+    must tell them apart by ``stats["completed"]``, not by ``proof``. An
+    ``x_cf`` of None with ``completed`` True is a certificate: every
+    assignment the grid allows was tried and none was feasible, so no
+    counterfactual exists within the searched space — ``proof`` carries no
+    meaning in that case and should be ignored. An ``x_cf`` of None with
+    ``completed`` False only means the search never settled the whole
+    space, so nothing is proven either way: a budget ran out, or an order
+    pair was left undecided — several pairs sharing features that could
+    not be repaired one at a time, or a pair whose feature carries a value
+    policy.
     """
     start = time.monotonic()
     order_pairs = _validate(compiled, value_policies)

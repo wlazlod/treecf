@@ -9,6 +9,18 @@ from typing import Any
 from treecf._errors import MissingExtraError, TreecfError
 from treecf.api import Counterfactual, Infeasible
 
+__all__ = [
+    "plot_alternatives",
+    "plot_changes",
+    "plot_counterfactuals",
+    "plot_effort",
+    "plot_ladder",
+    "plot_recourse_map",
+    "plot_region",
+    "plot_tradeoff",
+    "plot_waterfall",
+]
+
 
 def plot_changes(cf: Counterfactual, ax: Any = None) -> Any:
     """Dumbbell chart of per-feature changes (from -> to); NaN transitions annotated.
@@ -18,15 +30,21 @@ def plot_changes(cf: Counterfactual, ax: Any = None) -> Any:
     transitions to or from ``NaN`` is drawn as a single gray dot annotated
     ``"-> NaN"``/``"NaN ->"`` instead.
 
-    Args:
-        cf: The counterfactual to plot.
-        ax: Existing axes to draw on; a new figure is created if omitted.
+    Parameters
+    ----------
+    cf
+        The counterfactual to plot.
+    ax
+        Existing axes to draw on; a new figure is created if omitted.
 
-    Returns:
-        The axes the chart was drawn on.
+    Returns
+    -------
+    The axes the chart was drawn on.
 
-    Raises:
-        MissingExtraError: If matplotlib is not installed.
+    Raises
+    ------
+    MissingExtraError
+        If matplotlib is not installed.
     """
     plt = _import_pyplot()
     if ax is None:
@@ -69,16 +87,22 @@ def plot_counterfactuals(results: Sequence[Counterfactual], ax: Any = None) -> A
     Rows are labeled by rank and distance (``#1 (J=...)``, ...), in the order
     ``results`` is given.
 
-    Args:
-        results: The counterfactuals to compare (e.g. the ``k`` alternatives
-            for one row from ``diversity="seeds"``/``"lever-blocking"``).
-        ax: Existing axes to draw on; a new figure is created if omitted.
+    Parameters
+    ----------
+    results
+        The counterfactuals to compare (e.g. the ``k`` alternatives
+        for one row from ``diversity="seeds"``/``"lever-blocking"``).
+    ax
+        Existing axes to draw on; a new figure is created if omitted.
 
-    Returns:
-        The axes the matrix was drawn on.
+    Returns
+    -------
+    The axes the matrix was drawn on.
 
-    Raises:
-        MissingExtraError: If matplotlib is not installed.
+    Raises
+    ------
+    MissingExtraError
+        If matplotlib is not installed.
     """
     plt = _import_pyplot()
     features = sorted({name for cf in results for name in cf.changes})
@@ -102,15 +126,21 @@ def plot_ladder(bands_result: Mapping[str, object], ax: Any = None) -> Any:
     ``Counterfactual`` bar is its ``distance``, an ``Infeasible`` band is
     drawn at zero height and labeled ``"infeasible"``.
 
-    Args:
-        bands_result: The dict returned by ``explain(x, target=Target.bands(...))``.
-        ax: Existing axes to draw on; a new figure is created if omitted.
+    Parameters
+    ----------
+    bands_result
+        The dict returned by ``explain(x, target=Target.bands(...))``.
+    ax
+        Existing axes to draw on; a new figure is created if omitted.
 
-    Returns:
-        The axes the chart was drawn on.
+    Returns
+    -------
+    The axes the chart was drawn on.
 
-    Raises:
-        MissingExtraError: If matplotlib is not installed.
+    Raises
+    ------
+    MissingExtraError
+        If matplotlib is not installed.
     """
     plt = _import_pyplot()
     if ax is None:
@@ -151,20 +181,28 @@ def plot_alternatives(results: Any, explainer: Any = None, ax: Any = None) -> An
     factual (Δ/σ), so features of different scales share one axis; without,
     raw values are shown with gray factual dots.
 
-    Args:
-        results: The plans to overlay — a sequence, or a mapping keyed by
-            plan name; see above for accepted element types.
-        explainer: When given, changes are standardized by its per-feature
-            ``sigma``; when omitted, raw feature values are plotted instead.
-        ax: Existing axes to draw on; a new figure is created if omitted.
+    Parameters
+    ----------
+    results
+        The plans to overlay — a sequence, or a mapping keyed by
+        plan name; see above for accepted element types.
+    explainer
+        When given, changes are standardized by its per-feature
+        ``sigma``; when omitted, raw feature values are plotted instead.
+    ax
+        Existing axes to draw on; a new figure is created if omitted.
 
-    Returns:
-        The axes the chart was drawn on.
+    Returns
+    -------
+    The axes the chart was drawn on.
 
-    Raises:
-        MissingExtraError: If matplotlib is not installed.
-        TreecfError: If ``results`` contains no feasible plans, or more than
-            10.
+    Raises
+    ------
+    MissingExtraError
+        If matplotlib is not installed.
+    TreecfError
+        If ``results`` contains no feasible plans, or more than
+        10.
     """
     plt = _import_pyplot()
     plans = _plans_with_labels(results)
@@ -235,19 +273,27 @@ def plot_tradeoff(results: Any, target: Any = None, ax: Any = None) -> Any:
     ``BatchRecord`` entries, or a mapping as returned by
     ``explain_coalitions`` (keys label the dots; ``Infeasible`` skipped).
 
-    Args:
-        results: The plans to plot; see above for accepted shapes.
-        target: When given, draws the target interval's finite bounds
-            (mapped into the same probability/raw space as the plans) as
-            horizontal reference lines.
-        ax: Existing axes to draw on; a new figure is created if omitted.
+    Parameters
+    ----------
+    results
+        The plans to plot; see above for accepted shapes.
+    target
+        When given, draws the target interval's finite bounds
+        (mapped into the same probability/raw space as the plans) as
+        horizontal reference lines.
+    ax
+        Existing axes to draw on; a new figure is created if omitted.
 
-    Returns:
-        The axes the chart was drawn on.
+    Returns
+    -------
+    The axes the chart was drawn on.
 
-    Raises:
-        MissingExtraError: If matplotlib is not installed.
-        TreecfError: If ``results`` contains no feasible plans.
+    Raises
+    ------
+    MissingExtraError
+        If matplotlib is not installed.
+    TreecfError
+        If ``results`` contains no feasible plans.
     """
     plt = _import_pyplot()
     plans = _plans_with_labels(results)
@@ -319,40 +365,57 @@ def plot_recourse_map(
     it). ``region_labels`` names the two sides of the boundary in
     ``schematic`` mode.
 
-    Args:
-        explainer: Explainer wrapping the model; supplies the link function
-            and the counterfactual distance weights used to order each
-            plan's changes.
-        x: Factual feature vector.
-        results: Counterfactual outcomes for ``x`` — a single result, a
-            sequence, or a mapping (as returned by ``explain_coalitions``).
-            Feasible and infeasible entries are both accepted.
-        target: The target interval the plans were solved against; also
-            drawn as the band (or boundary, in schematic mode).
-        ax: Existing axes to draw on; a new figure is created if omitted.
-        space: ``"probability"``, ``"raw"``, or ``"auto"`` (default) to pick
-            the model-output axis space from the model's link function.
-        annotate: Draw a text label at each plan's point; in ``schematic``
-            mode, also gates whether ``show_factual_label`` draws its block.
-        max_changes_per_label: Schematic mode only. Number of changed
-            features shown per label before truncating to "(+k more)".
-        fmt: Schematic mode only. Format string for changed feature values
-            in labels.
-        schematic: Render the slide-friendly boundary view instead of the
-            quantitative axes.
-        region_labels: The (reject-side, accept-side) names drawn next to
-            the boundary in schematic mode.
-        show_factual_label: Schematic mode only. Draw an anchored corner
-            box, on the factual's screen side, listing the features any
-            plan changed.
+    Parameters
+    ----------
+    explainer
+        Explainer wrapping the model; supplies the link function
+        and the counterfactual distance weights used to order each
+        plan's changes.
+    x
+        Factual feature vector.
+    results
+        Counterfactual outcomes for ``x`` — a single result, a
+        sequence, or a mapping (as returned by ``explain_coalitions``).
+        Feasible and infeasible entries are both accepted.
+    target
+        The target interval the plans were solved against; also
+        drawn as the band (or boundary, in schematic mode).
+    ax
+        Existing axes to draw on; a new figure is created if omitted.
+    space
+        ``"probability"``, ``"raw"``, or ``"auto"`` (default) to pick
+        the model-output axis space from the model's link function.
+    annotate
+        Draw a text label at each plan's point; in ``schematic``
+        mode, also gates whether ``show_factual_label`` draws its block.
+    max_changes_per_label
+        Schematic mode only. Number of changed
+        features shown per label before truncating to "(+k more)".
+    fmt
+        Schematic mode only. Format string for changed feature values
+        in labels.
+    schematic
+        Render the slide-friendly boundary view instead of the
+        quantitative axes.
+    region_labels
+        The (reject-side, accept-side) names drawn next to
+        the boundary in schematic mode.
+    show_factual_label
+        Schematic mode only. Draw an anchored corner
+        box, on the factual's screen side, listing the features any
+        plan changed.
 
-    Returns:
-        The axes the recourse map was drawn on.
+    Returns
+    -------
+    The axes the recourse map was drawn on.
 
-    Raises:
-        MissingExtraError: If matplotlib is not installed.
-        TreecfError: If ``results`` contains no plans at all, or more than
-            10 feasible plans.
+    Raises
+    ------
+    MissingExtraError
+        If matplotlib is not installed.
+    TreecfError
+        If ``results`` contains no plans at all, or more than
+        10 feasible plans.
     """
     from treecf.ir.evaluate import apply_link, raw_score
     from treecf.ir.model import Link
@@ -650,19 +713,27 @@ def plot_waterfall(explainer: Any, cf: Counterfactual, target: Any = None, ax: A
     sequential and therefore order-dependent, like any sequential decomposition).
     Sigmoid-link models are plotted in probability space.
 
-    Args:
-        explainer: Explainer wrapping the model; supplies the IR the score
-            deltas are recomputed through and the link function.
-        cf: The counterfactual to decompose.
-        target: When given, draws the target interval's finite bounds (in the
-            same display space) as vertical reference lines.
-        ax: Existing axes to draw on; a new figure is created if omitted.
+    Parameters
+    ----------
+    explainer
+        Explainer wrapping the model; supplies the IR the score
+        deltas are recomputed through and the link function.
+    cf
+        The counterfactual to decompose.
+    target
+        When given, draws the target interval's finite bounds (in the
+        same display space) as vertical reference lines.
+    ax
+        Existing axes to draw on; a new figure is created if omitted.
 
-    Returns:
-        The axes the waterfall was drawn on.
+    Returns
+    -------
+    The axes the waterfall was drawn on.
 
-    Raises:
-        MissingExtraError: If matplotlib is not installed.
+    Raises
+    ------
+    MissingExtraError
+        If matplotlib is not installed.
     """
     import numpy as np
 
@@ -740,17 +811,24 @@ def plot_effort(explainer: Any, cf: Counterfactual, ax: Any = None) -> Any:
     descending. Unlike ``plot_waterfall``'s exact score deltas, this
     decomposes the recourse *cost*, not the model score.
 
-    Args:
-        explainer: Explainer wrapping the model; supplies the distance
-            weights and normalizers each contribution is computed from.
-        cf: The counterfactual to decompose.
-        ax: Existing axes to draw on; a new figure is created if omitted.
+    Parameters
+    ----------
+    explainer
+        Explainer wrapping the model; supplies the distance
+        weights and normalizers each contribution is computed from.
+    cf
+        The counterfactual to decompose.
+    ax
+        Existing axes to draw on; a new figure is created if omitted.
 
-    Returns:
-        The axes the chart was drawn on.
+    Returns
+    -------
+    The axes the chart was drawn on.
 
-    Raises:
-        MissingExtraError: If matplotlib is not installed.
+    Raises
+    ------
+    MissingExtraError
+        If matplotlib is not installed.
     """
     plt = _import_pyplot()
     contributions = sorted(

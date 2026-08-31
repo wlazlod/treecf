@@ -66,17 +66,22 @@ class RecourseRegion:
     forced to stop early frees room a later feature grows into). See
     [Certification](concepts/certification.md#regions-certified-not-maximal-not-monotone).
 
-    Attributes:
-        lo: Lower bound per feature, same order as the model's features;
-            equal to ``hi`` at a degenerate (never-widened) coordinate.
-        hi: Upper bound per feature, same order as the model's features.
-        feature_intervals: ``{feature: (lo, hi)}`` for every non-degenerate
-            feature only, for display (``describe()`` renders these as
-            phrases).
-        certified: Always ``True`` in this release — every region returned
-            by ``Explainer.recourse_region``/``explain(..., region=True)`` is
-            a sound certificate; the field is reserved for a future relaxed
-            mode.
+    Attributes
+    ----------
+    lo
+        Lower bound per feature, same order as the model's features;
+        equal to ``hi`` at a degenerate (never-widened) coordinate.
+    hi
+        Upper bound per feature, same order as the model's features.
+    feature_intervals
+        ``{feature: (lo, hi)}`` for every non-degenerate
+        feature only, for display (``describe()`` renders these as
+        phrases).
+    certified
+        Always ``True`` in this release — every region returned
+        by ``Explainer.recourse_region``/``explain(..., region=True)`` is
+        a sound certificate; the field is reserved for a future relaxed
+        mode.
     """
 
     lo: FloatArray
@@ -97,12 +102,15 @@ class RecourseRegion:
         to match it exactly; every other coordinate requires
         ``lo <= x[j] <= hi[j]``.
 
-        Args:
-            x: A feature vector, same order and length as the region.
+        Parameters
+        ----------
+        x
+            A feature vector, same order and length as the region.
 
-        Returns:
-            ``True`` iff every coordinate of ``x`` satisfies the region's
-            bound.
+        Returns
+        -------
+        ``True`` iff every coordinate of ``x`` satisfies the region's
+        bound.
         """
         for j in range(len(self.lo)):
             xj = float(x[j])
@@ -126,8 +134,9 @@ class RecourseRegion:
         ``"unconstrained"`` when both endpoints are infinite; values
         formatted ``"{:.3g}"``.
 
-        Returns:
-            ``{feature: phrase}`` for every key of ``feature_intervals``.
+        Returns
+        -------
+        ``{feature: phrase}`` for every key of ``feature_intervals``.
         """
         out: dict[str, str] = {}
         for name, (lo, hi) in self.feature_intervals.items():

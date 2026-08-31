@@ -46,6 +46,13 @@ if TYPE_CHECKING:
     from treecf.api import Counterfactual, Explainer, Infeasible
     from treecf.targets import Target
 
+__all__ = [
+    "build_certificate",
+    "check_certificate",
+    "constraints_fingerprint",
+    "ir_fingerprint",
+]
+
 FloatArray = npt.NDArray[np.float64]
 
 _NONE_U32 = 0xFFFFFFFF  # sentinel for an index field that does not apply
@@ -97,11 +104,14 @@ def ir_fingerprint(ir: EnsembleIR) -> str:
     or numeric detail of the ensemble changes (a one-ulp leaf perturbation
     included).
 
-    Args:
-        ir: The parsed ensemble to fingerprint (``Explainer.ir``).
+    Parameters
+    ----------
+    ir
+        The parsed ensemble to fingerprint (``Explainer.ir``).
 
-    Returns:
-        A 64-character SHA-256 hex digest.
+    Returns
+    -------
+    A 64-character SHA-256 hex digest.
     """
     hasher = hashlib.sha256()
     hasher.update(ir.link.name.encode("utf-8") + b"\x00")
@@ -218,11 +228,14 @@ def constraints_fingerprint(explainer: Explainer) -> str:
     a fixed ``unhashable_custom`` tag, and any certificate built from the
     explainer records ``"reproducible": false`` with a reason.
 
-    Args:
-        explainer: The explainer whose constraint set to fingerprint.
+    Parameters
+    ----------
+    explainer
+        The explainer whose constraint set to fingerprint.
 
-    Returns:
-        A 64-character SHA-256 hex digest.
+    Returns
+    -------
+    A 64-character SHA-256 hex digest.
     """
     encoding, _ = _constraints_encoding(explainer)
     return hashlib.sha256(encoding).hexdigest()

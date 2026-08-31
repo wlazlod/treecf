@@ -14,8 +14,10 @@ from dataclasses import dataclass
 class Freeze:
     """The feature is immutable: the counterfactual keeps the factual value.
 
-    Attributes:
-        feature: The feature name to freeze.
+    Attributes
+    ----------
+    feature
+        The feature name to freeze.
     """
 
     feature: str
@@ -25,10 +27,13 @@ class Freeze:
 class Monotone:
     """The feature may only move in one direction from the factual value.
 
-    Attributes:
-        feature: The feature name to constrain.
-        direction: ``"increase"`` (the counterfactual value must be
-            ``>=`` the factual) or ``"decrease"`` (``<=`` the factual).
+    Attributes
+    ----------
+    feature
+        The feature name to constrain.
+    direction
+        ``"increase"`` (the counterfactual value must be
+        ``>=`` the factual) or ``"decrease"`` (``<=`` the factual).
     """
 
     feature: str
@@ -39,10 +44,14 @@ class Monotone:
 class Range:
     """Hard domain bounds for the counterfactual value (inclusive).
 
-    Attributes:
-        feature: The feature name to bound.
-        lo: Lower bound, inclusive.
-        hi: Upper bound, inclusive.
+    Attributes
+    ----------
+    feature
+        The feature name to bound.
+    lo
+        Lower bound, inclusive.
+    hi
+        Upper bound, inclusive.
     """
 
     feature: str
@@ -63,16 +72,21 @@ class Linear:
     fallback — see
     [Certification](concepts/certification.md#what-the-exact-backend-does-not-certify-yet).
 
-    Attributes:
-        coefficients: ``{feature: coefficient}`` for every feature in the
-            sum; at least one entry.
-        op: ``"<="``, ``">="``, or ``"=="``.
-        rhs: The right-hand-side constant.
-        missing_policy: ``"satisfied"`` (the default — the constraint is
-            vacuously satisfied when a referenced feature is NaN) or
-            ``"violated"``/``"forbid_missing"`` (a NaN there fails the
-            constraint, so the counterfactual may not use NaN on a referenced
-            feature).
+    Attributes
+    ----------
+    coefficients
+        ``{feature: coefficient}`` for every feature in the
+        sum; at least one entry.
+    op
+        ``"<="``, ``">="``, or ``"=="``.
+    rhs
+        The right-hand-side constant.
+    missing_policy
+        ``"satisfied"`` (the default — the constraint is
+        vacuously satisfied when a referenced feature is NaN) or
+        ``"violated"``/``"forbid_missing"`` (a NaN there fails the
+        constraint, so the counterfactual may not use NaN on a referenced
+        feature).
     """
 
     coefficients: dict[str, float]
@@ -85,10 +99,13 @@ class Linear:
 class Equals:
     """Binary-feature equality (used standalone or inside ``Implies``).
 
-    Attributes:
-        feature: The feature name to compare.
-        value: The value ``feature`` must equal (typically ``0.0``/``1.0``
-            for a binary indicator).
+    Attributes
+    ----------
+    feature
+        The feature name to compare.
+    value
+        The value ``feature`` must equal (typically ``0.0``/``1.0``
+        for a binary indicator).
     """
 
     feature: str
@@ -99,9 +116,12 @@ class Equals:
 class Implies:
     """If ``condition`` holds then ``consequence`` must hold; binary features only.
 
-    Attributes:
-        condition: The antecedent equality.
-        consequence: The equality ``condition`` requires when it holds.
+    Attributes
+    ----------
+    condition
+        The antecedent equality.
+    consequence
+        The equality ``condition`` requires when it holds.
     """
 
     condition: Equals
@@ -112,8 +132,10 @@ class Implies:
 class OneHot:
     """The listed binary columns sum to exactly one.
 
-    Attributes:
-        features: The mutually exclusive binary feature names; at least two.
+    Attributes
+    ----------
+    features
+        The mutually exclusive binary feature names; at least two.
     """
 
     features: tuple[str, ...]
@@ -127,9 +149,12 @@ class AllowedCategories:
     through the model's category names. Only valid on a categorical feature;
     several declarations on one feature intersect.
 
-    Attributes:
-        feature: The categorical feature name to restrict.
-        allowed: The permitted codes (ints) or category names (strs).
+    Attributes
+    ----------
+    feature
+        The categorical feature name to restrict.
+    allowed
+        The permitted codes (ints) or category names (strs).
     """
 
     feature: str
@@ -149,11 +174,15 @@ class AllowMissing:
     for an asymmetric NaN->value cost (defaults to ``delta_miss``). See
     [Missing values](concepts/missing-values.md).
 
-    Attributes:
-        feature: The feature name NaN is allowed on.
-        delta_miss: Distance cost of a value-to-NaN change on this feature.
-        delta_from_miss: Distance cost of a NaN-to-value change on this
-            feature; defaults to ``delta_miss`` when ``None``.
+    Attributes
+    ----------
+    feature
+        The feature name NaN is allowed on.
+    delta_miss
+        Distance cost of a value-to-NaN change on this feature.
+    delta_from_miss
+        Distance cost of a NaN-to-value change on this
+        feature; defaults to ``delta_miss`` when ``None``.
     """
 
     feature: str

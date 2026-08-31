@@ -96,6 +96,12 @@ def test_api_stability_added_in() -> None:
     text = _read("docs/api-stability.md")
     if text is None:
         pytest.skip("docs/api-stability.md not present")
-    assert re.search(rf"^## Added in {re.escape(VERSION)}$", text, re.MULTILINE), (
-        f"docs/api-stability.md has no 'Added in {VERSION}' section"
+    headings = re.findall(r"^## Added in (\d+\.\d+\.\d+)$", text, re.MULTILINE)
+    assert headings, "docs/api-stability.md has no 'Added in X' section"
+    current = tuple(int(part) for part in VERSION.split("."))
+    newest = max(tuple(int(part) for part in h.split(".")) for h in headings)
+    # the top list may already name the release being prepared
+    assert newest >= current, (
+        f"docs/api-stability.md's newest 'Added in' section ({newest}) is behind "
+        f"the current version {VERSION}"
     )

@@ -45,63 +45,81 @@ class BatchRecord:
     the dataset, and ``feasible`` distinguishes a real plan from the
     infeasibility marker.
 
-    Attributes:
-        id: The row identifier this record belongs to (an element of
-            ``explain_batch``'s ``ids``, or the row's integer index when
-            ``ids`` was not given).
-        k: Rank of this plan among the row's feasible alternatives,
-            ``0``-based, ascending by distance (``0`` is always the
-            cheapest). For a wholly infeasible row (``diversity="seeds"``/
-            ``"lever-blocking"``), the single infeasibility marker gets
-            ``k=0``; for ``diversity="coalitions"``, an infeasible
-            coalition's marker instead continues the same row's ascending
-            sequence after its feasible plans, so each coalition still gets
-            a distinct ``k``.
-        feasible: ``False`` marks the infeasibility marker for a row (or
-            coalition) that produced no plan; ``x_cf``/``changes``/
-            ``distance``/``n_changed``/``score_raw``/``score_prob`` are then
-            ``None``/``{}`` rather than real values.
-        x_cf: The full counterfactual feature vector, or ``None`` when
-            ``feasible`` is ``False``.
-        changes: ``{feature: (factual_value, counterfactual_value)}`` for
-            every feature that differs; ``{}`` when ``feasible`` is ``False``.
-        distance: The weighted, normalized sum of per-feature changes,
-            excluding the sparsity term (see ``Counterfactual.distance``), or
-            ``None`` when ``feasible`` is ``False``.
-        n_changed: ``len(changes)``, or ``None`` when ``feasible`` is
-            ``False``.
-        score_raw: The model's raw score at ``x_cf``, or ``None`` when
-            ``feasible`` is ``False``.
-        score_prob: ``sigmoid(score_raw)`` for a sigmoid-link model, ``None``
-            for an identity-link model or when ``feasible`` is ``False``.
-        seed: The seed that produced this plan, set only for
-            ``diversity="seeds"``; ``None`` otherwise.
-        blocked_lever: The feature frozen to produce this plan, set only for
-            ``diversity="lever-blocking"`` alternatives (not the primary
-            plan, ``k=0``); ``None`` otherwise.
-        coalition: The coalition name this plan belongs to, set only for
-            ``diversity="coalitions"`` (including the reserved
-            ``"(all levers)"`` baseline when ``include_full=True``); ``None``
-            otherwise.
-        region: The certified box around ``x_cf``, set only when
-            ``explain_batch`` ran with ``region=True`` and ``feasible`` is
-            ``True``; ``None`` otherwise.
-        proof: The claim this record makes, mirroring the single-instance
-            result that produced it: ``Counterfactual.proof`` (``"heuristic"``
-            | ``"optimal"`` | ``"optimal_within_gap"``) for a feasible
-            record, ``Infeasible.proof`` (``"search_exhausted"`` |
-            ``"certified"``) for an infeasibility marker.
-        solver_stats: Exact-backend diagnostics for the solve behind this
-            record, same keys as ``Counterfactual.solver_stats``; empty for
-            genetic/python solves (those engines report no per-row stats).
-        calibrator_fingerprint: The duck-typed ``fingerprint()`` of the
-            calibrated target's calibrator, when it exposes one; ``None``
-            for raw/probability targets or fingerprint-less calibrators.
-            Repeated on every record so each file line is self-contained.
-        score_calibrated: The calibrator's probability at ``x_cf`` for a
-            calibrated target whose calibrator exposes ``predict_proba``;
-            presentational only — the engine optimized and verified on the
-            resolved raw interval. ``None`` otherwise.
+    Attributes
+    ----------
+    id
+        The row identifier this record belongs to (an element of
+        ``explain_batch``'s ``ids``, or the row's integer index when
+        ``ids`` was not given).
+    k
+        Rank of this plan among the row's feasible alternatives,
+        ``0``-based, ascending by distance (``0`` is always the
+        cheapest). For a wholly infeasible row (``diversity="seeds"``/
+        ``"lever-blocking"``), the single infeasibility marker gets
+        ``k=0``; for ``diversity="coalitions"``, an infeasible
+        coalition's marker instead continues the same row's ascending
+        sequence after its feasible plans, so each coalition still gets
+        a distinct ``k``.
+    feasible
+        ``False`` marks the infeasibility marker for a row (or
+        coalition) that produced no plan; ``x_cf``/``changes``/
+        ``distance``/``n_changed``/``score_raw``/``score_prob`` are then
+        ``None``/``{}`` rather than real values.
+    x_cf
+        The full counterfactual feature vector, or ``None`` when
+        ``feasible`` is ``False``.
+    changes
+        ``{feature: (factual_value, counterfactual_value)}`` for
+        every feature that differs; ``{}`` when ``feasible`` is ``False``.
+    distance
+        The weighted, normalized sum of per-feature changes,
+        excluding the sparsity term (see ``Counterfactual.distance``), or
+        ``None`` when ``feasible`` is ``False``.
+    n_changed
+        ``len(changes)``, or ``None`` when ``feasible`` is
+        ``False``.
+    score_raw
+        The model's raw score at ``x_cf``, or ``None`` when
+        ``feasible`` is ``False``.
+    score_prob
+        ``sigmoid(score_raw)`` for a sigmoid-link model, ``None``
+        for an identity-link model or when ``feasible`` is ``False``.
+    seed
+        The seed that produced this plan, set only for
+        ``diversity="seeds"``; ``None`` otherwise.
+    blocked_lever
+        The feature frozen to produce this plan, set only for
+        ``diversity="lever-blocking"`` alternatives (not the primary
+        plan, ``k=0``); ``None`` otherwise.
+    coalition
+        The coalition name this plan belongs to, set only for
+        ``diversity="coalitions"`` (including the reserved
+        ``"(all levers)"`` baseline when ``include_full=True``); ``None``
+        otherwise.
+    region
+        The certified box around ``x_cf``, set only when
+        ``explain_batch`` ran with ``region=True`` and ``feasible`` is
+        ``True``; ``None`` otherwise.
+    proof
+        The claim this record makes, mirroring the single-instance
+        result that produced it: ``Counterfactual.proof`` (``"heuristic"``
+        | ``"optimal"`` | ``"optimal_within_gap"``) for a feasible
+        record, ``Infeasible.proof`` (``"search_exhausted"`` |
+        ``"certified"``) for an infeasibility marker.
+    solver_stats
+        Exact-backend diagnostics for the solve behind this
+        record, same keys as ``Counterfactual.solver_stats``; empty for
+        genetic/python solves (those engines report no per-row stats).
+    calibrator_fingerprint
+        The duck-typed ``fingerprint()`` of the
+        calibrated target's calibrator, when it exposes one; ``None``
+        for raw/probability targets or fingerprint-less calibrators.
+        Repeated on every record so each file line is self-contained.
+    score_calibrated
+        The calibrator's probability at ``x_cf`` for a
+        calibrated target whose calibrator exposes ``predict_proba``;
+        presentational only — the engine optimized and verified on the
+        resolved raw interval. ``None`` otherwise.
     """
 
     id: object
@@ -134,19 +152,24 @@ class BatchResult:
     over its ``records``, id lookup (``for_id``), a JSON round trip
     (``save``/``load``), and a pandas view (``to_frame``).
 
-    Attributes:
-        feature_names: The model's feature names, in the order ``x_cf``
-            arrays are indexed by.
-        diversity: The ``diversity`` mode ``explain_batch`` ran with
-            (``"seeds"``, ``"lever-blocking"``, or ``"coalitions"``).
-        records: Every ``BatchRecord``, feasible and infeasible, across every
-            row and alternative/coalition; order matches the originating
-            ``explain_batch`` call.
-        essential_levers: ``{row_id: [feature, ...]}`` — for
-            ``diversity="lever-blocking"`` rows only, the features whose
-            freezing made every alternative infeasible (so the primary plan
-            has no substitute for that lever). Empty for other diversity
-            modes.
+    Attributes
+    ----------
+    feature_names
+        The model's feature names, in the order ``x_cf``
+        arrays are indexed by.
+    diversity
+        The ``diversity`` mode ``explain_batch`` ran with
+        (``"seeds"``, ``"lever-blocking"``, or ``"coalitions"``).
+    records
+        Every ``BatchRecord``, feasible and infeasible, across every
+        row and alternative/coalition; order matches the originating
+        ``explain_batch`` call.
+    essential_levers
+        ``{row_id: [feature, ...]}`` — for
+        ``diversity="lever-blocking"`` rows only, the features whose
+        freezing made every alternative infeasible (so the primary plan
+        has no substitute for that lever). Empty for other diversity
+        modes.
     """
 
     feature_names: tuple[str, ...]
@@ -163,13 +186,16 @@ class BatchResult:
     def for_id(self, row_id: object) -> list[BatchRecord]:
         """Every record (all alternatives/coalitions) for one dataset row.
 
-        Args:
-            row_id: A value from ``explain_batch``'s ``ids`` (or the row's
-                integer index when ``ids`` was not given).
+        Parameters
+        ----------
+        row_id
+            A value from ``explain_batch``'s ``ids`` (or the row's
+            integer index when ``ids`` was not given).
 
-        Returns:
-            The matching records, in their original order; ``[]`` if
-            ``row_id`` is not present in this result.
+        Returns
+        -------
+        The matching records, in their original order; ``[]`` if
+        ``row_id`` is not present in this result.
         """
         return [r for r in self.records if r.id == row_id]
 
@@ -180,8 +206,10 @@ class BatchResult:
         ``encode_floats``), including ``region`` when set, so a round trip
         through ``save``/``load`` is lossless.
 
-        Args:
-            path: Destination file path; overwritten if it already exists.
+        Parameters
+        ----------
+        path
+            Destination file path; overwritten if it already exists.
         """
         data = {
             "feature_names": list(self.feature_names),
@@ -255,11 +283,14 @@ class BatchResult:
         proofs existed loads with ``proof`` defaulted by feasibility
         (``"heuristic"``/``"search_exhausted"``) and empty ``solver_stats``.
 
-        Args:
-            path: Path to a file written by ``save``.
+        Parameters
+        ----------
+        path
+            Path to a file written by ``save``.
 
-        Returns:
-            The reconstructed ``BatchResult``.
+        Returns
+        -------
+        The reconstructed ``BatchResult``.
         """
         from treecf.regions import RecourseRegion
 
@@ -349,11 +380,14 @@ class BatchResult:
         ``changes`` is summarized as a ``changed_features`` column (sorted
         feature names).
 
-        Returns:
-            A pandas ``DataFrame`` with one row per record.
+        Returns
+        -------
+        A pandas ``DataFrame`` with one row per record.
 
-        Raises:
-            TreecfError: If pandas is not installed.
+        Raises
+        ------
+        TreecfError
+            If pandas is not installed.
         """
         try:
             import pandas as pd
