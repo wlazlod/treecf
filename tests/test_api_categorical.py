@@ -133,7 +133,7 @@ class TestCategoriesArgumentAndValidation:
             feature_names=("amount",),
             meta={},
         )
-        with pytest.raises(TreecfError, match="not a\n?.*categorical feature"):
+        with pytest.raises(TreecfError, match=r"not a\s.*categorical feature"):
             Explainer(numeric, normalizers=np.array([1.0]), categories={"amount": ["a"]})
 
     def test_explain_rejects_invalid_codes(self) -> None:
@@ -142,7 +142,7 @@ class TestCategoriesArgumentAndValidation:
         from treecf import TreecfError
 
         exp = Explainer(_categorical_ir(frozenset({2}), 5), normalizers=np.array([1.0]))
-        with pytest.raises(TreecfError, match="occupation.*integral code"):
+        with pytest.raises(TreecfError, match=r"occupation.*integral code"):
             exp.explain(np.array([2.5]), Target.raw(op=">=", value=0.5), seed=0)
         with pytest.raises(TreecfError, match="occupation"):
             exp.explain(np.array([7.0]), Target.raw(op=">=", value=0.5), seed=0)
