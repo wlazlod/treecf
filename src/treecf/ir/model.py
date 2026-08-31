@@ -7,6 +7,7 @@ normalizing LT <-> LE via ``nextafter`` is forbidden.
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import TYPE_CHECKING
@@ -82,6 +83,37 @@ class EnsembleIR:
     feature_names: tuple[str, ...]
     meta: dict[str, object]
     categorical: dict[int, CategoricalFeature] = field(default_factory=dict)
+
+
+def apply_categories(
+    ir: EnsembleIR, categories: Mapping[str, Sequence[str]]
+) -> EnsembleIR:
+    """A copy of ``ir`` with display names installed on its categorical features.
+
+    Each name list must cover the feature's existing cardinality; a longer
+    list extends the cardinality (declaring codes the training data never
+    used). Naming a numeric or unknown feature is an error.
+    """
+    from dataclasses import replace
+
+    updated = dict(ir.categorical)
+    for feature_name, name_list in categories.items():
+        if feature_name not in ir.feature_names:
+            raise TreecfError(f"categories references unknown feature {feature_name!r}")
+        j = ir.feature_names.index(feature_name)
+        if j not in updated:
+            raise TreecfError(
+                f"categories[{feature_name!r}]: {feature_name!r} is not a "
+                "categorical feature of this model"
+            )
+        display = tuple(str(v) for v in name_list)
+        if len(display) < updated[j].cardinality:
+            raise TreecfError(
+                f"categories[{feature_name!r}] lists {len(display)} names but the "
+                f"model uses {updated[j].cardinality} codes"
+            )
+        updated[j] = CategoricalFeature(cardinality=len(display), categories=display)
+    return replace(ir, categorical=updated)
 
 
 def code_goes_left(value: float, categories: frozenset[int]) -> bool:

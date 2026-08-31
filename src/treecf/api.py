@@ -17,7 +17,7 @@ from treecf.aim.cells import cell_index, feature_cells
 from treecf.constraints.compile import compile_constraints
 from treecf.constraints.objects import Constraint
 from treecf.ir.evaluate import TreeArrays, apply_link, prepare_tree_arrays, raw_score
-from treecf.ir.model import EnsembleIR, Link
+from treecf.ir.model import EnsembleIR, Link, apply_categories, validate_feature_matrix
 from treecf.ir.parsers import parse_model
 from treecf.objective import fit_normalizers
 from treecf.plausibility import Plausibility
@@ -375,6 +375,12 @@ class Explainer:
             ``explain_coalitions`` reject a factual containing NaN once it is
             set (isolation forests define no NaN routing) — see
             [Plausibility](concepts/plausibility.md).
+        categories: Display names for categorical features,
+            ``{feature: [name_for_code_0, name_for_code_1, ...]}``. Required
+            for CatBoost models with native categorical features (their
+            categories are stored as hashes); optional elsewhere — it fills
+            names and may extend a feature's declared cardinality beyond the
+            codes seen in training.
 
     Raises:
         TreecfError: If neither ``background`` nor ``normalizers`` is given, if
@@ -398,8 +404,12 @@ class Explainer:
         normalizers: FloatArray | dict[str, float] | None = None,
         value_policy: dict[str, ValuePolicy] | None = None,
         plausibility: Plausibility | None = None,
+        categories: Mapping[str, Sequence[str]] | None = None,
     ) -> None:
-        self.ir = model if isinstance(model, EnsembleIR) else parse_model(model)
+        if isinstance(model, EnsembleIR):
+            self.ir = apply_categories(model, categories) if categories else model
+        else:
+            self.ir = parse_model(model, categories)
         names = self.ir.feature_names
         self.compiled = compile_constraints(constraints, names, self.ir.categorical)
         self.plausibility = plausibility
@@ -414,6 +424,8 @@ class Explainer:
         self.background = (
             None if background is None else np.asarray(background, dtype=np.float64)
         )
+        if self.background is not None:
+            validate_feature_matrix(self.ir, self.background, where="background")
         self.sigma = _resolve_sigma(names, background, normalizers, frozenset(self.ir.categorical))
         self.weights = np.array([(weights or {}).get(name, 1.0) for name in names])
         self.value_policy = value_policy or {}
@@ -556,6 +568,7 @@ class Explainer:
         (``target.bands_spec`` rows never receive one — batch, the only caller that
         passes one, already rejects bands)."""
         x = np.asarray(x, dtype=np.float64)
+        validate_feature_matrix(self.ir, x, where="factual")
         if warn_factual:
             violations = self.compiled.factual_violations(x)
             if violations:

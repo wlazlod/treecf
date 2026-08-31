@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -10,7 +11,10 @@ from treecf._errors import UnsupportedModelError
 from treecf.ir.model import EnsembleIR
 
 
-def parse_dump(source: str | Path | dict[str, Any]) -> EnsembleIR:
+def parse_dump(
+    source: str | Path | dict[str, Any],
+    categories: Mapping[str, Sequence[str]] | None = None,
+) -> EnsembleIR:
     """Parse a model dump given as a dict, or a path to a JSON file."""
     if isinstance(source, str | Path):
         with open(source, encoding="utf-8") as fh:
@@ -21,15 +25,15 @@ def parse_dump(source: str | Path | dict[str, Any]) -> EnsembleIR:
     if "learner" in data:  # XGBoost JSON model format
         from treecf.ir.parsers.xgboost import parse_xgboost_dump
 
-        return parse_xgboost_dump(data)
+        return parse_xgboost_dump(data, categories)
     if "tree_info" in data:  # LightGBM dump_model() format
         from treecf.ir.parsers.lightgbm import parse_lightgbm_dump
 
-        return parse_lightgbm_dump(data)
+        return parse_lightgbm_dump(data, categories)
     if "oblivious_trees" in data:  # CatBoost JSON format
         from treecf.ir.parsers.catboost import parse_catboost_dump
 
-        return parse_catboost_dump(data)
+        return parse_catboost_dump(data, categories)
     raise UnsupportedModelError(
         "unrecognized dump format; expected an XGBoost, LightGBM, or CatBoost JSON model"
     )

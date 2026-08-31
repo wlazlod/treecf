@@ -79,3 +79,83 @@ class TestAllowedCategoriesEndToEnd:
                 normalizers=np.array([1.0]),
                 value_policy={"occupation": "integer"},
             )
+
+
+class TestCategoriesArgumentAndValidation:
+    def test_categories_installs_names_on_a_parsed_ir(self) -> None:
+        names = ("clerk", "manager", "nurse", "smith", "guard")
+        exp = Explainer(
+            _categorical_ir(frozenset({2, 3}), 5),
+            normalizers=np.array([1.0]),
+            categories={"occupation": names},
+        )
+        assert exp.ir.categorical[0].categories == names
+
+    def test_categories_can_extend_the_cardinality(self) -> None:
+        exp = Explainer(
+            _categorical_ir(frozenset({2, 3}), 5),
+            normalizers=np.array([1.0]),
+            categories={"occupation": [f"c{i}" for i in range(8)]},
+        )
+        assert exp.ir.categorical[0].cardinality == 8
+
+    def test_too_short_name_list_raises(self) -> None:
+        import pytest
+
+        from treecf import TreecfError
+
+        with pytest.raises(TreecfError, match="5 codes"):
+            Explainer(
+                _categorical_ir(frozenset({2}), 5),
+                normalizers=np.array([1.0]),
+                categories={"occupation": ["a", "b"]},
+            )
+
+    def test_categories_on_a_numeric_feature_raises(self) -> None:
+        import pytest
+
+        from treecf import TreecfError
+        from treecf.ir.model import EnsembleIR, Link, Node, SplitOp, Tree
+
+        numeric = EnsembleIR(
+            trees=(
+                Tree(
+                    nodes=(
+                        Node(0, 0, 1.0, SplitOp.LT, True, 1, 2, None),
+                        Node(1, None, None, None, None, None, None, -1.0),
+                        Node(2, None, None, None, None, None, None, 1.0),
+                    )
+                ),
+            ),
+            base_score=0.0,
+            link=Link.IDENTITY,
+            n_features=1,
+            feature_names=("amount",),
+            meta={},
+        )
+        with pytest.raises(TreecfError, match="not a\n?.*categorical feature"):
+            Explainer(numeric, normalizers=np.array([1.0]), categories={"amount": ["a"]})
+
+    def test_explain_rejects_invalid_codes(self) -> None:
+        import pytest
+
+        from treecf import TreecfError
+
+        exp = Explainer(_categorical_ir(frozenset({2}), 5), normalizers=np.array([1.0]))
+        with pytest.raises(TreecfError, match="occupation.*integral code"):
+            exp.explain(np.array([2.5]), Target.raw(op=">=", value=0.5), seed=0)
+        with pytest.raises(TreecfError, match="occupation"):
+            exp.explain(np.array([7.0]), Target.raw(op=">=", value=0.5), seed=0)
+
+    def test_background_and_batch_are_validated(self) -> None:
+        import pytest
+
+        from treecf import TreecfError
+
+        with pytest.raises(TreecfError, match="background"):
+            Explainer(_categorical_ir(frozenset({2}), 5), background=np.array([[9.0]]))
+        exp = Explainer(_categorical_ir(frozenset({2}), 5), normalizers=np.array([1.0]))
+        with pytest.raises(TreecfError, match="factual"):
+            exp.explain_batch(
+                np.array([[0.0], [1.5]]), Target.raw(op=">=", value=0.5)
+            )

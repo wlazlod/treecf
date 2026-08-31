@@ -22,6 +22,7 @@ import numpy.typing as npt
 from treecf._errors import TreecfError, TreecfWarning
 from treecf._json import decode_floats, encode_floats
 from treecf.ir.evaluate import raw_score_batch_prepared
+from treecf.ir.model import validate_feature_matrix
 
 if TYPE_CHECKING:
     from treecf.api import Counterfactual, Explainer, Infeasible, _Degradation
@@ -449,6 +450,7 @@ def explain_batch(
     # never call `_explain` and would otherwise silently ignore the kwargs.
     resolved_warm_start, _, _ = _resolve_exact_kwargs(backend, warm_start, node_budget, gap)
     X = np.asarray(X, dtype=np.float64)
+    validate_feature_matrix(explainer.ir, X, where="factual")
     if backend == "exact" and not allow_exact_batch:
         if diversity == "coalitions":
             assert coalitions is not None  # validated above
