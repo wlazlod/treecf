@@ -38,6 +38,10 @@ jobs:
       - name: Run tests
         run: uv run pytest
 
+      - name: Docs snippet and structure tests
+        if: matrix.python-version == '3.12'
+        run: uv run pytest -m slow tests/test_docs_snippets.py tests/test_docs_structure.py
+
   conformance:
     name: conformance ${{ matrix.library }}
     runs-on: ubuntu-latest

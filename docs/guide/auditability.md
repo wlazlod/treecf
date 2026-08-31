@@ -52,6 +52,16 @@ reported as a mismatch rather than guessed at. The compatibility promise is
 pinned by committed golden files in CI, not asserted in prose
 ([API stability](../api-stability.md)).
 
+## Reading a campaign honestly
+
+`recourse_burden_table` and `plot_recourse_burden` summarize a verified
+batch by segment — and keep the feasible share and the cost distribution
+side by side deliberately: a group's low median cost means nothing without
+its feasibility rate next to it, because the median is taken over the plans
+that exist, not the people who needed one.
+
+![Recourse burden by segment: feasible share and cost distribution kept side by side](img/plot_recourse_burden.png)
+
 ## What this does not prove
 
 A certificate is a statement about the artifact, not the world. It does not

@@ -72,6 +72,12 @@ frame = batch.to_frame()                 # one row per (id, plan), pandas
 batch.save("batch.json")                 # inert JSON; every 0.x release reads it back
 ```
 
+`plot_recourse_burden` splits a campaign's outcome by any per-row segment
+label — feasibility share and cost distribution together
+([visualize](visualize.md#recourse-burden-by-segment)):
+
+![Recourse burden by segment: feasible share and cost distribution per group](img/plot_recourse_burden.png)
+
 ### The exact-batch opt-in
 
 `explain_batch(..., backend="exact")` loops the single-row exact solve —

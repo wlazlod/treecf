@@ -57,6 +57,8 @@ res.region.feature_intervals    # {"income": (lo, hi), ...} — certified interv
 res.region.feature_categories   # {"occupation": (1, 2)} — certified category codes
 ```
 
+![Certified region per feature: intervals with caps marking whether the model or a constraint stopped each bound, and category tiles for the categorical feature](img/plot_region.png)
+
 Regions are sound but neither maximal nor monotone in the target interval —
 [the fine print](../concepts/certification.md#regions-certified-not-maximal-not-monotone).
 `plot_region` in [visualize](visualize.md) draws the box with what stopped

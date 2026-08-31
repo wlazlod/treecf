@@ -19,6 +19,12 @@ plot_waterfall(exp, res, target=target)  # per-change score contribution
 plot_effort(exp, res)                  # cost per change, in sigma units
 ```
 
+![Horizontal bars of the plan's feature changes, largest first](img/plot_changes.png)
+
+![Waterfall of each change's contribution to the raw score, factual to counterfactual](img/plot_waterfall.png)
+
+![Per-change effort bars in sigma units, one bar per changed feature](img/plot_effort.png)
+
 ## Alternatives and ladders
 
 Several plans for the same row, side by side:
@@ -41,8 +47,18 @@ ladder = exp.explain(x, target=Target.bands({"A": (0.0, 0.01), "B": (0.01, 0.05)
 plot_ladder(ladder)                       # one bar per grade band
 ```
 
+![Grouped bars comparing each plan's feature changes, one color per plan](img/plot_alternatives.png)
+
+![Scatter of plan cost against achieved score, one point per plan](img/plot_tradeoff.png)
+
+![Model output versus plan cost, plans annotated with their changes](img/plot_recourse_map.png)
+
+![One bar per grade band showing which grades are reachable and at what cost](img/plot_ladder.png)
+
 `plot_recourse_map(..., schematic=True)` drops the numbers for a
-presentation-ready sketch of the same geometry.
+presentation-ready sketch of the same geometry:
+
+![Schematic recourse map without numeric axes, reject and accept regions labeled](img/plot_recourse_map_schematic.png)
 
 ## A certified region
 
@@ -57,6 +73,8 @@ from treecf.viz import plot_region
 certified = exp.explain(x, target=target, backend="exact", region=True, seed=0)
 plot_region(exp, x, certified)
 ```
+
+![Certified region per feature: intervals in sigma units with caps marking whether the model or a constraint stopped each bound, and category tiles for the categorical feature](img/plot_region.png)
 
 ## A whole campaign
 
@@ -74,6 +92,14 @@ plot_batch_matrix(batch, explainer=exp)   # rows × features, who changes what
 plot_batch_deltas(batch, explainer=exp)   # the distribution of each lever's moves
 ```
 
+![Batch overview panels: feasibility rate, cost distribution, and changes per plan](img/plot_batch_summary.png)
+
+![Campaign-wide lever usage: how often each feature does the work](img/plot_batch_levers.png)
+
+![Rows-by-features matrix showing which feature each row's plan changes](img/plot_batch_matrix.png)
+
+![Distribution of each lever's moves across the batch](img/plot_batch_deltas.png)
+
 ## Recourse burden by segment
 
 Who pays how much for recourse, and for whom none exists — `groups` is any
@@ -87,6 +113,8 @@ groups = ["thin-file" if row[3] < 24 else "established" for row in X_bg[:20]]
 rows = recourse_burden_table(batch, groups, min_group_size=5)
 plot_recourse_burden(batch, groups, min_group_size=5)
 ```
+
+![Two panels per segment: the share of rows with any feasible plan, and the cost distribution of the feasible plans](img/plot_recourse_burden.png)
 
 The table reports, per group, the feasible share and the cost distribution
 of the feasible plans; the plot draws both panels. A group's low median cost
@@ -104,6 +132,8 @@ from treecf.viz import plot_counterfactuals
 second = exp.explain(x, target=target, seed=1)
 plot_counterfactuals([res, second])
 ```
+
+![Overlay of two plans for one factual, aligned by feature](img/plot_counterfactuals.png)
 
 ## Related
 
