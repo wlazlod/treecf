@@ -15,6 +15,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Native categorical splits.** Models trained with native categorical support now parse
+  exactly into set-membership IR nodes: LightGBM (`categorical_feature`), XGBoost
+  (`enable_categorical`), scikit-learn `HistGradientBoosting` (`categorical_features`,
+  including string categories via `categories=`), and CatBoost (`cat_features`; one-hot and
+  single-feature-statistic splits, hashing reproduced bit-exactly). CatBoost models built with
+  categorical feature *combinations* raise `ParserError` naming the `max_ctr_complexity=1`
+  retraining recipe; the new `ParserError` type covers "recognized but unparseable as given".
+- **`Explainer(categories=...)`.** Display names (and, where useful, declared cardinalities
+  beyond training) for categorical features; required for CatBoost with native categorical
+  features and for HistGradientBoosting trained on string categories, optional elsewhere.
+- **Category blocks.** Every backend searches categorical features over routing-equivalence
+  classes of codes, so search cost scales with how finely the ensemble partitions the feature,
+  not its cardinality. Categorical distance is flat: any change of code costs one weighted
+  unit.
+- **`AllowedCategories` constraint.** Whitelist a categorical feature's codes by display name
+  or raw code; order- and arithmetic-shaped constraints (`Range`, `Monotone`, `Linear`,
+  `Equals`, `Implies`, `OneHot`) are rejected on categorical features at construction.
+- **Categorical exact search and regions.** `backend="exact"` proves optimality and certified
+  infeasibility over the block grid; `region=True` certifies *category sets* per categorical
+  feature (`RecourseRegion.feature_categories` / `.category_names` / `.cat_sets`), stored in
+  certificates as schema version 2. Schema version 1 certificates still verify, pinned by a
+  committed golden file.
+- **Presolve.** The exact backend filters each feature's candidate states by reachable score
+  and plausibility brackets before branching; `solver_stats` gains `presolve_removed` and
+  `presolve_certified`, and an emptied domain certifies infeasibility with zero nodes
+  expanded. Results are bit-identical with presolve on; only node counts drop.
+- **Visualization.** `plot_region` (the certified box, with per-bound cap markers and
+  categorical tiles) and `plot_recourse_burden` / `recourse_burden_table` (feasible share and
+  cost distribution by segment, kept side by side).
+- **Docs.** Reader-oriented navigation (workflow guides, grouped concepts, split API pages,
+  benchmarks and changelog pages); every fenced snippet executed in CI against a committed
+  docs model; a structure test pins that no published URL disappears and every plot function
+  ships a committed figure.
+- `SECURITY.md`, `CONTRIBUTING.md`, `scripts/bump_version.py` (with a version-consistency
+  test), and `#![forbid(unsafe_code)]` in the Rust core.
+
+### Changed
+
+- **Exact-search performance.** Presolve, a feature-to-trees index, and per-tree bracket
+  caching in region growth. Measured before/after (same machine, same seeds, medians):
+
+MEASURED_TABLE_PLACEHOLDER
+
+### Invariants
+
+- Numeric-model results are byte-identical to the previous release: fingerprints, solves,
+  regions, and stored fixtures are unchanged, pinned by a dedicated invariance suite.
+- No genetic or parity fixture was regenerated; exact fixtures were regenerated only under an
+  equality guard asserting identical plans, distances, and proofs.
+- The Python and Rust engines remain byte-identical on every solve, domain, and region,
+  including the new categorical paths.
+
 ## [0.2.4] - 2026-08-23
 
 ### Added
