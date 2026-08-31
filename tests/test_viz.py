@@ -1098,7 +1098,7 @@ class TestPlotRegion:
 
         exp, x, x_cf, region = self._setup()
         ax = plot_region(exp, x, (region, x_cf))
-        # income row: (0.5-1)/2=-0.25 .. (3-1)/2=1.0 (the thick C0 bar)
+        # income row: (0.5-1)/2=-0.25 .. (3-1)/2=1.0 (the thick certified bar)
         bars = [
             line.get_xdata()
             for line in ax.lines
