@@ -77,7 +77,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from treecf.aim.cells import Cell
+from treecf.aim.cells import Cell, category_blocks
 from treecf.api import ValuePolicy
 from treecf.backends._exact_bounds import _EnsembleBounds
 from treecf.backends._exact_domains import (
@@ -171,48 +171,64 @@ def solve_exact(
     contract ``solve_exact_rust`` gives callers by polling for signals from
     inside the released GIL.
 
-    Args:
-        ir: Model whose score must land in ``interval``.
-        x: The factual row.
-        interval: Closed target interval ``(lo, hi)`` on the raw score.
-        compiled: Compiled constraint set; its ``check_matrix`` is the arbiter
-            that decides every completed row.
-        sigma: Per-feature scale divisors of the objective.
-        weights: Per-feature weights of the objective.
-        lam: Per-changed-feature penalty of the objective.
-        value_policies: Optional per-feature snapping rules for values that move.
-        plausibility: Optional ``(isolation forest, minimum total path length)``
-            pair; its splits also widen the cell grid.
-        node_budget: Maximum number of state assignments to attempt.
-        gap: Relative optimality gap to settle for. Above zero the search may
-            discard branches that could only improve on the incumbent by less
-            than this fraction, and says so through the proof it reports.
-        time_budget_s: Wall-clock budget, checked once per assignment.
-        incumbent: Optional ``(cost, row)`` warm start from another backend,
-            already costed by the caller on the same objective. The caller must
-            also have verified the row: the search takes its feasibility on
-            trust, prunes against its cost, and may hand it straight back.
+    Parameters
+    ----------
+    ir
+        Model whose score must land in ``interval``.
+    x
+        The factual row.
+    interval
+        Closed target interval ``(lo, hi)`` on the raw score.
+    compiled
+        Compiled constraint set; its ``check_matrix`` is the arbiter
+        that decides every completed row.
+    sigma
+        Per-feature scale divisors of the objective.
+    weights
+        Per-feature weights of the objective.
+    lam
+        Per-changed-feature penalty of the objective.
+    value_policies
+        Optional per-feature snapping rules for values that move.
+    plausibility
+        Optional ``(isolation forest, minimum total path length)``
+        pair; its splits also widen the cell grid.
+    node_budget
+        Maximum number of state assignments to attempt.
+    gap
+        Relative optimality gap to settle for. Above zero the search may
+        discard branches that could only improve on the incumbent by less
+        than this fraction, and says so through the proof it reports.
+    time_budget_s
+        Wall-clock budget, checked once per assignment.
+    incumbent
+        Optional ``(cost, row)`` warm start from another backend,
+        already costed by the caller on the same objective. The caller must
+        also have verified the row: the search takes its feasibility on
+        trust, prunes against its cost, and may hand it straight back.
 
-    Returns:
-        The best row found, the strength of the claim about it, the search
-        counters, which features were moved onto a policy grid, and the cost
-        of the returned row.
+    Returns
+    -------
+    The best row found, the strength of the claim about it, the search
+    counters, which features were moved onto a policy grid, and the cost
+    of the returned row.
 
-        There are two different ways to come back empty-handed, and callers
-        must tell them apart by ``stats["completed"]``, not by ``proof``. An
-        ``x_cf`` of None with ``completed`` True is a certificate: every
-        assignment the grid allows was tried and none was feasible, so no
-        counterfactual exists within the searched space — ``proof`` carries no
-        meaning in that case and should be ignored. An ``x_cf`` of None with
-        ``completed`` False only means the search never settled the whole
-        space, so nothing is proven either way: a budget ran out, or an order
-        pair was left undecided — several pairs sharing features that could
-        not be repaired one at a time, or a pair whose feature carries a value
-        policy.
+    There are two different ways to come back empty-handed, and callers
+    must tell them apart by ``stats["completed"]``, not by ``proof``. An
+    ``x_cf`` of None with ``completed`` True is a certificate: every
+    assignment the grid allows was tried and none was feasible, so no
+    counterfactual exists within the searched space — ``proof`` carries no
+    meaning in that case and should be ignored. An ``x_cf`` of None with
+    ``completed`` False only means the search never settled the whole
+    space, so nothing is proven either way: a budget ran out, or an order
+    pair was left undecided — several pairs sharing features that could
+    not be repaired one at a time, or a pair whose feature carries a value
+    policy.
     """
     start = time.monotonic()
     order_pairs = _validate(compiled, value_policies)
     lo_t, hi_t = interval
+    categorical = frozenset(ir.categorical)
     if_ir = plausibility[0] if plausibility is not None else None
     min_total_path = plausibility[1] if plausibility is not None else 0.0
 
@@ -240,8 +256,9 @@ def solve_exact(
         if if_ir is None
         else _constraint_cells(compiled, ir, if_ir)
     )
-    domains = _build_domains(grids, x, compiled, sigma, weights, lam, value_policies)
-    order = _feature_order(grids, compiled)
+    blocks = category_blocks(ir) if if_ir is None else category_blocks(ir, if_ir)
+    domains = _build_domains(grids, x, compiled, sigma, weights, lam, value_policies, blocks)
+    order = _feature_order(grids, compiled, blocks)
     if any(not domains[j] for j in order):
         # Contradictory constraints left a feature with no legal value at all:
         # nothing to search, and nothing can be feasible.
@@ -252,6 +269,27 @@ def solve_exact(
             snapped={},
             distance=None,
         )
+    assigned = [False] * len(x)
+    values = [0.0] * len(x)
+    assigned_mask = 0
+    model_bounds = _EnsembleBounds(ir, assigned, values)
+    if_bounds = _EnsembleBounds(if_ir, assigned, values) if if_ir is not None else None
+
+    presolve_removed = _presolve_domains(
+        order, domains, model_bounds, if_bounds, min_total_path, lo_t, hi_t,
+        assigned, values,
+    )
+    if any(not domains[j] for j in order):
+        # Every candidate of some feature is provably out of target: nothing
+        # the search could enumerate can be feasible.
+        return ExactResult(
+            x_cf=None,
+            proof="optimal",
+            stats=_stats(0, 0, 0, math.inf, gap, True, False, presolve_removed, True),
+            snapped={},
+            distance=None,
+        )
+
     h_suffix = _h_suffix(order, domains)
 
     level_of = {f: level for level, f in enumerate(order)}
@@ -321,12 +359,7 @@ def solve_exact(
         )
     )
 
-    assigned = [False] * len(x)
-    values = [0.0] * len(x)
-    assigned_mask = 0
     propagation = _Propagation(compiled, domains, assigned, values)
-    model_bounds = _EnsembleBounds(ir, assigned, values)
-    if_bounds = _EnsembleBounds(if_ir, assigned, values) if if_ir is not None else None
 
     incumbent_cost = math.inf
     incumbent_row: FloatArray | None = None
@@ -485,7 +518,9 @@ def solve_exact(
                 variant = row.copy()
                 variant[a] = t
                 variant[b] = t
-                cost = _cost_of_row(x, variant, sigma, weights, lam, compiled.allow_missing)
+                cost = _cost_of_row(
+                    x, variant, sigma, weights, lam, compiled.allow_missing, categorical
+                )
                 if cost < best_cost and accepts(variant):
                     best_cost = cost
                     best_row = variant
@@ -500,7 +535,9 @@ def solve_exact(
                 variant = repaired.copy()
                 variant[a] = t
                 variant[b] = t
-                cost = _cost_of_row(x, variant, sigma, weights, lam, compiled.allow_missing)
+                cost = _cost_of_row(
+                    x, variant, sigma, weights, lam, compiled.allow_missing, categorical
+                )
                 if cost < best_cost:
                     best_cost = cost
                     best_t = t
@@ -578,7 +615,9 @@ def solve_exact(
             row[j] = state.value
             accepted = finish(row)
             if accepted is not None:
-                cost = _cost_of_row(x, accepted, sigma, weights, lam, compiled.allow_missing)
+                cost = _cost_of_row(
+                    x, accepted, sigma, weights, lam, compiled.allow_missing, categorical
+                )
                 if cost < incumbent_cost:
                     incumbent_cost = cost
                     incumbent_row = accepted
@@ -633,10 +672,56 @@ def solve_exact(
             gap,
             completed,
             warm_start_used,
+            presolve_removed,
         ),
         snapped=snapped,
         distance=None if incumbent_row is None else incumbent_cost,
     )
+
+
+def _presolve_domains(
+    order: list[int],
+    domains: list[list[_State]],
+    model_bounds: _EnsembleBounds,
+    if_bounds: _EnsembleBounds | None,
+    min_total_path: float,
+    lo_t: float,
+    hi_t: float,
+    assigned: list[bool],
+    values: list[float],
+) -> int:
+    """Delete candidate states no completion through them can make feasible.
+
+    For each state, the ensemble bracket with only that one feature assigned
+    (all others free) must intersect the target, and the plausibility bracket
+    must reach its floor. A state's bracket depends on its routing cell alone,
+    and every value a later repair may put on the feature stays inside the
+    chosen state's cell, so a deleted state can appear in no accepted row —
+    hence no removed state can be the optimum, the first-found optimum among
+    the survivors is the same argmin the unfiltered search returns, and the
+    cheapest-surviving-state suffix bound stays admissible. One pass reaches
+    the fixpoint: each state's test reads no other feature's domain.
+    """
+    removed = 0
+    for j in order:
+        survivors: list[_State] = []
+        for state in domains[j]:
+            assigned[j] = True
+            values[j] = state.value
+            model_frame = model_bounds.apply(j, 1 << j)
+            keep = not (model_bounds.score_max < lo_t or model_bounds.score_min > hi_t)
+            if keep and if_bounds is not None:
+                if_frame = if_bounds.apply(j, 1 << j)
+                keep = not if_bounds.score_max < min_total_path
+                if_bounds.restore(if_frame)
+            model_bounds.restore(model_frame)
+            assigned[j] = False
+            if keep:
+                survivors.append(state)
+            else:
+                removed += 1
+        domains[j][:] = survivors
+    return removed
 
 
 def _stats(
@@ -647,6 +732,8 @@ def _stats(
     gap: float,
     completed: bool,
     warm_start_used: bool,
+    presolve_removed: int = 0,
+    presolve_certified: bool = False,
 ) -> dict[str, object]:
     """The exact set of counters ``solve_exact`` reports.
 
@@ -667,4 +754,6 @@ def _stats(
         "gap": gap,
         "completed": completed,
         "warm_start_used": warm_start_used,
+        "presolve_removed": presolve_removed,
+        "presolve_certified": presolve_certified,
     }

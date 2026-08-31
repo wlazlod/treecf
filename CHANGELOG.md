@@ -6,14 +6,82 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 <!-- Release checklist:
-  1. Bump the version in pyproject.toml, src/treecf/__init__.py (__version__),
-     rust/Cargo.toml, and CITATION.cff (version AND date-released).
-  2. Regenerate rust/Cargo.lock (any cargo build) and uv.lock (uv sync).
-  3. Move entries under a dated ## [x.y.z] heading below.
-  4. Tag vX.Y.Z -> release.yml builds, smoke-tests, and publishes.
+  1. Run `uv run python scripts/bump_version.py X.Y.Z` (rewrites every version
+     location, promotes [Unreleased], refreshes both lockfiles).
+  2. Review the diff.
+  3. Tag vX.Y.Z -> release.yml checks version consistency, builds, smoke-tests,
+     and publishes.
 -->
 
 ## [Unreleased]
+
+## [0.3.0] - 2026-08-31
+
+### Added
+
+- **Native categorical splits.** Models trained with native categorical support now parse
+  exactly into set-membership IR nodes: LightGBM (`categorical_feature`), XGBoost
+  (`enable_categorical`), scikit-learn `HistGradientBoosting` (`categorical_features`,
+  including string categories via `categories=`), and CatBoost (`cat_features`; one-hot and
+  single-feature-statistic splits, hashing reproduced bit-exactly). CatBoost models built with
+  categorical feature *combinations* raise `ParserError` naming the `max_ctr_complexity=1`
+  retraining recipe; the new `ParserError` type covers "recognized but unparseable as given".
+- **`Explainer(categories=...)`.** Display names (and, where useful, declared cardinalities
+  beyond training) for categorical features; required for CatBoost with native categorical
+  features and for HistGradientBoosting trained on string categories, optional elsewhere.
+- **Category blocks.** Every backend searches categorical features over routing-equivalence
+  classes of codes, so search cost scales with how finely the ensemble partitions the feature,
+  not its cardinality. Categorical distance is flat: any change of code costs one weighted
+  unit.
+- **`AllowedCategories` constraint.** Whitelist a categorical feature's codes by display name
+  or raw code; order- and arithmetic-shaped constraints (`Range`, `Monotone`, `Linear`,
+  `Equals`, `Implies`, `OneHot`) are rejected on categorical features at construction.
+- **Categorical exact search and regions.** `backend="exact"` proves optimality and certified
+  infeasibility over the block grid; `region=True` certifies *category sets* per categorical
+  feature (`RecourseRegion.feature_categories` / `.category_names` / `.cat_sets`), stored in
+  certificates as schema version 2. Schema version 1 certificates still verify, pinned by a
+  committed golden file.
+- **Presolve.** The exact backend filters each feature's candidate states by reachable score
+  and plausibility brackets before branching; `solver_stats` gains `presolve_removed` and
+  `presolve_certified`, and an emptied domain certifies infeasibility with zero nodes
+  expanded. Results are bit-identical with presolve on; only node counts drop.
+- **Visualization.** `plot_region` (the certified box, with per-bound cap markers and
+  categorical tiles) and `plot_recourse_burden` / `recourse_burden_table` (feasible share and
+  cost distribution by segment, kept side by side).
+- **Docs.** Reader-oriented navigation (workflow guides, grouped concepts, split API pages,
+  benchmarks and changelog pages); every fenced snippet executed in CI against a committed
+  docs model; a structure test pins that no published URL disappears and every plot function
+  ships a committed figure.
+- `SECURITY.md`, `CONTRIBUTING.md`, `scripts/bump_version.py` (with a version-consistency
+  test), and `#![forbid(unsafe_code)]` in the Rust core.
+
+### Changed
+
+- **Exact-search performance.** Presolve, a feature-to-trees index, and per-tree bracket
+  caching in region growth. Measured before/after (same machine, same seeds, medians):
+
+  | Scenario (exact backend, warm start, 5 s / 2M-node budgets, 10 seeds, 4-core x86_64) | 0.2.4 median | 0.3.0 median |
+  |---|---|---|
+  | 30 trees / depth 4 / 8 features — every solve proved optimal | 0.292 s | 0.295 s |
+  | 60 trees / depth 5 / 12 features — budget-capped, best-found | 5.014 s | 5.012 s |
+  | 300 trees / depth 6 / 50 features — budget-capped, best-found | 5.208 s | 5.133 s |
+
+  No legacy case regresses (the largest change is +1.0% on the small case, within run
+  noise); on the large budget-capped case the search now expands 308,822 nodes in the same
+  budget where 0.2.4 expanded 205,755. New certification measurements (60 s budget,
+  3 seeds): the 200-tree / depth-5 / 12-feature reference case does **not** certify within
+  60 s on the 4-core benchmark machine; the native-categorical suite (4 numeric levers plus
+  cardinality-3/8/15 categoricals, LightGBM) certifies in 0.022 s median even at 200 trees.
+  Full tables: the docs benchmarks page, generated from the same measured JSON.
+
+### Invariants
+
+- Numeric-model results are byte-identical to the previous release: fingerprints, solves,
+  regions, and stored fixtures are unchanged, pinned by a dedicated invariance suite.
+- No genetic or parity fixture was regenerated; exact fixtures were regenerated only under an
+  equality guard asserting identical plans, distances, and proofs.
+- The Python and Rust engines remain byte-identical on every solve, domain, and region,
+  including the new categorical paths.
 
 ## [0.2.4] - 2026-08-23
 
@@ -170,7 +238,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Plausibility.isolation_forest`/`anomaly_score`) were entirely absent from the rendered
   docs and are now covered.
 - README quick-look comment recalibrated to name the warned-degrade case alongside
-  `proof="optimal"` and a certified "no"; new [Certification](docs/concepts/certification.md)
+  `proof="optimal"` and a certified "no"; new [Certification](https://wlazlod.github.io/treecf/concepts/certification/)
   sections cover interruption and the always-on degraded-result warning.
 
 ## [0.2.0] - 2026-08-14
@@ -199,7 +267,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `plot_recourse_map`: one-axes map of a single applicant's recourse options — model
   output on x, recourse cost J on y — with the accept band, an arrow per plan, infeasible
   coalitions marked, and a `schematic=True` slide-style mode.
-- Docs: new [Certification](docs/concepts/certification.md) concepts page covering the proof
+- Docs: new [Certification](https://wlazlod.github.io/treecf/concepts/certification/) concepts page covering the proof
   taxonomy, what a certificate does and does not cover, and the region layer's guarantees.
 
 ### Changed
@@ -363,7 +431,7 @@ implementation outright and restarts the version line.
   explainer), `plot_batch_summary` (cost / sparsity / feasibility panel), and
   `plot_batch_deltas` (per-lever delta distributions, σ-standardized with an
   explainer). Demonstrated in the credit-risk tutorial.
-- **Docs**: long-form ["How treecf finds counterfactuals"](docs/how-it-works.md)
+- **Docs**: long-form ["How treecf finds counterfactuals"](https://wlazlod.github.io/treecf/how-it-works/)
   article walking one applicant from objective to verified counterfactual;
   MathJax wired into the docs build for the objective and plausibility formulas.
 - **Batch production**: `Explainer.explain_batch(X, target, n_per_example=k,

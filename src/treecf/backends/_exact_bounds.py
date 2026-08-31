@@ -20,7 +20,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from treecf.ir.model import EnsembleIR, SplitOp, Tree
+from treecf.ir.model import EnsembleIR, SplitOp, Tree, code_goes_left
 
 
 @dataclass(frozen=True)
@@ -42,6 +42,7 @@ class _PreparedTree:
     sub_min: tuple[float, ...]
     sub_max: tuple[float, ...]
     mask: tuple[int, ...]
+    categories: tuple[frozenset[int] | None, ...]  # set-membership splits only
 
 
 def _prepare_tree(tree: Tree) -> _PreparedTree:
@@ -80,6 +81,7 @@ def _prepare_tree(tree: Tree) -> _PreparedTree:
         sub_min=tuple(sub_min),
         sub_max=tuple(sub_max),
         mask=tuple(mask),
+        categories=tuple(nd.categories for nd in tree.nodes),
     )
 
 
@@ -159,8 +161,11 @@ class _EnsembleBounds:
         f = tree.feature[idx]  # a set mask bit means this node is a split
         if self.assigned[f]:
             value = self.values[f]
+            members = tree.categories[idx]
             if math.isnan(value):
                 child = tree.left[idx] if tree.missing_left[idx] else tree.right[idx]
+            elif members is not None:
+                child = tree.left[idx] if code_goes_left(value, members) else tree.right[idx]
             elif tree.is_lt[idx]:
                 child = tree.left[idx] if value < tree.threshold[idx] else tree.right[idx]
             else:

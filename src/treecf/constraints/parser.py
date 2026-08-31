@@ -40,25 +40,31 @@ def constraint(text: str, feature_names: Sequence[str] | None = None) -> Linear:
     comparisons) must be written as constraint objects directly. Terms on
     both sides are folded into ``coefficients``/``rhs`` on the left-hand
     side's convention, so ``"a <= b"`` and ``"a - b <= 0"`` produce the same
-    ``Linear``. See [Constraints](concepts/constraints.md).
+    ``Linear``. See [Constraints](../concepts/constraints.md).
 
-    Args:
-        text: The constraint string, e.g. ``"2*a - b <= 3"`` or
-            ``"income >= 0"``.
-        feature_names: When given, every identifier in ``text`` is validated
-            against it immediately; when omitted (the default), unknown
-            identifiers are only caught later, at
-            ``Explainer``/``compile_constraints`` time.
+    Parameters
+    ----------
+    text
+        The constraint string, e.g. ``"2*a - b <= 3"`` or
+        ``"income >= 0"``.
+    feature_names
+        When given, every identifier in ``text`` is validated
+        against it immediately; when omitted (the default), unknown
+        identifiers are only caught later, at
+        ``Explainer``/``compile_constraints`` time.
 
-    Returns:
-        The parsed ``Linear`` constraint.
+    Returns
+    -------
+    The parsed ``Linear`` constraint.
 
-    Raises:
-        ConstraintParseError: If ``text`` contains an unexpected character, is
-            missing an operator or a term, has trailing tokens after the
-            right-hand side, references no feature at all, or (when
-            ``feature_names`` is given) references an identifier not in it.
-            The message carries a caret marking the offending token.
+    Raises
+    ------
+    ConstraintParseError
+        If ``text`` contains an unexpected character, is
+        missing an operator or a term, has trailing tokens after the
+        right-hand side, references no feature at all, or (when
+        ``feature_names`` is given) references an identifier not in it.
+        The message carries a caret marking the offending token.
     """
     tokens = _tokenize(text)
     parser = _Parser(text, tokens, feature_names)

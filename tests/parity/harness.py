@@ -23,6 +23,7 @@ import numpy.typing as npt
 from treecf._json import decode_floats, encode_floats
 from treecf.backends.genetic import solve_genetic
 from treecf.constraints import (
+    AllowedCategories,
     AllowMissing,
     Equals,
     Freeze,
@@ -92,6 +93,8 @@ def build_constraints(descriptors: list[dict[str, Any]]) -> list[Constraint]:
             )
         elif kind == "OneHot":
             out.append(OneHot(tuple(d["features"])))
+        elif kind == "AllowedCategories":
+            out.append(AllowedCategories(d["feature"], tuple(d["allowed"])))
         elif kind == "AllowMissing":
             out.append(
                 AllowMissing(
@@ -117,7 +120,7 @@ def load_scenario(path: Path) -> Scenario:
         else None
     )
     constraints = build_constraints(data["constraints"])
-    compiled = compile_constraints(constraints, ir.feature_names)
+    compiled = compile_constraints(constraints, ir.feature_names, ir.categorical)
     interval_raw = decode_floats(data["interval"])
     return Scenario(
         name=data["name"],

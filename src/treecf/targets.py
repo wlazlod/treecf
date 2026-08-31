@@ -39,24 +39,31 @@ class Target:
     shorthand into ``lo``/``hi``. ``Target.bands`` builds a named ladder of
     intervals (rating grades); ``Explainer.explain`` then returns one result
     per band instead of a single ``Counterfactual``/``Infeasible``. See
-    [Targets](concepts/targets.md) and, for ``calibrated``,
-    [Calibration](concepts/calibration.md).
+    [Targets](../concepts/targets.md) and, for ``calibrated``,
+    [Calibration](../concepts/calibration.md).
 
-    Attributes:
-        space: ``"raw"``, ``"probability"``, or ``"calibrated"`` — which
-            space ``lo``/``hi`` are expressed in.
-        lo: Lower bound of the target interval, in ``space``.
-        hi: Upper bound of the target interval, in ``space``.
-        bands_spec: ``(name, lo, hi)`` per band, set only by ``Target.bands``;
-            ``None`` for a plain single-interval target. When set, ``lo``/
-            ``hi``/``space`` describe the first band only — use
-            ``band_intervals`` to resolve every band.
-        calibrator: The fitted calibrator, set only by ``Target.calibrated``
-            (or ``Target.bands(space="calibrated", ...)``); ``None``
-            otherwise.
-        buffer_logit: Logit-space shrinkage applied before inverting a
-            calibrated interval; ``0.0`` (no shrinkage) unless
-            ``Target.calibrated`` was given a positive value.
+    Attributes
+    ----------
+    space
+        ``"raw"``, ``"probability"``, or ``"calibrated"`` — which
+        space ``lo``/``hi`` are expressed in.
+    lo
+        Lower bound of the target interval, in ``space``.
+    hi
+        Upper bound of the target interval, in ``space``.
+    bands_spec
+        ``(name, lo, hi)`` per band, set only by ``Target.bands``;
+        ``None`` for a plain single-interval target. When set, ``lo``/
+        ``hi``/``space`` describe the first band only — use
+        ``band_intervals`` to resolve every band.
+    calibrator
+        The fitted calibrator, set only by ``Target.calibrated``
+        (or ``Target.bands(space="calibrated", ...)``); ``None``
+        otherwise.
+    buffer_logit
+        Logit-space shrinkage applied before inverting a
+        calibrated interval; ``0.0`` (no shrinkage) unless
+        ``Target.calibrated`` was given a positive value.
     """
 
     space: str  # "raw" | "probability" | "calibrated"
@@ -79,19 +86,26 @@ class Target:
         (``op="<="`` or ``op=">="`` with ``value``, giving a half-open bound
         against ``-inf``/``+inf``).
 
-        Args:
-            range: Explicit ``(lo, hi)`` bound, ``lo < hi`` required.
-            op: ``"<="`` or ``">="``, paired with ``value``; mutually
-                exclusive with ``range``.
-            value: The threshold paired with ``op``.
+        Parameters
+        ----------
+        range
+            Explicit ``(lo, hi)`` bound, ``lo < hi`` required.
+        op
+            ``"<="`` or ``">="``, paired with ``value``; mutually
+            exclusive with ``range``.
+        value
+            The threshold paired with ``op``.
 
-        Returns:
-            A ``Target`` with ``space="raw"``.
+        Returns
+        -------
+        A ``Target`` with ``space="raw"``.
 
-        Raises:
-            TargetError: If neither or both of ``range`` and ``op``/``value``
-                are given, if ``op`` is not ``"<="``/``">="``, or if the
-                resulting interval is empty.
+        Raises
+        ------
+        TargetError
+            If neither or both of ``range`` and ``op``/``value``
+            are given, if ``op`` is not ``"<="``/``">="``, or if the
+            resulting interval is empty.
         """
         lo, hi = _interval_from(range, op, value, lo_limit=-math.inf, hi_limit=math.inf)
         return cls(space="raw", lo=lo, hi=hi)
@@ -111,19 +125,26 @@ class Target:
         lazily, at ``raw_interval`` time, not here. Specify exactly one of
         ``range=(lo, hi)`` or ``op=``/``value=``, as in ``Target.raw``.
 
-        Args:
-            range: Explicit ``(lo, hi)`` bound within ``[0, 1]``.
-            op: ``"<="`` or ``">="``, paired with ``value``; mutually
-                exclusive with ``range``.
-            value: The threshold paired with ``op``.
+        Parameters
+        ----------
+        range
+            Explicit ``(lo, hi)`` bound within ``[0, 1]``.
+        op
+            ``"<="`` or ``">="``, paired with ``value``; mutually
+            exclusive with ``range``.
+        value
+            The threshold paired with ``op``.
 
-        Returns:
-            A ``Target`` with ``space="probability"``.
+        Returns
+        -------
+        A ``Target`` with ``space="probability"``.
 
-        Raises:
-            TargetError: If neither or both of ``range`` and ``op``/``value``
-                are given, if ``op`` is not ``"<="``/``">="``, or if the
-                resulting interval is empty or falls outside ``[0, 1]``.
+        Raises
+        ------
+        TargetError
+            If neither or both of ``range`` and ``op``/``value``
+            are given, if ``op`` is not ``"<="``/``">="``, or if the
+            resulting interval is empty or falls outside ``[0, 1]``.
         """
         lo, hi = _interval_from(range, op, value, lo_limit=0.0, hi_limit=1.0)
         if not (0.0 <= lo < hi <= 1.0):
@@ -149,31 +170,40 @@ class Target:
         logit space before inversion, making the counterfactual robust to
         future recalibration or central-tendency drift of that magnitude.
         Specify exactly one of ``range=(lo, hi)`` or ``op=``/``value=``, as in
-        ``Target.raw``. See [Calibration](concepts/calibration.md).
+        ``Target.raw``. See [Calibration](../concepts/calibration.md).
 
-        Args:
-            calibrator: Object exposing ``is_monotone_: bool`` (must be
-                ``True``) and ``interval_inverse(lo, hi, *, space,
-                buffer_logit)``, returning generalized-inverse bounds on the
-                logit of the model probability.
-            range: Explicit ``(lo, hi)`` bound within ``[0, 1]``, in the
-                calibrated probability's own space.
-            op: ``"<="`` or ``">="``, paired with ``value``; mutually
-                exclusive with ``range``.
-            value: The threshold paired with ``op``.
-            buffer_logit: Logit-space shrinkage applied before inversion;
-                must be ``>= 0.0``. Defaults to ``0.0`` (no shrinkage).
+        Parameters
+        ----------
+        calibrator
+            Object exposing ``is_monotone_: bool`` (must be
+            ``True``) and ``interval_inverse(lo, hi, *, space,
+            buffer_logit)``, returning generalized-inverse bounds on the
+            logit of the model probability.
+        range
+            Explicit ``(lo, hi)`` bound within ``[0, 1]``, in the
+            calibrated probability's own space.
+        op
+            ``"<="`` or ``">="``, paired with ``value``; mutually
+            exclusive with ``range``.
+        value
+            The threshold paired with ``op``.
+        buffer_logit
+            Logit-space shrinkage applied before inversion;
+            must be ``>= 0.0``. Defaults to ``0.0`` (no shrinkage).
 
-        Returns:
-            A ``Target`` with ``space="calibrated"``.
+        Returns
+        -------
+        A ``Target`` with ``space="calibrated"``.
 
-        Raises:
-            TargetError: If ``calibrator`` does not expose
-                ``interval_inverse``/``is_monotone_`` or is not monotone, if
-                ``buffer_logit < 0.0``, if neither or both of ``range`` and
-                ``op``/``value`` are given, if ``op`` is not ``"<="``/``">="``,
-                or if the resulting interval is empty or falls outside
-                ``[0, 1]``.
+        Raises
+        ------
+        TargetError
+            If ``calibrator`` does not expose
+            ``interval_inverse``/``is_monotone_`` or is not monotone, if
+            ``buffer_logit < 0.0``, if neither or both of ``range`` and
+            ``op``/``value`` are given, if ``op`` is not ``"<="``/``">="``,
+            or if the resulting interval is empty or falls outside
+            ``[0, 1]``.
         """
         _validate_calibrator(calibrator, buffer_logit)
         lo, hi = _interval_from(range, op, value, lo_limit=0.0, hi_limit=1.0)
@@ -198,30 +228,38 @@ class Target:
         ``{band_name: Counterfactual | Infeasible}`` dict instead of a single
         result, one entry per band in ``bands``' insertion order.
 
-        Args:
-            bands: ``{name: (lo, hi)}`` per band, in ``space``; at least one
-                required.
-            space: ``"raw"``, ``"probability"`` (the default), or
-                ``"calibrated"`` — the space every band's ``(lo, hi)`` is
-                expressed in.
-            calibrator: Required when ``space="calibrated"``; see
-                ``Target.calibrated``. Ignored otherwise.
-            buffer_logit: Logit-space shrinkage applied to every band when
-                ``space="calibrated"``; see ``Target.calibrated``. Defaults to
-                ``0.0``.
+        Parameters
+        ----------
+        bands
+            ``{name: (lo, hi)}`` per band, in ``space``; at least one
+            required.
+        space
+            ``"raw"``, ``"probability"`` (the default), or
+            ``"calibrated"`` — the space every band's ``(lo, hi)`` is
+            expressed in.
+        calibrator
+            Required when ``space="calibrated"``; see
+            ``Target.calibrated``. Ignored otherwise.
+        buffer_logit
+            Logit-space shrinkage applied to every band when
+            ``space="calibrated"``; see ``Target.calibrated``. Defaults to
+            ``0.0``.
 
-        Returns:
-            A ``Target`` with ``bands_spec`` set to one ``(name, lo, hi)`` per
-            band; ``lo``/``hi``/``space`` mirror the first band for callers
-            that only look at the plain-interval fields.
+        Returns
+        -------
+        A ``Target`` with ``bands_spec`` set to one ``(name, lo, hi)`` per
+        band; ``lo``/``hi``/``space`` mirror the first band for callers
+        that only look at the plain-interval fields.
 
-        Raises:
-            TargetError: If ``space`` is not ``"raw"``/``"probability"``/
-                ``"calibrated"``, if ``bands`` is empty, if any band's
-                interval is empty or (for ``"probability"``/``"calibrated"``)
-                falls outside ``[0, 1]``, or if ``space="calibrated"`` and
-                ``calibrator`` fails the same validation as
-                ``Target.calibrated``.
+        Raises
+        ------
+        TargetError
+            If ``space`` is not ``"raw"``/``"probability"``/
+            ``"calibrated"``, if ``bands`` is empty, if any band's
+            interval is empty or (for ``"probability"``/``"calibrated"``)
+            falls outside ``[0, 1]``, or if ``space="calibrated"`` and
+            ``calibrator`` fails the same validation as
+            ``Target.calibrated``.
         """
         if space not in ("raw", "probability", "calibrated"):
             raise TargetError("bands space must be 'raw', 'probability', or 'calibrated'")
@@ -256,16 +294,21 @@ class Target:
         Both non-raw spaces require ``link`` to be ``Link.SIGMOID`` — this is
         where that requirement is actually enforced, not at construction time.
 
-        Args:
-            link: The model's link function (``Explainer.ir.link``).
+        Parameters
+        ----------
+        link
+            The model's link function (``Explainer.ir.link``).
 
-        Returns:
-            ``(lo, hi)`` on the raw score, ``lo <= hi``.
+        Returns
+        -------
+        ``(lo, hi)`` on the raw score, ``lo <= hi``.
 
-        Raises:
-            TargetError: If ``space`` is ``"probability"`` or ``"calibrated"``
-                and ``link`` is not ``Link.SIGMOID``, or if ``calibrator``
-                raises while inverting the interval.
+        Raises
+        ------
+        TargetError
+            If ``space`` is ``"probability"`` or ``"calibrated"``
+            and ``link`` is not ``Link.SIGMOID``, or if ``calibrator``
+            raises while inverting the interval.
         """
         if self.space == "raw":
             return self.lo, self.hi
@@ -300,15 +343,20 @@ class Target:
         each against a copy of this target's own ``space``/``calibrator``/
         ``buffer_logit``.
 
-        Args:
-            link: The model's link function (``Explainer.ir.link``).
+        Parameters
+        ----------
+        link
+            The model's link function (``Explainer.ir.link``).
 
-        Returns:
-            ``{band_name: (lo, hi)}`` on the raw score, one entry per band.
+        Returns
+        -------
+        ``{band_name: (lo, hi)}`` on the raw score, one entry per band.
 
-        Raises:
-            TargetError: Under the same conditions as ``raw_interval``, for
-                any band.
+        Raises
+        ------
+        TargetError
+            Under the same conditions as ``raw_interval``, for
+            any band.
         """
         assert self.bands_spec is not None
         out: dict[str, tuple[float, float]] = {}

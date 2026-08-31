@@ -1,4 +1,4 @@
-"""Calibrated-target provenance in certificates and batch records (0.2.4, T1/T2/T5)."""
+"""Calibrated-target provenance in certificates and batch records."""
 
 from __future__ import annotations
 

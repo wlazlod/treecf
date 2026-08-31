@@ -132,3 +132,4 @@ def test_conflicting_linears_still_infeasible() -> None:
             time_budget_s=5.0,
         )
     assert isinstance(res, Infeasible)
+

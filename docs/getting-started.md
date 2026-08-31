@@ -17,9 +17,9 @@ issue, not a treecf packaging bug. All other platforms ship from CI as usual.
 ## First counterfactual
 
 ```python
-import numpy as np
+# docs: no-run — clf / X_train / y_train stand in for your own model and data
 import xgboost as xgb
-from treecf import Counterfactual, Explainer, Target, Freeze, Monotone, constraint
+from treecf import Explainer, Target, Freeze, Monotone, constraint
 
 # a binary classifier trained on your data
 clf = xgb.XGBClassifier(n_estimators=100, max_depth=4).fit(X_train, y_train)
@@ -33,12 +33,17 @@ exp = Explainer(
         constraint("max_dpd_30d <= max_dpd_12m"),   # inter-feature consistency
     ],
 )
+```
 
-res = exp.explain(
-    x_row,
-    target=Target.probability(range=(0.0, 0.04)),   # get under the 4% PD cutoff
-    seed=0,
-)
+Once the explainer exists, asking for recourse is one call (`exp`, `x`, and
+`target` below are the docs vocabulary: a LightGBM credit model, one rejected
+applicant, and a probability-band target):
+
+```python
+# exp, x, target: the docs explainer, one rejected applicant, the target
+from treecf import Counterfactual
+
+res = exp.explain(x, target=target, seed=0)
 
 if isinstance(res, Counterfactual):
     print(res.changes)      # {"feature": (from, to), ...}
@@ -59,8 +64,11 @@ target on the *calibrated* scale — `Target.probability` would silently target
 the uncalibrated output:
 
 ```python
+# exp, x, cal: the docs explainer, one rejected applicant, a fitted calibrator
+from treecf import Target
+
 res = exp.explain(
-    x_row,
+    x,
     target=Target.calibrated(cal, range=(0.0, 0.04)),  # calibrated PD ≤ 4%
     seed=0,
 )
@@ -86,11 +94,12 @@ the target and each constraint are checked on the actual returned values.
 ## Visualize it
 
 ```python
+# exp, res, target: the docs explainer, its solved plan, and the target
 from treecf.viz import plot_changes, plot_waterfall, plot_effort
 
-plot_changes(res)                       # dumbbells: from -> to per feature
-plot_waterfall(exp, res, target=t)      # SHAP-style: exact score deltas, cutoff line
-plot_effort(exp, res)                   # where the applicant's effort goes (J split)
+plot_changes(res)                          # dumbbells: from -> to per feature
+plot_waterfall(exp, res, target=target)    # SHAP-style: exact score deltas, cutoff line
+plot_effort(exp, res)                      # where the applicant's effort goes (J split)
 ```
 
 ## Alternatives for one instance
@@ -99,13 +108,14 @@ One plan is rarely the whole story. Ask for several distinct plans for the same
 row and compare them side by side:
 
 ```python
+# exp, x, target: the docs explainer, one rejected applicant, the target
 from treecf.viz import plot_alternatives, plot_tradeoff
 
-batch = exp.explain_batch(x_row.reshape(1, -1), target=t, n_per_example=3, seed=0)
-plans = batch.for_id(0)                 # up to 3 distinct plans for this row
+plans_batch = exp.explain_batch(x.reshape(1, -1), target=target, n_per_example=3, seed=0)
+plans = plans_batch.for_id(0)              # up to 3 distinct plans for this row
 
-plot_alternatives(plans, explainer=exp) # every plan's changes, standardized to Δ/σ
-plot_tradeoff(plans, target=t)          # cost vs achieved score: which plan buys what
+plot_alternatives(plans, explainer=exp)    # every plan's changes, standardized to Δ/σ
+plot_tradeoff(plans, target=target)        # cost vs achieved score: which plan buys what
 ```
 
 `diversity="lever-blocking"` instead re-solves with each plan's biggest lever
@@ -115,9 +125,10 @@ For advice grouped by what a person controls together, ask for one plan per
 named feature group — see [Coalitions](concepts/coalitions.md):
 
 ```python
+# exp, x, target: the docs explainer, one rejected applicant, the target
 result = exp.explain_coalitions(
-    x_row, target=t,
-    coalitions={"debt": ["max_dpd_30d", "max_dpd_12m"], "income": ["income_monthly"]},
+    x, target=target,
+    coalitions={"repayment": ["utilization", "dpd_12m"], "income": ["income"]},
     include_full=True,          # adds the unrestricted "(all levers)" baseline
 )
 plot_alternatives(result, explainer=exp)   # coalition names label the plans
@@ -129,9 +140,10 @@ plot_alternatives(result, explainer=exp)   # coalition names label the plans
 certified region around the answer:
 
 ```python
-res = exp.explain(x_row, target=t, backend="exact", region=True, seed=0)
+# exp, x, target: the docs explainer, one rejected applicant, the target
+res = exp.explain(x, target=target, backend="exact", region=True, seed=0)
 res.proof              # "optimal" | "optimal_within_gap" | "heuristic"
-res.region.describe()  # per-feature interval every point of which is also a valid plan
+res.region.describe()  # per-feature phrases; every point in the region is a valid plan
 ```
 
 [Certification](concepts/certification.md) covers exactly what that proof does and does not
@@ -140,18 +152,20 @@ guarantee.
 ## Scale to a dataset
 
 ```python
+# exp, X_bg, target: the docs explainer, its background rows, the target
+from treecf import BatchResult
+
 batch = exp.explain_batch(
-    X_declined,                          # e.g. today's declined applications
-    target=Target.probability(range=(0.0, 0.30)),
+    X_bg[:20],                           # e.g. today's declined applications
+    target=target,
     n_per_example=2,                     # counterfactuals per example
-    diversity="seeds",                  # or "lever-blocking" (also finds essential levers)
-    ids=app_ids,
+    diversity="seeds",                   # or "lever-blocking" (also finds essential levers)
+    ids=[f"APP-{i:05d}" for i in range(20)],
     seed=0,
 )
 batch.save("counterfactuals_today.json")     # compute once, store...
 stored = BatchResult.load("counterfactuals_today.json")
-stored.for_id("APP-00042")                   # ...look up any time
-stored.to_frame()                            # or analyze as a pandas DataFrame
+stored.for_id("APP-00002")                   # ...look up any time
 ```
 
 Solves run in parallel inside the Rust core. `treecf.viz_batch` plots the whole

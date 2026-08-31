@@ -58,6 +58,7 @@ import pytest
 from treecf.api import Grid, ValuePolicy
 from treecf.backends.exact import ExactResult, solve_exact
 from treecf.constraints import (
+    AllowedCategories,
     AllowMissing,
     Equals,
     Freeze,
@@ -451,3 +452,50 @@ class TestSolverDeterminism:
         assert first.stats == second.stats
         assert first.distance == second.distance
         assert first.snapped == second.snapped
+
+
+class TestCategoricalAgainstOracle:
+    """Exact search over blocks equals brute-force enumeration, seed by seed."""
+
+    @staticmethod
+    def _problem(seed: int):
+        from ..conftest import make_random_mixed_ir
+
+        rng = np.random.default_rng(seed)
+        ir = make_random_mixed_ir(
+            rng, n_features=4, n_trees=4, depth=3, categorical={1: 5, 3: 7}
+        )
+        x = np.array(
+            [
+                float(rng.normal()),
+                float(rng.integers(0, 5)),
+                float(rng.normal()),
+                float(rng.integers(0, 7)),
+            ]
+        )
+        constraints: list[Constraint] = []
+        if seed % 2 == 0:
+            allowed = tuple(sorted(rng.choice(5, size=3, replace=False).tolist()))
+            constraints.append(AllowedCategories("x1", allowed))
+        if seed % 3 == 0:
+            constraints.append(Freeze("x3"))
+        compiled = compile_constraints(constraints, ir.feature_names, ir.categorical)
+        target_lo = raw_score(ir, x) + 0.1
+        return ir, x, compiled, (target_lo, math.inf)
+
+    @pytest.mark.parametrize("seed", range(12))
+    def test_matches_the_oracle(self, seed: int) -> None:
+        from .brute_force import solve_brute_force
+
+        ir, x, compiled, interval = self._problem(seed)
+        sigma, weights = np.ones(4), np.ones(4)
+        result = solve_exact(ir, x, interval, compiled, sigma, weights, 0.05)
+        oracle = solve_brute_force(
+            ir, x, interval, compiled, sigma, weights, lam=0.05
+        )
+        assert result.stats["completed"] is True
+        if not oracle.feasible:
+            assert result.x_cf is None
+            return
+        assert result.x_cf is not None and result.distance is not None
+        assert result.distance == pytest.approx(oracle.objective, abs=1e-12)

@@ -6,6 +6,9 @@ repo_name: wlazlod/treecf
 
 strict: true
 
+exclude_docs: |
+  README.md
+
 theme:
   name: material
   features:
@@ -31,9 +34,20 @@ plugins:
   - mkdocstrings:
       handlers:
         python:
+          paths: [src]
           options:
-            docstring_style: google
+            docstring_style: numpy
+            docstring_section_style: spacy
             show_source: true
+            show_root_heading: true
+            show_root_full_path: false
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+            members_order: source
+            merge_init_into_class: true
+            separate_signature: true
+            signature_crossrefs: true
+            show_signature_annotations: true
   - mkdocs-jupyter:
       execute: false  # notebooks are committed executed; CI re-executes them separately
 
@@ -47,6 +61,9 @@ markdown_extensions:
           format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.arithmatex:
       generic: true
+  - pymdownx.snippets:
+      dedent_subsections: true
+      check_paths: true
   - toc:
       permalink: true
 
@@ -56,21 +73,50 @@ extra_javascript:
 
 nav:
   - Home: index.md
-  - Getting started: getting-started.md
-  - How it works: how-it-works.md
+  - Learn:
+      - Install and quickstart: getting-started.md
+      - How it works: how-it-works.md
+      - "Tutorial: quickstart": notebooks/01-quickstart.ipynb
+  - Guide:
+      - Workflows:
+          - Bring your model: guide/models.md
+          - Set the target: guide/targets.md
+          - Constrain the search: guide/constraints.md
+          - Run the search: guide/explain.md
+          - Certify and widen: guide/certify.md
+          - Auditability: guide/auditability.md
+          - Visualize: guide/visualize.md
+      - Integrations:
+          - probcal calibration: guide/probcal.md
+          - Restricted environments: guide/no-solver.md
   - Concepts:
-      - Models and the IR: concepts/models.md
-      - Targets: concepts/targets.md
-      - Calibration: concepts/calibration.md
-      - Constraints: concepts/constraints.md
-      - Missing values: concepts/missing-values.md
-      - Plausibility: concepts/plausibility.md
-      - Coalitions: concepts/coalitions.md
-      - Backends and proofs: concepts/backends.md
-      - Certification: concepts/certification.md
+      - Foundations:
+          - Models and the IR: concepts/models.md
+          - Cells and category blocks: concepts/cells.md
+          - Targets: concepts/targets.md
+          - Missing values: concepts/missing-values.md
+      - Search:
+          - Backends and proofs: concepts/backends.md
+          - Plausibility: concepts/plausibility.md
+          - Coalitions: concepts/coalitions.md
+      - Certification:
+          - Certification: concepts/certification.md
+          - Calibration: concepts/calibration.md
+      - Constraints:
+          - Constraints: concepts/constraints.md
+      - Categorical:
+          - Categorical features: concepts/categorical.md
   - Tutorials:
-      - Quickstart: notebooks/01-quickstart.ipynb
       - Credit-risk walkthrough: notebooks/02-credit-risk-tutorial.ipynb
       - No-solver environments: notebooks/03-no-solver-environments.ipynb
-  - API reference: api.md
+  - Benchmarks:
+      - Comparison: benchmarks/comparison.md
+  - API reference:
+      - Overview: api.md
+      - Explainer and results: api/explainer.md
+      - Constraints: api/constraints.md
+      - Targets: api/targets.md
+      - Visualization: api/viz.md
+      - API stability: api-stability.md
   - FAQ: faq.md
+  - Changelog: changelog.md

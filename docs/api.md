@@ -1,53 +1,16 @@
 # API reference
 
-## Explainer and results
+Rendered from the numpy-style docstrings, split across four pages (a single
+page with every module triggers a third-party rendering pathology):
 
-::: treecf.Explainer
+- [Explainer and results](api/explainer.md): `Explainer`, the result types,
+  batch production, regions, and the audit surface.
+- [Constraints](api/constraints.md): the constraint objects, the
+  `constraint()` mini-language, mining, and plausibility.
+- [Targets](api/targets.md): `Target` and its constructors.
+- [Visualization](api/viz.md): every plot function in `treecf.viz` and
+  `treecf.viz_batch` (extra: `treecf[viz]`).
 
-::: treecf.Counterfactual
-
-::: treecf.Infeasible
-
-## Batch production
-
-::: treecf.BatchResult
-
-::: treecf.BatchRecord
-
-## Targets
-
-::: treecf.Target
-
-## Constraints
-
-::: treecf.constraint
-
-::: treecf.constraints.objects
-
-## Mining
-
-::: treecf.suggest_constraints
-
-::: treecf.SuggestedConstraint
-
-::: treecf.DataQualityFinding
-
-## Plausibility
-
-::: treecf.Plausibility
-
-## Regions
-
-::: treecf.RecourseRegion
-
-## Audit
-
-::: treecf.ir_fingerprint
-
-::: treecf.constraints_fingerprint
-
-## Visualization
-
-::: treecf.viz
-
-::: treecf.viz_batch
+The public surface is exported flat from `treecf`; its exact extent, and the
+promises attached to serialized artifacts, are stated in
+[API stability](api-stability.md).

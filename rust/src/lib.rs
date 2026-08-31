@@ -1,4 +1,6 @@
-//! treecf Rust core (dev-only until the benchmark gate).
+//! treecf Rust core: the search engines behind the Python API.
+
+#![forbid(unsafe_code)]
 
 pub mod cells;
 pub mod constraints;

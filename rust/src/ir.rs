@@ -28,7 +28,15 @@ pub struct Ensemble {
     pub base_score: f64,
     pub link: Link,
     pub n_features: usize,
+    // Set-membership splits: node_set[i] >= 0 selects a bitset in the interned
+    // table (set_offsets CSR into set_words; code c at word c>>6, bit c&63).
+    // cardinality[j] > 0 marks feature j categorical with codes 0..cardinality.
+    pub node_set: Vec<i32>,
+    pub set_offsets: Vec<u32>,
+    pub set_words: Vec<u64>,
+    pub cardinality: Vec<u32>,
     cells: OnceLock<Vec<Vec<Cell>>>, // lazy: pure function of the split structure
+    blocks: OnceLock<Vec<Vec<Vec<u32>>>>, // lazy: category blocks per feature
 }
 
 impl Ensemble {
@@ -75,6 +83,7 @@ impl Ensemble {
                 return Err("tree root out of range".to_string());
             }
         }
+        let node_set = vec![-1; n];
         Ok(Self {
             feature,
             threshold,
@@ -87,13 +96,86 @@ impl Ensemble {
             base_score,
             link,
             n_features,
+            node_set,
+            set_offsets: vec![0],
+            set_words: Vec::new(),
+            cardinality: vec![0; n_features],
             cells: OnceLock::new(),
+            blocks: OnceLock::new(),
         })
+    }
+
+    /// Install set-membership splits and per-feature cardinalities, validated once.
+    pub fn with_categories(
+        mut self,
+        node_set: Vec<i32>,
+        set_offsets: Vec<u32>,
+        set_words: Vec<u64>,
+        cardinality: Vec<u32>,
+    ) -> Result<Self, String> {
+        if node_set.len() != self.feature.len() {
+            return Err("node_set length differs from the node count".to_string());
+        }
+        if cardinality.len() != self.n_features {
+            return Err("cardinality length differs from n_features".to_string());
+        }
+        if set_offsets.first() != Some(&0) {
+            return Err("set_offsets must start at 0".to_string());
+        }
+        if set_offsets.windows(2).any(|w| w[1] < w[0]) {
+            return Err("set_offsets must be non-decreasing".to_string());
+        }
+        if *set_offsets.last().unwrap() as usize != set_words.len() {
+            return Err("set_offsets must end at set_words length".to_string());
+        }
+        let n_sets = set_offsets.len() - 1;
+        for (i, &sid) in node_set.iter().enumerate() {
+            if sid >= 0 {
+                if self.feature[i] < 0 {
+                    return Err(format!("node {i}: a leaf cannot carry a split set"));
+                }
+                if sid as usize >= n_sets {
+                    return Err(format!("node {i}: set index out of range"));
+                }
+            }
+        }
+        self.node_set = node_set;
+        self.set_offsets = set_offsets;
+        self.set_words = set_words;
+        self.cardinality = cardinality;
+        Ok(self)
+    }
+
+    /// Set-membership routing for a non-NaN value: left iff an integral member.
+    /// Non-integral values are never members; codes beyond the stored words
+    /// (unseen categories) are not members either.
+    #[inline]
+    pub fn set_contains(&self, set: i32, v: f64) -> bool {
+        if !v.is_finite() {
+            return false;
+        }
+        let code = v as i64;
+        if code as f64 != v || code < 0 {
+            return false;
+        }
+        let start = self.set_offsets[set as usize] as usize;
+        let end = self.set_offsets[set as usize + 1] as usize;
+        let word = (code >> 6) as usize;
+        if word >= end - start {
+            return false;
+        }
+        (self.set_words[start + word] >> (code & 63)) & 1 == 1
     }
 
     /// Routing-atomic cells per feature, computed once and cached.
     pub fn feature_cells(&self) -> &[Vec<Cell>] {
         self.cells.get_or_init(|| crate::cells::feature_cells(self))
+    }
+
+    /// Category blocks per feature (empty for numeric), computed once and cached.
+    pub fn category_blocks(&self) -> &[Vec<Vec<u32>>] {
+        self.blocks
+            .get_or_init(|| crate::cells::category_blocks_joint(&[self]))
     }
 
     /// Leaf value reached by `x` in the tree rooted at `root`.
@@ -104,6 +186,8 @@ impl Ensemble {
             let v = x[self.feature[i] as usize];
             let go_left = if v.is_nan() {
                 self.missing_left[i]
+            } else if self.node_set[i] >= 0 {
+                self.set_contains(self.node_set[i], v)
             } else if self.is_lt[i] {
                 v < self.threshold[i]
             } else {
@@ -208,5 +292,83 @@ mod tests {
         for r in 0..3 {
             assert_eq!(batch[r], e.raw_score(&xs[r * 2..r * 2 + 2]));
         }
+    }
+
+    /// Set stump on feature 0: left leaf -1.0 iff the code is in `words`.
+    fn set_stump(words: Vec<u64>, cardinality: u32, missing_left: bool) -> Ensemble {
+        Ensemble::new(
+            vec![0, -1, -1],
+            vec![0.0, 0.0, 0.0],
+            vec![false, false, false],
+            vec![missing_left, false, false],
+            vec![1, 0, 0],
+            vec![2, 0, 0],
+            vec![0.0, -1.0, 1.0],
+            vec![0],
+            0.0,
+            Link::Identity,
+            2,
+        )
+        .unwrap()
+        .with_categories(
+            vec![0, -1, -1],
+            vec![0, words.len() as u32],
+            words,
+            vec![cardinality, 0],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn member_code_goes_left_nonmember_right() {
+        let e = set_stump(vec![0b101], 4, true); // {0, 2}
+        assert_eq!(e.raw_score(&[0.0, 0.0]), -1.0);
+        assert_eq!(e.raw_score(&[2.0, 0.0]), -1.0);
+        assert_eq!(e.raw_score(&[1.0, 0.0]), 1.0);
+        assert_eq!(e.raw_score(&[3.0, 0.0]), 1.0);
+    }
+
+    #[test]
+    fn unseen_and_non_integral_codes_go_right() {
+        let e = set_stump(vec![0b101], 4, true);
+        assert_eq!(e.raw_score(&[7.0, 0.0]), 1.0); // beyond the stored words
+        assert_eq!(e.raw_score(&[2.5, 0.0]), 1.0); // not a code
+        assert_eq!(e.raw_score(&[-1.0, 0.0]), 1.0);
+        assert_eq!(e.raw_score(&[f64::INFINITY, 0.0]), 1.0);
+    }
+
+    #[test]
+    fn set_nan_routes_by_missing_left() {
+        assert_eq!(
+            set_stump(vec![0b10], 4, true).raw_score(&[f64::NAN, 0.0]),
+            -1.0
+        );
+        assert_eq!(
+            set_stump(vec![0b10], 4, false).raw_score(&[f64::NAN, 0.0]),
+            1.0
+        );
+    }
+
+    #[test]
+    fn membership_across_word_boundary() {
+        // {63, 64, 100} over 128 codes: two words
+        let e = set_stump(vec![1u64 << 63, (1u64 << 0) | (1u64 << 36)], 128, true);
+        assert_eq!(e.raw_score(&[63.0, 0.0]), -1.0);
+        assert_eq!(e.raw_score(&[64.0, 0.0]), -1.0);
+        assert_eq!(e.raw_score(&[100.0, 0.0]), -1.0);
+        assert_eq!(e.raw_score(&[65.0, 0.0]), 1.0);
+        assert_eq!(e.raw_score(&[127.0, 0.0]), 1.0);
+    }
+
+    #[test]
+    fn with_categories_validates_shapes() {
+        let numeric = stump(true, true);
+        assert!(numeric
+            .with_categories(vec![0, -1], vec![0, 1], vec![1], vec![4, 0])
+            .is_err()); // node_set length mismatch
+        let numeric = stump(true, true);
+        assert!(numeric
+            .with_categories(vec![-1, 0, -1], vec![0, 1], vec![1], vec![4, 0])
+            .is_err()); // a leaf cannot carry a set
     }
 }

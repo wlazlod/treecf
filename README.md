@@ -65,6 +65,12 @@ proved = exp.explain(x, target=t, backend="exact")      # proof="optimal", a cer
 boxed = exp.explain(x, target=t, region=True)            # res.region.describe() -> "utilization <= 0.4"
 ```
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for dev setup, the test layers, and the
+project's hard invariants; report security issues privately per
+[SECURITY.md](SECURITY.md).
+
 ## License
 
 MIT

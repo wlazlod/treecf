@@ -993,3 +993,209 @@ def test_plot_recourse_map_schematic_accept_label_matches_accept_screen_side() -
         # Reject sits on the same screen side as the factual's dot.
         assert (accept_fx > 0.5) == (plan_fx > 0.5)
         assert (reject_fx > 0.5) == (factual_fx > 0.5)
+
+
+class TestCategoricalChangeLabels:
+    """A category change renders as name-to-name, codes when names are absent."""
+
+    @staticmethod
+    def _explainer(names=("clerk", "manager", "nurse", "smith")):
+        from treecf import Explainer
+        from treecf.ir.model import CategoricalFeature, EnsembleIR, Link, Node, Tree
+
+        tree = Tree(
+            nodes=(
+                Node(0, 0, None, None, True, 1, 2, None, categories=frozenset({2, 3})),
+                Node(1, None, None, None, None, None, None, 1.0),
+                Node(2, None, None, None, None, None, None, 0.0),
+            )
+        )
+        ir = EnsembleIR(
+            trees=(tree,),
+            base_score=0.0,
+            link=Link.IDENTITY,
+            n_features=1,
+            feature_names=("occupation",),
+            meta={},
+            categorical={0: CategoricalFeature(cardinality=4, categories=names)},
+        )
+        return Explainer(ir, normalizers=np.ones(1))
+
+    def test_names_render_in_plan_labels(self) -> None:
+        from treecf.viz import _format_plan
+
+        exp = self._explainer()
+        cf = _cf(changes={"occupation": (0.0, 2.0)}, distance=1.0)
+        label = _format_plan(None, cf, exp)
+        assert "occupation: clerk → nurse" in label
+
+    def test_codes_render_when_names_are_absent(self) -> None:
+        from treecf.viz import _format_plan
+
+        exp = self._explainer(names=None)
+        cf = _cf(changes={"occupation": (0.0, 2.0)}, distance=1.0)
+        label = _format_plan(None, cf, exp)
+        assert "occupation: 0 → 2" in label
+
+    def test_region_set_phrase_wins_when_present(self) -> None:
+        from treecf.regions import RecourseRegion
+        from treecf.viz import _format_plan
+
+        exp = self._explainer()
+        region = RecourseRegion(
+            lo=np.array([2.0]),
+            hi=np.array([2.0]),
+            feature_intervals={},
+            certified=True,
+            feature_categories={"occupation": (2, 3)},
+            cat_sets={0: (2, 3)},
+            category_names={"occupation": ("clerk", "manager", "nurse", "smith")},
+        )
+        from dataclasses import replace as dc_replace
+
+        cf = dc_replace(_cf(changes={"occupation": (0.0, 2.0)}, distance=1.0), region=region)
+        label = _format_plan(None, cf, exp)
+        assert "∈ {nurse, smith}" in label
+
+
+class TestPlotRegion:
+    """The certified-region picture: sigma bars, cap classification, tiles."""
+
+    @staticmethod
+    def _setup(constraints=()):
+        from treecf import Explainer
+        from treecf.ir.model import EnsembleIR, Link, Node, SplitOp, Tree
+        from treecf.regions import RecourseRegion
+
+        stump = Tree(
+            nodes=(
+                Node(0, 0, 1.0, SplitOp.LT, True, 1, 2, None),
+                Node(1, None, None, None, None, None, None, 0.0),
+                Node(2, None, None, None, None, None, None, 1.0),
+            )
+        )
+        ir = EnsembleIR(
+            trees=(stump,),
+            base_score=0.0,
+            link=Link.IDENTITY,
+            n_features=2,
+            feature_names=("income", "utilization"),
+            meta={},
+        )
+        exp = Explainer(ir, normalizers=np.array([2.0, 4.0]), constraints=constraints)
+        x = np.array([1.0, 3.0])
+        x_cf = np.array([2.0, 5.0])
+        region = RecourseRegion(
+            lo=np.array([0.5, 4.0]),
+            hi=np.array([3.0, np.inf]),
+            feature_intervals={"income": (0.5, 3.0), "utilization": (4.0, np.inf)},
+            certified=True,
+        )
+        return exp, x, x_cf, region
+
+    def test_sigma_endpoints_are_scaled_from_the_factual(self) -> None:
+        from treecf.viz import plot_region
+
+        exp, x, x_cf, region = self._setup()
+        ax = plot_region(exp, x, (region, x_cf))
+        # income row: (0.5-1)/2=-0.25 .. (3-1)/2=1.0 (the thick certified bar)
+        bars = [
+            line.get_xdata()
+            for line in ax.lines
+            if line.get_linewidth() == 5 and list(line.get_ydata()) == [1.0, 1.0]
+        ]
+        assert bars and list(bars[0]) == [-0.25, 1.0]
+
+    def test_infinite_side_reaches_past_finite_content_with_open_cap(self) -> None:
+        from treecf.viz import plot_region
+
+        exp, x, x_cf, region = self._setup()
+        ax = plot_region(exp, x, (region, x_cf))
+        open_caps = [line for line in ax.lines if line.get_marker() == ">"]
+        assert open_caps  # utilization's infinite upper side
+
+    def test_cap_classification_via_legend_handles(self) -> None:
+        from treecf import Range
+        from treecf.viz import plot_region
+
+        # the region's income hi (3.0) sits exactly on the Range bound
+        exp, x, x_cf, region = self._setup(constraints=(Range("income", 0.0, 3.0),))
+        ax = plot_region(exp, x, (region, x_cf))
+        labels = [t.get_text() for t in ax.get_legend().get_texts()]
+        assert "stopped by a constraint" in labels
+        assert "stopped by the model" in labels
+        assert "certified, not necessarily maximal" in labels
+        constraint_caps = [ln for ln in ax.lines if ln.get_label() == "_cap_constraint"]
+        model_caps = [ln for ln in ax.lines if ln.get_label() == "_cap_model"]
+        assert constraint_caps and model_caps
+
+    def test_raw_units_produce_one_axis_per_feature(self) -> None:
+        from treecf.viz import plot_region
+
+        exp, x, x_cf, region = self._setup()
+        axes = plot_region(exp, x, (region, x_cf), units="raw")
+        assert len(axes) == 2
+
+    def test_missing_region_raises(self) -> None:
+        from treecf import TreecfError
+        from treecf.viz import plot_region
+
+        exp, x, _x_cf, _region = self._setup()
+        cf = _cf({"income": (1.0, 2.0)}, distance=1.0)
+        with pytest.raises(TreecfError, match="pass region=True"):
+            plot_region(exp, x, cf)
+
+    def test_categorical_tiles_appear_iff_sets_exist(self) -> None:
+        from treecf import Explainer
+        from treecf.ir.model import CategoricalFeature, EnsembleIR, Link, Node, Tree
+        from treecf.regions import RecourseRegion
+        from treecf.viz import plot_region
+
+        tree = Tree(
+            nodes=(
+                Node(0, 0, None, None, True, 1, 2, None, categories=frozenset({2, 3})),
+                Node(1, None, None, None, None, None, None, 1.0),
+                Node(2, None, None, None, None, None, None, 0.0),
+            )
+        )
+        ir = EnsembleIR(
+            trees=(tree,), base_score=0.0, link=Link.IDENTITY, n_features=1,
+            feature_names=("occupation",), meta={},
+            categorical={0: CategoricalFeature(cardinality=4)},
+        )
+        exp = Explainer(ir, normalizers=np.ones(1))
+        x = np.array([0.0])
+        x_cf = np.array([2.0])
+        with_sets = RecourseRegion(
+            lo=np.array([2.0]), hi=np.array([2.0]), feature_intervals={},
+            certified=True, feature_categories={"occupation": (2, 3)},
+            cat_sets={0: (2, 3)},
+        )
+        ax = plot_region(exp, x, (with_sets, x_cf))
+        assert len(ax.patches) == 4  # one tile per category code
+        without_sets = RecourseRegion(
+            lo=np.array([2.0]), hi=np.array([2.0]),
+            feature_intervals={"occupation": (2.0, 2.0)}, certified=True,
+        )
+        ax2 = plot_region(exp, x, (without_sets, x_cf))
+        assert len(ax2.patches) == 0
+
+    def test_cost_order_sorts_by_weighted_normalized_delta(self) -> None:
+        from treecf.viz import plot_region
+
+        exp, x, x_cf, region = self._setup()
+        # income: |2-1|/2 = 0.5; utilization: |5-3|/4 = 0.5 — tie broken by index;
+        # move x_cf to break the tie in utilization's favour
+        x_cf = np.array([2.0, 11.0])  # utilization: 8/4 = 2.0 > income's 0.5
+        ax = plot_region(exp, x, (region, x_cf), order="cost")
+        labels = [t.get_text() for t in ax.get_yticklabels()]
+        # tick labels follow row order, top row first: utilization leads
+        assert labels == ["utilization", "income"]
+
+    def test_max_features_caps_rows_with_a_footer(self) -> None:
+        from treecf.viz import plot_region
+
+        exp, x, x_cf, region = self._setup()
+        ax = plot_region(exp, x, (region, x_cf), max_features=1)
+        assert len(ax.get_yticklabels()) == 1
+        assert any("(+1 more)" in t.get_text() for t in ax.texts)

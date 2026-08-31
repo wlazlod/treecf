@@ -251,3 +251,103 @@ class TestBandsAndErrors:
         result = Infeasible(reason="test")
         with pytest.raises(TreecfError, match="band="):
             exp.certificate(np.zeros(3), result, TARGET, band="lo")
+
+
+class TestCategoricalFingerprints:
+    """Set-split encodings extend the fingerprint; numeric encodings are frozen."""
+
+    RECORDED_NUMERIC = "4e004fa506fd23b3a655b562cb0627a01786fcbc1e4c4c3b1771627b6e72d778"
+
+    def test_numeric_encoding_is_frozen(self) -> None:
+        from treecf.ir.flatten import unflatten_ir
+
+        with open("tests/fixtures/exact/01-basic-lt-le.json", encoding="utf-8") as fh:
+            payload = json.load(fh)
+        ir = unflatten_ir(payload["ensemble"])
+        assert ir_fingerprint(ir) == self.RECORDED_NUMERIC
+
+    def test_set_membership_changes_the_fingerprint(self) -> None:
+        from tests.conftest import make_random_mixed_ir
+
+        a = make_random_mixed_ir(np.random.default_rng(0), categorical={1: 4})
+        b = make_random_mixed_ir(np.random.default_rng(0), categorical={1: 4})
+        assert ir_fingerprint(a) == ir_fingerprint(b)
+        c = make_random_mixed_ir(np.random.default_rng(1), categorical={1: 4})
+        assert ir_fingerprint(a) != ir_fingerprint(c)
+
+    def test_cardinality_changes_the_fingerprint(self) -> None:
+        from dataclasses import replace as dc_replace
+
+        from tests.conftest import make_random_mixed_ir
+        from treecf.ir.model import CategoricalFeature
+
+        a = make_random_mixed_ir(np.random.default_rng(0), categorical={1: 4})
+        wider = dc_replace(a, categorical={1: CategoricalFeature(cardinality=9)})
+        assert ir_fingerprint(a) != ir_fingerprint(wider)
+
+
+class TestSchemaVersions:
+    """Version-2 certificates carry category sets; version-1 files still verify."""
+
+    @staticmethod
+    def _categorical_explainer() -> Explainer:
+        from treecf.ir.model import CategoricalFeature
+
+        tree = Tree(
+            nodes=(
+                Node(0, 0, None, None, True, 1, 2, None, categories=frozenset({2, 3})),
+                _leaf(1, 1.0),
+                _leaf(2, 0.0),
+            )
+        )
+        ir = EnsembleIR(
+            trees=(tree,),
+            base_score=0.0,
+            link=Link.IDENTITY,
+            n_features=1,
+            feature_names=("occupation",),
+            meta={},
+            categorical={0: CategoricalFeature(cardinality=5)},
+        )
+        return Explainer(ir, normalizers=np.ones(1))
+
+    def test_v2_round_trip_with_category_sets(self) -> None:
+        exp = self._categorical_explainer()
+        x = np.array([0.0])
+        target = Target.raw(op=">=", value=0.5)
+        result = exp.explain(x, target, seed=0, region=True)
+        assert isinstance(result, Counterfactual) and result.region is not None
+        assert result.region.feature_categories
+        cert = json.loads(_dumps(exp.certificate(x, result, target)))
+        assert cert["schema_version"] == 2
+        assert cert["plan"]["region_feature_categories"] == {
+            "occupation": sorted(result.region.feature_categories["occupation"])
+        }
+        labels = {p["point"] for p in cert["verification"]["region_points"]}
+        for code in result.region.feature_categories["occupation"]:
+            assert f"occupation={code}" in labels
+        report = exp.check_certificate(cert)
+        assert report["verification_ok"] and report["mismatches"] == []
+
+    def test_committed_v1_certificate_still_verifies(self) -> None:
+        with open("tests/fixtures/certificates/v1-numeric.json", encoding="utf-8") as fh:
+            cert = json.load(fh)
+        assert cert["schema_version"] == 1
+        exp = Explainer(_ir(), normalizers=np.ones(3))
+        report = exp.check_certificate(cert)
+        assert report == {
+            "model_match": True,
+            "constraints_match": True,
+            "verification_ok": True,
+            "mismatches": [],
+        }
+
+    def test_unknown_schema_version_is_reported_not_verified(self) -> None:
+        exp = Explainer(_ir(), normalizers=np.ones(3))
+        x = np.zeros(3)
+        result = exp.explain(x, TARGET, seed=0)
+        cert = json.loads(_dumps(exp.certificate(x, result, TARGET)))
+        cert["schema_version"] = 99
+        report = exp.check_certificate(cert)
+        assert report["verification_ok"] is False
+        assert any("schema_version" in m for m in report["mismatches"])

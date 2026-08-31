@@ -917,8 +917,10 @@ class TestPlausibilityPrune:
         assert without.stats["nodes_pruned_score"] == 2
 
         with_forest = self._solve((_x0_gate_ir(), 1.0))
-        assert with_forest.stats["nodes_expanded"] == 4  # two fewer, one branch gone
-        assert with_forest.stats["nodes_pruned_score"] == 2
+        # the forest-hopeless candidate is now removed before the search even
+        # starts — the same forest bound, applied one stage earlier
+        assert with_forest.stats["nodes_expanded"] == 3
+        assert with_forest.stats["presolve_removed"] == 1
         assert with_forest.stats["nodes_pruned_cost"] == 0
         assert with_forest.distance == 1.0
         assert with_forest.proof == "optimal"
@@ -955,7 +957,10 @@ class TestCertifiedInfeasible:
         assert result.distance is None
         assert result.stats["completed"] is True
         assert result.stats["lower_bound"] == math.inf
-        assert result.stats["nodes_pruned_score"] > 0
+        # every candidate is provably out of target before the search starts
+        assert result.stats["presolve_certified"] is True
+        assert result.stats["presolve_removed"] > 0
+        assert result.stats["nodes_expanded"] == 0
 
 
 def _binary_gate_ir(gains: tuple[float, ...]) -> EnsembleIR:
@@ -994,11 +999,12 @@ class TestOneHotPropagation:
         assert result.x_cf is not None
         np.testing.assert_array_equal(result.x_cf, np.array([0.0, 1.0]))
         assert result.distance == 2.0
-        assert result.stats["nodes_expanded"] == 6
-        assert result.stats["nodes_pruned_score"] == 1
-        # x1 = 1 next to x0 = 1 (a second one), and x1 = 0 after x0 = 0 left x1
-        # as the only member that could still carry the one
-        assert result.stats["nodes_pruned_cost"] == 2
+        # x1 = 0 cannot reach the target and is removed before the search; the
+        # remaining cut is x1 = 1 next to x0 = 1 (a second one in the group)
+        assert result.stats["nodes_expanded"] == 4
+        assert result.stats["presolve_removed"] == 1
+        assert result.stats["nodes_pruned_score"] == 0
+        assert result.stats["nodes_pruned_cost"] == 1
 
     def test_three_member_group_forces_the_last_free_member(self) -> None:
         ir = _binary_gate_ir((1.0, 4.0, 8.0))
@@ -1010,9 +1016,10 @@ class TestOneHotPropagation:
         assert result.x_cf is not None
         np.testing.assert_array_equal(result.x_cf, np.array([0.0, 0.0, 1.0]))
         assert result.distance == 2.0
-        assert result.stats["nodes_expanded"] == 10
-        assert result.stats["nodes_pruned_score"] == 1
-        assert result.stats["nodes_pruned_cost"] == 4
+        assert result.stats["nodes_expanded"] == 8
+        assert result.stats["presolve_removed"] == 1
+        assert result.stats["nodes_pruned_score"] == 0
+        assert result.stats["nodes_pruned_cost"] == 3
 
     def test_a_group_with_a_non_binary_member_is_left_to_the_arbiter(self) -> None:
         """x0 = 0.25 is a value the counters cannot reason about, so the group
@@ -1026,7 +1033,11 @@ class TestOneHotPropagation:
         )
         assert result.x_cf is not None
         np.testing.assert_array_equal(result.x_cf, np.array([0.0, 1.0]))
-        assert result.stats["nodes_pruned_cost"] == 0  # nothing propagated at all
+        # the pre-search reachability filter removes x1's off-target 0.0 state;
+        # the one remaining cut is the incumbent's cost floor on x0 = 1.0 — the
+        # group itself steers nothing (its non-binary 0.25 keeps it arbiter-only)
+        assert result.stats["presolve_removed"] == 1
+        assert result.stats["nodes_pruned_cost"] == 1
 
 
 class TestImpliesPropagation:
@@ -1048,7 +1059,11 @@ class TestImpliesPropagation:
         assert result.x_cf is not None
         np.testing.assert_array_equal(result.x_cf, np.array([1.0, 1.0]))
         assert result.distance == 1.0
-        assert result.stats["nodes_pruned_cost"] == 2  # x1 = 0.0 and x1 = 0.5
+        # x1 = 0.0 cannot reach the target and is removed before the search;
+        # x1 = 0.5 survives (it routes to the high leaf) and the implication
+        # cuts it at assignment time
+        assert result.stats["presolve_removed"] == 1
+        assert result.stats["nodes_pruned_cost"] == 1
 
     def test_leaving_the_condition_unmet_leaves_the_consequence_free(self) -> None:
         """With x0 away from the condition's value the implication has nothing
@@ -1434,11 +1449,19 @@ class TestOrderPairBoundary:
         assert first.stats == second.stats
 
     def test_an_unorderable_branch_is_cut_before_the_score_is_consulted(self) -> None:
-        result = self._solve()
+        # widen the target so x1-below-zero rows stay score-reachable and the
+        # pre-search filter leaves the unorderable branch for the runtime cut
+        ir = _two_switch_ir()
+        x = np.array([1.0, -1.0])
+        compiled = compile_constraints((_order_pair("x0", "x1"),), ir.feature_names)
+        result = solve_exact(
+            ir, x, (1.0, 2.0), compiled, np.ones(2), np.ones(2), 0.0, time_budget_s=1e9
+        )
         # x0 at or above zero with x1 below it can never be ordered, whatever
         # the trees have to say about it
-        assert result.stats["nodes_pruned_cost"] == 1
-        assert result.stats["nodes_expanded"] == 4
+        assert result.stats["presolve_removed"] == 0
+        assert result.stats["nodes_pruned_cost"] == 2
+        assert result.stats["nodes_expanded"] == 6
 
 
 class TestOrderPairWithMissing:

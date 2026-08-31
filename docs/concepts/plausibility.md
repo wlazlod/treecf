@@ -4,6 +4,7 @@ An optional hard constraint keeps counterfactuals inside the data manifold: an
 isolation forest, parsed through the same tree IR, bounds the anomaly score.
 
 ```python
+# docs: no-run — model / X_train stand in for your own trained model and data
 from sklearn.ensemble import IsolationForest
 from treecf import Explainer, Plausibility
 
@@ -20,5 +21,5 @@ The genetic backend evaluates the same score directly.
 boolean per forest leaf — roughly doubling model size for a typical 100-tree
 forest. `plausibility=None` costs nothing.
 
-**v0.1 restriction**: plausibility cannot be combined with `AllowMissing` or
+**Limitation**: plausibility cannot be combined with `AllowMissing` or
 NaN factual values (isolation forests define no NaN routing).

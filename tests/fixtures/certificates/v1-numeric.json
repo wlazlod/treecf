@@ -1,0 +1,111 @@
+{
+ "constraints": {
+  "fingerprint": "f2eb97aa89dc0a64cd434269479d55dab522a39a03017f7fd2461c39601712a0",
+  "listing": []
+ },
+ "created_utc": "2026-08-31T00:53:49+00:00",
+ "factual": {
+  "x": [
+   0.0,
+   0.0,
+   0.0
+  ]
+ },
+ "model": {
+  "feature_names": [
+   "a",
+   "b",
+   "c"
+  ],
+  "ir_fingerprint": "426f355ca9f29347ecf8d3d96848ddc73dfcc11011da8c16d5937fc4e80182a2",
+  "link": "IDENTITY"
+ },
+ "plan": {
+  "changes": {
+   "a": [
+    0.0,
+    1.0
+   ]
+  },
+  "distance": 1.0,
+  "region_feature_intervals": {
+   "a": [
+    1.0,
+    "Infinity"
+   ],
+   "b": [
+    "-Infinity",
+    "Infinity"
+   ],
+   "c": [
+    "-Infinity",
+    "Infinity"
+   ]
+  },
+  "snapped": {},
+  "x_cf": [
+   1.0,
+   0.0,
+   0.0
+  ]
+ },
+ "reproducible": true,
+ "schema_version": 1,
+ "solve": {
+  "backend": "genetic/python",
+  "proof": "heuristic",
+  "solver_stats": {
+   "backend": "rust",
+   "generations": 31
+  }
+ },
+ "target": {
+  "hi": "Infinity",
+  "lo": 0.5,
+  "raw_interval": [
+   0.5,
+   "Infinity"
+  ],
+  "space": "raw"
+ },
+ "treecf_version": "0.2.4",
+ "verification": {
+  "constraints_ok": true,
+  "in_target_interval": true,
+  "region_points": [
+   {
+    "ok": true,
+    "point": "a=lo"
+   },
+   {
+    "ok": true,
+    "point": "a=hi"
+   },
+   {
+    "ok": true,
+    "point": "b=lo"
+   },
+   {
+    "ok": true,
+    "point": "b=hi"
+   },
+   {
+    "ok": true,
+    "point": "c=lo"
+   },
+   {
+    "ok": true,
+    "point": "c=hi"
+   },
+   {
+    "ok": true,
+    "point": "all-lo"
+   },
+   {
+    "ok": true,
+    "point": "all-hi"
+   }
+  ],
+  "score_raw": 1.0
+ }
+}

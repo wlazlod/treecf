@@ -6,11 +6,12 @@ issue time — it does not cryptographically prove that a search ran or that an
 optimality claim is true; re-running with the recorded seed and budgets
 against a fingerprint-matching model is how a validator checks that.
 
-Certificates are plain ``dict[str, object]`` values (``"schema_version": 1``)
+Certificates are plain ``dict[str, object]`` values (``"schema_version": 2``;
+version 1 files, which carry no categorical fields, still verify)
 that serialize with ``json.dumps(cert, allow_nan=False, sort_keys=True)``:
 non-finite floats are encoded as the strings ``"NaN"``, ``"Infinity"``, and
 ``"-Infinity"`` wherever they can occur. See
-[Certification — audit certificates](concepts/certification.md#audit-certificates).
+[Certification — audit certificates](../concepts/certification.md#audit-certificates).
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ import numpy.typing as npt
 
 from treecf._errors import TreecfError, TreecfWarning
 from treecf.constraints.objects import (
+    AllowedCategories,
     AllowMissing,
     Constraint,
     Equals,
@@ -37,12 +39,19 @@ from treecf.constraints.objects import (
     OneHot,
     Range,
 )
-from treecf.ir.evaluate import raw_score
+from treecf.ir.evaluate import bitset_words, raw_score
 from treecf.ir.model import EnsembleIR, SplitOp
 
 if TYPE_CHECKING:
     from treecf.api import Counterfactual, Explainer, Infeasible
     from treecf.targets import Target
+
+__all__ = [
+    "build_certificate",
+    "check_certificate",
+    "constraints_fingerprint",
+    "ir_fingerprint",
+]
 
 FloatArray = npt.NDArray[np.float64]
 
@@ -95,11 +104,14 @@ def ir_fingerprint(ir: EnsembleIR) -> str:
     or numeric detail of the ensemble changes (a one-ulp leaf perturbation
     included).
 
-    Args:
-        ir: The parsed ensemble to fingerprint (``Explainer.ir``).
+    Parameters
+    ----------
+    ir
+        The parsed ensemble to fingerprint (``Explainer.ir``).
 
-    Returns:
-        A 64-character SHA-256 hex digest.
+    Returns
+    -------
+    A 64-character SHA-256 hex digest.
     """
     hasher = hashlib.sha256()
     hasher.update(ir.link.name.encode("utf-8") + b"\x00")
@@ -114,6 +126,16 @@ def ir_fingerprint(ir: EnsembleIR) -> str:
                 hasher.update(b"\x00\x02")  # op / missing_left sentinels
                 hasher.update(struct.pack("<II", _NONE_U32, _NONE_U32))
                 hasher.update(struct.pack("<d", node.value))
+            elif node.categories is not None:  # set-membership split
+                assert node.missing_left is not None
+                assert node.left is not None and node.right is not None
+                hasher.update(b"\x02" + struct.pack("<I", node.feature))
+                hasher.update(struct.pack("<B", 1 if node.missing_left else 0))
+                hasher.update(struct.pack("<II", node.left, node.right))
+                words = bitset_words(node.categories)
+                hasher.update(struct.pack("<I", len(words)))
+                for word in words:
+                    hasher.update(struct.pack("<Q", word))
             else:
                 assert node.threshold is not None and node.op is not None
                 assert node.missing_left is not None
@@ -125,6 +147,10 @@ def ir_fingerprint(ir: EnsembleIR) -> str:
                 )
                 hasher.update(struct.pack("<II", node.left, node.right))
                 hasher.update(_NONE_F64)
+    if ir.categorical:  # absent on numeric-only models, keeping their digests unchanged
+        hasher.update(b"CAT" + struct.pack("<I", len(ir.categorical)))
+        for j in sorted(ir.categorical):
+            hasher.update(struct.pack("<II", j, ir.categorical[j].cardinality))
     return hasher.hexdigest()
 
 
@@ -155,6 +181,12 @@ def _constraint_record(c: Constraint, index: dict[str, int]) -> bytes:
     if isinstance(c, OneHot):
         members = sorted(index[name] for name in c.features)
         return b"OneHot\x00" + b"".join(struct.pack("<I", j) for j in members)
+    if isinstance(c, AllowedCategories):
+        codes = sorted(entry for entry in c.allowed if isinstance(entry, int))
+        names = sorted(entry for entry in c.allowed if isinstance(entry, str))
+        body = b"".join(struct.pack("<q", code) for code in codes)
+        body += b"".join(name.encode("utf-8") + b"\x00" for name in names)
+        return b"AllowedCategories\x00" + struct.pack("<I", index[c.feature]) + body
     assert isinstance(c, AllowMissing)
     delta_from = c.delta_miss if c.delta_from_miss is None else c.delta_from_miss
     return b"AllowMissing\x00" + struct.pack("<Idd", index[c.feature], c.delta_miss, delta_from)
@@ -196,11 +228,14 @@ def constraints_fingerprint(explainer: Explainer) -> str:
     a fixed ``unhashable_custom`` tag, and any certificate built from the
     explainer records ``"reproducible": false`` with a reason.
 
-    Args:
-        explainer: The explainer whose constraint set to fingerprint.
+    Parameters
+    ----------
+    explainer
+        The explainer whose constraint set to fingerprint.
 
-    Returns:
-        A 64-character SHA-256 hex digest.
+    Returns
+    -------
+    A 64-character SHA-256 hex digest.
     """
     encoding, _ = _constraints_encoding(explainer)
     return hashlib.sha256(encoding).hexdigest()
@@ -263,6 +298,7 @@ def _verify_plan(
     x_cf: FloatArray,
     interval: tuple[float, float],
     region_intervals: dict[str, tuple[float, float]] | None,
+    region_categories: dict[str, tuple[int, ...]] | None = None,
 ) -> tuple[dict[str, object], list[str]]:
     """Fresh verification of a plan: recomputed score, target membership, the
     compiled constraint check, plausibility when configured, and the region's
@@ -286,15 +322,41 @@ def _verify_plan(
         verification["plausibility_ok"] = plausibility_ok
         if not plausibility_ok:
             failed.append("plausibility_ok")
-    if region_intervals is not None:
+    if region_intervals is not None or region_categories is not None:
         checked: list[dict[str, object]] = []
-        for label, point in _region_points(x_cf, region_intervals, explainer.ir.feature_names):
+        points = _region_points(
+            x_cf, region_intervals or {}, explainer.ir.feature_names
+        )
+        points.extend(
+            _region_category_points(
+                x_cf, region_categories or {}, explainer.ir.feature_names
+            )
+        )
+        for label, point in points:
             ok = explainer._verify(x, point, interval) is None
             checked.append({"point": label, "ok": ok})
             if not ok:
                 failed.append(f"region point {label}")
         verification["region_points"] = checked
     return verification, failed
+
+
+def _region_category_points(
+    x_cf: FloatArray,
+    categories: dict[str, tuple[int, ...]],
+    feature_names: tuple[str, ...],
+) -> list[tuple[str, FloatArray]]:
+    """One sampled point per certified category code, holding every other
+    coordinate at ``x_cf``."""
+    index = {name: j for j, name in enumerate(feature_names)}
+    points: list[tuple[str, FloatArray]] = []
+    for name, codes in categories.items():
+        j = index[name]
+        for code in codes:
+            point = x_cf.copy()
+            point[j] = float(code)
+            points.append((f"{name}={code}", point))
+    return points
 
 
 def _verify_infeasible(
@@ -425,7 +487,7 @@ def build_certificate(
         solve["declared"] = declared
 
     cert: dict[str, object] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "created_utc": datetime.now(UTC).isoformat(timespec="seconds"),
         "treecf_version": __version__,
         "reproducible": reproducible_reason is None,
@@ -452,14 +514,22 @@ def build_certificate(
             "snapped": dict(result.snapped),
         }
         region_intervals = None
+        region_categories = None
         if result.region is not None:
             region_intervals = dict(result.region.feature_intervals)
             plan["region_feature_intervals"] = {
                 name: [_json_float(lo), _json_float(hi)]
                 for name, (lo, hi) in region_intervals.items()
             }
+            if result.region.feature_categories:
+                region_categories = dict(result.region.feature_categories)
+                plan["region_feature_categories"] = {
+                    name: list(codes) for name, codes in region_categories.items()
+                }
         cert["plan"] = plan
-        verification, failed = _verify_plan(explainer, x, result.x_cf, interval, region_intervals)
+        verification, failed = _verify_plan(
+            explainer, x, result.x_cf, interval, region_intervals, region_categories
+        )
         if failed:
             warnings.warn(
                 "certificate verification failed: " + ", ".join(failed)
@@ -509,6 +579,18 @@ def check_certificate(
         mismatches.append("constraints fingerprint does not match this explainer's constraint set")
 
     verification_ok = True
+    schema_version = cert.get("schema_version", 1)
+    if schema_version not in (1, 2):
+        return {
+            "model_match": model_match,
+            "constraints_match": constraints_match,
+            "verification_ok": False,
+            "mismatches": [
+                *mismatches,
+                f"unknown certificate schema_version {schema_version!r} "
+                "(this release verifies versions 1 and 2)",
+            ],
+        }
     try:
         target = cert.get("target")
         if not isinstance(target, dict):
@@ -531,7 +613,14 @@ def check_certificate(
                     str(name): (_from_json_float(pair[0]), _from_json_float(pair[1]))
                     for name, pair in stored_intervals.items()
                 }
-            _, failed = _verify_plan(explainer, x, x_cf, interval, intervals)
+            categories: dict[str, tuple[int, ...]] | None = None
+            stored_categories = plan.get("region_feature_categories")
+            if isinstance(stored_categories, dict):  # version 1 files carry none
+                categories = {
+                    str(name): tuple(int(c) for c in codes)
+                    for name, codes in stored_categories.items()
+                }
+            _, failed = _verify_plan(explainer, x, x_cf, interval, intervals, categories)
             if failed:
                 verification_ok = False
                 mismatches.extend(f"verification failed: {name}" for name in failed)

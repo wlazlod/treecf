@@ -89,10 +89,61 @@ def feature_cells(*irs: EnsembleIR) -> tuple[tuple[Cell, ...], ...]:
     for ir in irs:
         for tree in ir.trees:
             for node in tree.nodes:
-                if node.feature is not None:
+                # set-membership splits carry no threshold; their features
+                # partition into category blocks instead of interval cells
+                if node.feature is not None and node.categories is None:
                     assert node.threshold is not None and node.op is not None
                     pairs[node.feature].append((node.threshold, node.op))
     return tuple(build_cells(feature_pairs) for feature_pairs in pairs)
+
+
+def category_blocks(*irs: EnsembleIR) -> dict[int, tuple[tuple[int, ...], ...]]:
+    """Category blocks per categorical feature across all given ensembles.
+
+    Two codes share a block iff no split in any ensemble separates them:
+    set-membership splits partition by membership, and numeric splits on a
+    categorical feature (an isolation forest trained on raw codes) partition
+    by threshold side. Blocks are ordered by their smallest member code, block
+    members ascend, and a block's representative is its smallest member.
+    """
+    cardinality: dict[int, int] = {}
+    for ir in irs:
+        for j, info in ir.categorical.items():
+            if cardinality.setdefault(j, info.cardinality) != info.cardinality:
+                raise ValueError(f"ensembles disagree on the cardinality of feature {j}")
+
+    set_splits: dict[int, list[frozenset[int]]] = {j: [] for j in cardinality}
+    numeric_splits: dict[int, list[tuple[float, SplitOp]]] = {j: [] for j in cardinality}
+    for ir in irs:
+        for tree in ir.trees:
+            for node in tree.nodes:
+                if node.feature is None:
+                    continue
+                if node.categories is not None:
+                    if node.feature not in cardinality:
+                        raise ValueError(
+                            f"set split on feature {node.feature} which no ensemble "
+                            "declares categorical"
+                        )
+                    set_splits[node.feature].append(node.categories)
+                elif node.feature in cardinality:
+                    assert node.threshold is not None and node.op is not None
+                    numeric_splits[node.feature].append((node.threshold, node.op))
+
+    blocks: dict[int, tuple[tuple[int, ...], ...]] = {}
+    for j, k in sorted(cardinality.items()):
+        signatures: list[tuple[bool, ...]] = []
+        for code in range(k):
+            sig = [code in members for members in set_splits[j]]
+            for threshold, op in numeric_splits[j]:
+                sig.append(code < threshold if op is SplitOp.LT else code <= threshold)
+            signatures.append(tuple(sig))
+        groups: dict[tuple[bool, ...], list[int]] = {}
+        for code in range(k):
+            groups.setdefault(signatures[code], []).append(code)
+        # codes scan ascending, so insertion order == ascending smallest member
+        blocks[j] = tuple(tuple(members) for members in groups.values())
+    return blocks
 
 
 def cell_index(cells: tuple[Cell, ...], x: float) -> int:

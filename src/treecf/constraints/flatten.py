@@ -14,6 +14,7 @@ import numpy as np
 
 from treecf.constraints.compile import CompiledConstraints
 from treecf.constraints.objects import Equals, Freeze, Monotone, Range
+from treecf.ir.evaluate import bitset_words
 
 _OP_CODE = {"<=": 0, ">=": 1, "==": 2}
 _POLICY_CODE = {"satisfied": 0, "forbid_missing": 1, "violated": 1}
@@ -65,6 +66,16 @@ def flatten_constraints(compiled: CompiledConstraints) -> dict[str, Any]:
         oh_offsets.append(len(oh_indices))
 
     am_idx = sorted(compiled.allow_missing)
+
+    ac_idx = sorted(compiled.allowed_categories)
+    ac_offsets = [0]
+    ac_words: list[int] = []
+    for j in ac_idx:
+        allowed = compiled.allowed_categories[j]
+        if allowed:
+            ac_words.extend(bitset_words(allowed))
+        ac_offsets.append(len(ac_words))
+
     return {
         "n_features": len(compiled.feature_names),
         "freeze": np.asarray(freeze, dtype=np.uint32),
@@ -102,4 +113,7 @@ def flatten_constraints(compiled: CompiledConstraints) -> dict[str, Any]:
         "am_from": np.asarray(
             [compiled.allow_missing[j][1] for j in am_idx], dtype=np.float64
         ),
+        "ac_idx": np.asarray(ac_idx, dtype=np.uint32),
+        "ac_offsets": np.asarray(ac_offsets, dtype=np.uint32),
+        "ac_words": np.asarray(ac_words, dtype=np.uint64),
     }

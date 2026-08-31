@@ -16,6 +16,8 @@ calibrator object (e.g. a probcal calibrator) satisfying the duck-typed
 protocol — no calibration library is imported:
 
 ```python
+from typing import Protocol
+
 class SupportsIntervalInverse(Protocol):
     is_monotone_: bool
     def interval_inverse(
@@ -24,8 +26,11 @@ class SupportsIntervalInverse(Protocol):
 ```
 
 ```python
-target = treecf.Target.calibrated(cal, op="<=", value=0.02)   # calibrated PD ≤ 2%
-result = explainer.explain(x, target=target)
+# exp, x, cal: the docs explainer, one rejected applicant, a fitted calibrator
+import treecf
+
+cal_target = treecf.Target.calibrated(cal, op="<=", value=0.02)   # calibrated PD ≤ 2%
+result = exp.explain(x, target=cal_target, seed=0)
 ```
 
 Pass `buffer_logit=m` to guard the counterfactual against future
@@ -33,7 +38,10 @@ recalibration or central-tendency drift of magnitude ≤ m in log-odds. For a
 masterscale defined on calibrated PD, bands invert per band:
 
 ```python
-target = treecf.Target.bands(
+# cal: a fitted calibrator from the docs vocabulary
+import treecf
+
+bands = treecf.Target.bands(
     {"A": (0.0, 0.005), "B": (0.005, 0.02), "C": (0.02, 0.10)},
     space="calibrated",
     calibrator=cal,

@@ -359,3 +359,63 @@ class TestMaxCombosGuard:
         sigma = weights = np.ones(3)
         with pytest.raises(ValueError, match="combos exceed oracle guard"):
             solve_brute_force(ir, x, (-math.inf, math.inf), compiled, sigma, weights)
+
+
+class TestCategoricalOracle:
+    """Blocks are the categorical enumeration unit; a change costs one flat unit."""
+
+    @staticmethod
+    def _mixed_ir():
+        from treecf.ir.model import CategoricalFeature, EnsembleIR, Link, Node, SplitOp, Tree
+
+        t0 = Tree(
+            nodes=(
+                Node(0, 0, None, None, True, 1, 2, None, categories=frozenset({2, 3})),
+                Node(1, None, None, None, None, None, None, 1.0),
+                Node(2, None, None, None, None, None, None, 0.0),
+            )
+        )
+        t1 = Tree(
+            nodes=(
+                Node(0, 1, 0.5, SplitOp.LE, True, 1, 2, None),
+                Node(1, None, None, None, None, None, None, 0.0),
+                Node(2, None, None, None, None, None, None, 1.0),
+            )
+        )
+        return EnsembleIR(
+            trees=(t0, t1),
+            base_score=0.0,
+            link=Link.IDENTITY,
+            n_features=2,
+            feature_names=("occupation", "amount"),
+            meta={},
+            categorical={0: CategoricalFeature(cardinality=5)},
+        )
+
+    def test_oracle_enumerates_block_representatives(self) -> None:
+        from treecf.constraints.compile import compile_constraints
+
+        ir = self._mixed_ir()
+        compiled = compile_constraints((), ir.feature_names)
+        x = np.array([0.0, 0.0])
+        result = solve_brute_force(
+            ir, x, (2.0, math.inf), compiled, np.ones(2), np.ones(2), lam=0.0
+        )
+        assert result.feasible and result.x_cf is not None
+        # only codes {2, 3} reach the target; the block representative is 2
+        assert result.x_cf[0] == 2.0
+        amount = result.x_cf[1]
+        assert amount > 0.5
+        # flat unit for the category change plus the numeric move
+        assert result.objective == pytest.approx(1.0 + amount, abs=1e-12)
+
+    def test_certified_infeasible_when_no_block_reaches(self) -> None:
+        from treecf.constraints.compile import compile_constraints
+
+        ir = self._mixed_ir()
+        compiled = compile_constraints((), ir.feature_names)
+        x = np.array([0.0, 0.0])
+        result = solve_brute_force(
+            ir, x, (3.0, math.inf), compiled, np.ones(2), np.ones(2), lam=0.0
+        )
+        assert not result.feasible and result.x_cf is None

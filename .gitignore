@@ -32,3 +32,4 @@ rust/target/
 
 # compiled extension: built by maturin (CI wheels / local maturin develop), never tracked
 *.so
+catboost_info/

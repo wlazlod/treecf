@@ -166,3 +166,85 @@ def test_exact_threshold_point_routes_like_sklearn() -> None:
             )
             checked += 1
     assert checked > 50
+
+
+def _hgb_categorical_data(seed: int, cardinalities: dict[int, int]) -> tuple:
+    X, y, _ = make_synthetic(seed=seed, nan_frac=0.1)
+    rng = np.random.default_rng(seed)
+    for j, k in cardinalities.items():
+        codes = rng.integers(0, k, size=len(X)).astype(np.float64)
+        codes[rng.random(len(X)) < 0.1] = np.nan
+        X[:, j] = codes
+        y = np.where(np.isnan(codes), y, (y + (codes % 2)) % 2)
+    return X, y
+
+
+def test_hist_gradient_boosting_native_categorical() -> None:
+    X, y = _hgb_categorical_data(seed=31, cardinalities={1: 5, 3: 9})
+    clf = HistGradientBoostingClassifier(
+        max_iter=20, max_depth=4, random_state=0, categorical_features=[1, 3]
+    )
+    clf.fit(X, y)
+    ir = parse_model(clf)
+    assert set(ir.categorical) == {1, 3}
+    assert any(node.categories is not None for tree in ir.trees for node in tree.nodes)
+    assert_conformance(ir, X, lambda A: clf.predict_proba(A)[:, 1])
+
+
+def test_hist_gradient_boosting_categorical_regressor_sparse_codes() -> None:
+    # codes {0, 2, 5} only: the encoder's positions differ from the raw codes,
+    # and the unseen codes 1/3/4 must route like missing values
+    X, y, _ = make_synthetic(seed=32, nan_frac=0.0)
+    rng = np.random.default_rng(32)
+    codes = rng.choice([0.0, 2.0, 5.0], size=len(X))
+    X[:, 1] = codes
+    y = y + (codes == 2)
+    reg = HistGradientBoostingRegressor(
+        max_iter=15, max_depth=3, random_state=0, categorical_features=[1]
+    )
+    reg.fit(X, y)
+    ir = parse_model(reg)
+    assert ir.categorical[1].cardinality == 6
+    assert_conformance(ir, X, reg.predict)
+
+
+def test_hist_gradient_boosting_string_categories_need_a_code_map() -> None:
+    pd = pytest.importorskip("pandas")
+    rng = np.random.default_rng(33)
+    n = 500
+    names = ["clerk", "manager", "nurse"]
+    frame = pd.DataFrame(
+        {
+            "num": rng.normal(size=n),
+            "occupation": pd.Categorical(rng.choice(names, size=n), categories=names),
+        }
+    )
+    y = ((frame["occupation"].cat.codes % 2).to_numpy() ^ (frame["num"] > 0)).astype(int)
+    clf = HistGradientBoostingClassifier(
+        max_iter=10, max_depth=3, random_state=0, categorical_features="from_dtype"
+    )
+    clf.fit(frame, y)
+    with pytest.raises(UnsupportedModelError, match="categories"):
+        parse_model(clf)
+    from treecf.ir.parsers.sklearn import parse_sklearn
+
+    ir = parse_sklearn(clf, categories={"occupation": names})
+    assert ir.categorical[1].categories == tuple(names)
+    X = np.column_stack(
+        [frame["num"].to_numpy(), frame["occupation"].cat.codes.to_numpy(dtype=np.float64)]
+    )
+
+    def predict(A: np.ndarray) -> np.ndarray:
+        probe = pd.DataFrame(
+            {
+                "num": A[:, 0],
+                "occupation": pd.Categorical.from_codes(
+                    np.where(np.isnan(A[:, 1]) | (A[:, 1] >= len(names)), -1, A[:, 1])
+                    .astype(int),
+                    categories=names,
+                ),
+            }
+        )
+        return clf.predict_proba(probe)[:, 1]
+
+    assert_conformance(ir, X, predict, n_random=2000)

@@ -15,7 +15,8 @@ from typing import Any
 
 import numpy as np
 
-from treecf.ir.model import EnsembleIR, Link, Node, SplitOp, Tree
+from treecf.ir.evaluate import bitset_words
+from treecf.ir.model import CategoricalFeature, EnsembleIR, Link, Node, SplitOp, Tree
 
 
 def flatten_ir(ir: EnsembleIR) -> dict[str, Any]:
@@ -28,6 +29,9 @@ def flatten_ir(ir: EnsembleIR) -> dict[str, Any]:
     right = np.zeros(n_nodes, dtype=np.uint32)
     value = np.zeros(n_nodes, dtype=np.float64)
     tree_roots = np.zeros(len(ir.trees), dtype=np.uint32)
+    node_set = np.full(n_nodes, -1, dtype=np.int32)
+    set_offsets = [0]
+    set_words: list[int] = []
 
     offset = 0
     for t, tree in enumerate(ir.trees):
@@ -39,14 +43,19 @@ def flatten_ir(ir: EnsembleIR) -> dict[str, Any]:
                 value[i] = float(node.value)  # type: ignore[arg-type]
             else:
                 feature[i] = node.feature
-                threshold[i] = float(node.threshold)  # type: ignore[arg-type]
-                is_lt[i] = 1 if node.op is SplitOp.LT else 0
                 missing_left[i] = 1 if node.missing_left else 0
                 left[i] = offset + int(node.left)  # type: ignore[arg-type]
                 right[i] = offset + int(node.right)  # type: ignore[arg-type]
+                if node.categories is not None:
+                    node_set[i] = len(set_offsets) - 1
+                    set_words.extend(bitset_words(node.categories))
+                    set_offsets.append(len(set_words))
+                else:
+                    threshold[i] = float(node.threshold)  # type: ignore[arg-type]
+                    is_lt[i] = 1 if node.op is SplitOp.LT else 0
         offset += len(tree.nodes)
 
-    return {
+    flat = {
         "feature": feature,
         "threshold": threshold,
         "is_lt": is_lt,
@@ -60,6 +69,15 @@ def flatten_ir(ir: EnsembleIR) -> dict[str, Any]:
         "n_features": int(ir.n_features),
         "feature_names": list(ir.feature_names),
     }
+    if ir.categorical or set_words:
+        flat["node_set"] = node_set
+        flat["set_offsets"] = np.array(set_offsets, dtype=np.uint32)
+        flat["set_words"] = np.array(set_words, dtype=np.uint64)
+        flat["cat_idx"] = np.array(sorted(ir.categorical), dtype=np.uint32)
+        flat["cat_card"] = np.array(
+            [ir.categorical[j].cardinality for j in sorted(ir.categorical)], dtype=np.uint32
+        )
+    return flat
 
 
 def unflatten_ir(flat: dict[str, Any]) -> EnsembleIR:
@@ -73,6 +91,21 @@ def unflatten_ir(flat: dict[str, Any]) -> EnsembleIR:
     value = np.asarray(flat["value"], dtype=np.float64)
     tree_roots = np.asarray(flat["tree_roots"], dtype=np.uint32)
 
+    node_set = np.asarray(flat.get("node_set", np.full(len(feature), -1)), dtype=np.int32)
+    set_offsets = np.asarray(flat.get("set_offsets", [0]), dtype=np.uint32)
+    set_words = np.asarray(flat.get("set_words", []), dtype=np.uint64)
+    cat_idx = np.asarray(flat.get("cat_idx", []), dtype=np.uint32)
+    cat_card = np.asarray(flat.get("cat_card", []), dtype=np.uint32)
+
+    def set_members(sid: int) -> frozenset[int]:
+        start, end = int(set_offsets[sid]), int(set_offsets[sid + 1])
+        return frozenset(
+            w * 64 + b
+            for w in range(end - start)
+            for b in range(64)
+            if int(set_words[start + w]) >> b & 1
+        )
+
     n_nodes = len(feature)
     boundaries = [*tree_roots.tolist(), n_nodes]
     trees = []
@@ -82,8 +115,20 @@ def unflatten_ir(flat: dict[str, Any]) -> EnsembleIR:
         for i in range(start, end):
             node_id = i - start
             if feature[i] < 0:
+                nodes.append(Node(node_id, None, None, None, None, None, None, float(value[i])))
+            elif node_set[i] >= 0:
                 nodes.append(
-                    Node(node_id, None, None, None, None, None, None, float(value[i]))
+                    Node(
+                        node_id=node_id,
+                        feature=int(feature[i]),
+                        threshold=None,
+                        op=None,
+                        missing_left=bool(missing_left[i]),
+                        left=int(left[i]) - start,
+                        right=int(right[i]) - start,
+                        value=None,
+                        categories=set_members(int(node_set[i])),
+                    )
                 )
             else:
                 nodes.append(
@@ -107,4 +152,8 @@ def unflatten_ir(flat: dict[str, Any]) -> EnsembleIR:
         n_features=int(flat["n_features"]),
         feature_names=tuple(flat["feature_names"]),
         meta={"source": "flat"},
+        categorical={
+            int(j): CategoricalFeature(cardinality=int(k))
+            for j, k in zip(cat_idx.tolist(), cat_card.tolist(), strict=True)
+        },
     )

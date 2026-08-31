@@ -9,6 +9,18 @@ from typing import Any
 from treecf._errors import MissingExtraError, TreecfError
 from treecf.api import Counterfactual, Infeasible
 
+__all__ = [
+    "plot_alternatives",
+    "plot_changes",
+    "plot_counterfactuals",
+    "plot_effort",
+    "plot_ladder",
+    "plot_recourse_map",
+    "plot_region",
+    "plot_tradeoff",
+    "plot_waterfall",
+]
+
 
 def plot_changes(cf: Counterfactual, ax: Any = None) -> Any:
     """Dumbbell chart of per-feature changes (from -> to); NaN transitions annotated.
@@ -18,15 +30,21 @@ def plot_changes(cf: Counterfactual, ax: Any = None) -> Any:
     transitions to or from ``NaN`` is drawn as a single gray dot annotated
     ``"-> NaN"``/``"NaN ->"`` instead.
 
-    Args:
-        cf: The counterfactual to plot.
-        ax: Existing axes to draw on; a new figure is created if omitted.
+    Parameters
+    ----------
+    cf
+        The counterfactual to plot.
+    ax
+        Existing axes to draw on; a new figure is created if omitted.
 
-    Returns:
-        The axes the chart was drawn on.
+    Returns
+    -------
+    The axes the chart was drawn on.
 
-    Raises:
-        MissingExtraError: If matplotlib is not installed.
+    Raises
+    ------
+    MissingExtraError
+        If matplotlib is not installed.
     """
     plt = _import_pyplot()
     if ax is None:
@@ -69,16 +87,22 @@ def plot_counterfactuals(results: Sequence[Counterfactual], ax: Any = None) -> A
     Rows are labeled by rank and distance (``#1 (J=...)``, ...), in the order
     ``results`` is given.
 
-    Args:
-        results: The counterfactuals to compare (e.g. the ``k`` alternatives
-            for one row from ``diversity="seeds"``/``"lever-blocking"``).
-        ax: Existing axes to draw on; a new figure is created if omitted.
+    Parameters
+    ----------
+    results
+        The counterfactuals to compare (e.g. the ``k`` alternatives
+        for one row from ``diversity="seeds"``/``"lever-blocking"``).
+    ax
+        Existing axes to draw on; a new figure is created if omitted.
 
-    Returns:
-        The axes the matrix was drawn on.
+    Returns
+    -------
+    The axes the matrix was drawn on.
 
-    Raises:
-        MissingExtraError: If matplotlib is not installed.
+    Raises
+    ------
+    MissingExtraError
+        If matplotlib is not installed.
     """
     plt = _import_pyplot()
     features = sorted({name for cf in results for name in cf.changes})
@@ -102,15 +126,21 @@ def plot_ladder(bands_result: Mapping[str, object], ax: Any = None) -> Any:
     ``Counterfactual`` bar is its ``distance``, an ``Infeasible`` band is
     drawn at zero height and labeled ``"infeasible"``.
 
-    Args:
-        bands_result: The dict returned by ``explain(x, target=Target.bands(...))``.
-        ax: Existing axes to draw on; a new figure is created if omitted.
+    Parameters
+    ----------
+    bands_result
+        The dict returned by ``explain(x, target=Target.bands(...))``.
+    ax
+        Existing axes to draw on; a new figure is created if omitted.
 
-    Returns:
-        The axes the chart was drawn on.
+    Returns
+    -------
+    The axes the chart was drawn on.
 
-    Raises:
-        MissingExtraError: If matplotlib is not installed.
+    Raises
+    ------
+    MissingExtraError
+        If matplotlib is not installed.
     """
     plt = _import_pyplot()
     if ax is None:
@@ -151,20 +181,28 @@ def plot_alternatives(results: Any, explainer: Any = None, ax: Any = None) -> An
     factual (Δ/σ), so features of different scales share one axis; without,
     raw values are shown with gray factual dots.
 
-    Args:
-        results: The plans to overlay — a sequence, or a mapping keyed by
-            plan name; see above for accepted element types.
-        explainer: When given, changes are standardized by its per-feature
-            ``sigma``; when omitted, raw feature values are plotted instead.
-        ax: Existing axes to draw on; a new figure is created if omitted.
+    Parameters
+    ----------
+    results
+        The plans to overlay — a sequence, or a mapping keyed by
+        plan name; see above for accepted element types.
+    explainer
+        When given, changes are standardized by its per-feature
+        ``sigma``; when omitted, raw feature values are plotted instead.
+    ax
+        Existing axes to draw on; a new figure is created if omitted.
 
-    Returns:
-        The axes the chart was drawn on.
+    Returns
+    -------
+    The axes the chart was drawn on.
 
-    Raises:
-        MissingExtraError: If matplotlib is not installed.
-        TreecfError: If ``results`` contains no feasible plans, or more than
-            10.
+    Raises
+    ------
+    MissingExtraError
+        If matplotlib is not installed.
+    TreecfError
+        If ``results`` contains no feasible plans, or more than
+        10.
     """
     plt = _import_pyplot()
     plans = _plans_with_labels(results)
@@ -235,19 +273,27 @@ def plot_tradeoff(results: Any, target: Any = None, ax: Any = None) -> Any:
     ``BatchRecord`` entries, or a mapping as returned by
     ``explain_coalitions`` (keys label the dots; ``Infeasible`` skipped).
 
-    Args:
-        results: The plans to plot; see above for accepted shapes.
-        target: When given, draws the target interval's finite bounds
-            (mapped into the same probability/raw space as the plans) as
-            horizontal reference lines.
-        ax: Existing axes to draw on; a new figure is created if omitted.
+    Parameters
+    ----------
+    results
+        The plans to plot; see above for accepted shapes.
+    target
+        When given, draws the target interval's finite bounds
+        (mapped into the same probability/raw space as the plans) as
+        horizontal reference lines.
+    ax
+        Existing axes to draw on; a new figure is created if omitted.
 
-    Returns:
-        The axes the chart was drawn on.
+    Returns
+    -------
+    The axes the chart was drawn on.
 
-    Raises:
-        MissingExtraError: If matplotlib is not installed.
-        TreecfError: If ``results`` contains no feasible plans.
+    Raises
+    ------
+    MissingExtraError
+        If matplotlib is not installed.
+    TreecfError
+        If ``results`` contains no feasible plans.
     """
     plt = _import_pyplot()
     plans = _plans_with_labels(results)
@@ -319,40 +365,57 @@ def plot_recourse_map(
     it). ``region_labels`` names the two sides of the boundary in
     ``schematic`` mode.
 
-    Args:
-        explainer: Explainer wrapping the model; supplies the link function
-            and the counterfactual distance weights used to order each
-            plan's changes.
-        x: Factual feature vector.
-        results: Counterfactual outcomes for ``x`` — a single result, a
-            sequence, or a mapping (as returned by ``explain_coalitions``).
-            Feasible and infeasible entries are both accepted.
-        target: The target interval the plans were solved against; also
-            drawn as the band (or boundary, in schematic mode).
-        ax: Existing axes to draw on; a new figure is created if omitted.
-        space: ``"probability"``, ``"raw"``, or ``"auto"`` (default) to pick
-            the model-output axis space from the model's link function.
-        annotate: Draw a text label at each plan's point; in ``schematic``
-            mode, also gates whether ``show_factual_label`` draws its block.
-        max_changes_per_label: Schematic mode only. Number of changed
-            features shown per label before truncating to "(+k more)".
-        fmt: Schematic mode only. Format string for changed feature values
-            in labels.
-        schematic: Render the slide-friendly boundary view instead of the
-            quantitative axes.
-        region_labels: The (reject-side, accept-side) names drawn next to
-            the boundary in schematic mode.
-        show_factual_label: Schematic mode only. Draw an anchored corner
-            box, on the factual's screen side, listing the features any
-            plan changed.
+    Parameters
+    ----------
+    explainer
+        Explainer wrapping the model; supplies the link function
+        and the counterfactual distance weights used to order each
+        plan's changes.
+    x
+        Factual feature vector.
+    results
+        Counterfactual outcomes for ``x`` — a single result, a
+        sequence, or a mapping (as returned by ``explain_coalitions``).
+        Feasible and infeasible entries are both accepted.
+    target
+        The target interval the plans were solved against; also
+        drawn as the band (or boundary, in schematic mode).
+    ax
+        Existing axes to draw on; a new figure is created if omitted.
+    space
+        ``"probability"``, ``"raw"``, or ``"auto"`` (default) to pick
+        the model-output axis space from the model's link function.
+    annotate
+        Draw a text label at each plan's point; in ``schematic``
+        mode, also gates whether ``show_factual_label`` draws its block.
+    max_changes_per_label
+        Schematic mode only. Number of changed
+        features shown per label before truncating to "(+k more)".
+    fmt
+        Schematic mode only. Format string for changed feature values
+        in labels.
+    schematic
+        Render the slide-friendly boundary view instead of the
+        quantitative axes.
+    region_labels
+        The (reject-side, accept-side) names drawn next to
+        the boundary in schematic mode.
+    show_factual_label
+        Schematic mode only. Draw an anchored corner
+        box, on the factual's screen side, listing the features any
+        plan changed.
 
-    Returns:
-        The axes the recourse map was drawn on.
+    Returns
+    -------
+    The axes the recourse map was drawn on.
 
-    Raises:
-        MissingExtraError: If matplotlib is not installed.
-        TreecfError: If ``results`` contains no plans at all, or more than
-            10 feasible plans.
+    Raises
+    ------
+    MissingExtraError
+        If matplotlib is not installed.
+    TreecfError
+        If ``results`` contains no plans at all, or more than
+        10 feasible plans.
     """
     from treecf.ir.evaluate import apply_link, raw_score
     from treecf.ir.model import Link
@@ -650,19 +713,27 @@ def plot_waterfall(explainer: Any, cf: Counterfactual, target: Any = None, ax: A
     sequential and therefore order-dependent, like any sequential decomposition).
     Sigmoid-link models are plotted in probability space.
 
-    Args:
-        explainer: Explainer wrapping the model; supplies the IR the score
-            deltas are recomputed through and the link function.
-        cf: The counterfactual to decompose.
-        target: When given, draws the target interval's finite bounds (in the
-            same display space) as vertical reference lines.
-        ax: Existing axes to draw on; a new figure is created if omitted.
+    Parameters
+    ----------
+    explainer
+        Explainer wrapping the model; supplies the IR the score
+        deltas are recomputed through and the link function.
+    cf
+        The counterfactual to decompose.
+    target
+        When given, draws the target interval's finite bounds (in the
+        same display space) as vertical reference lines.
+    ax
+        Existing axes to draw on; a new figure is created if omitted.
 
-    Returns:
-        The axes the waterfall was drawn on.
+    Returns
+    -------
+    The axes the waterfall was drawn on.
 
-    Raises:
-        MissingExtraError: If matplotlib is not installed.
+    Raises
+    ------
+    MissingExtraError
+        If matplotlib is not installed.
     """
     import numpy as np
 
@@ -740,17 +811,24 @@ def plot_effort(explainer: Any, cf: Counterfactual, ax: Any = None) -> Any:
     descending. Unlike ``plot_waterfall``'s exact score deltas, this
     decomposes the recourse *cost*, not the model score.
 
-    Args:
-        explainer: Explainer wrapping the model; supplies the distance
-            weights and normalizers each contribution is computed from.
-        cf: The counterfactual to decompose.
-        ax: Existing axes to draw on; a new figure is created if omitted.
+    Parameters
+    ----------
+    explainer
+        Explainer wrapping the model; supplies the distance
+        weights and normalizers each contribution is computed from.
+    cf
+        The counterfactual to decompose.
+    ax
+        Existing axes to draw on; a new figure is created if omitted.
 
-    Returns:
-        The axes the chart was drawn on.
+    Returns
+    -------
+    The axes the chart was drawn on.
 
-    Raises:
-        MissingExtraError: If matplotlib is not installed.
+    Raises
+    ------
+    MissingExtraError
+        If matplotlib is not installed.
     """
     plt = _import_pyplot()
     contributions = sorted(
@@ -814,6 +892,7 @@ def _format_plan(
     """
     changes = plan.changes
     efforts = _change_effort(explainer, changes)
+    cat_info = _categorical_info(explainer)
     region = getattr(plan, "region", None)
     describe = getattr(region, "describe", None)
     region_phrases: Mapping[str, str] = {}
@@ -832,6 +911,10 @@ def _format_plan(
             parts.append(f"provide {f} = {fmt.format(dest)}")
         elif f in region_phrases:
             parts.append(region_phrases[f])
+        elif f in cat_info:
+            source_label = _code_label(cat_info[f], source)
+            dest_label = _code_label(cat_info[f], dest)
+            parts.append(f"{f}: {source_label} → {dest_label}")
         else:
             parts.append(f"{f} = {fmt.format(dest)}")
 
@@ -856,6 +939,337 @@ def _format_plan(
     j_suffix = f"(J={plan.distance:.3g})"
     lines[-1] = f"{lines[-1]} {j_suffix}" if lines[-1] else j_suffix
     return "\n".join(lines)
+
+
+def plot_region(
+    explainer: Any,
+    x: Any,
+    result: Any,
+    *,
+    ax: Any = None,
+    units: str = "sigma",
+    order: str = "index",
+    annotate: bool = True,
+    fmt: str = "{:.3g}",
+    max_features: int | None = None,
+) -> Any:
+    """Per-feature view of a certified recourse region: how far each value can
+    move while staying certified, and what stopped it.
+
+    Each widened numeric feature draws its certified interval as a thick bar
+    (``units="sigma"``: one shared axis in sigma-units from the factual, so
+    every factual sits at 0; ``units="raw"``: small multiples, one strip per
+    feature on its own scale). The factual is a hollow circle, the
+    counterfactual a filled marker, and the instance bounds faint whiskers. A
+    finite bar end carries a cap saying what limited it: a bracket where the
+    end coincides with an instance bound (a constraint stopped it), a plain
+    tick where the model's own routing did; an infinite end runs to the axis
+    edge with an open arrow. Categorical features draw one tile per category
+    code — filled when certified, outlined at the factual's code, marked at
+    the counterfactual's, hatched where a declared allowed set excludes the
+    code; the tiles are nominal, so their positions carry no meaning. The
+    legend records that the region is certified but not necessarily maximal.
+
+    Parameters
+    ----------
+    explainer : Explainer
+        The explainer that produced the result (bounds, normalizers, names).
+    x : array-like
+        The factual row the region is anchored at.
+    result : Counterfactual or (RecourseRegion, array-like)
+        A result carrying ``region``, or an explicit ``(region, x_cf)`` pair.
+    ax : matplotlib axes, optional
+        Target axes for ``units="sigma"``; ignored for ``units="raw"``.
+    units : {"sigma", "raw"}
+        Shared sigma-unit axis, or per-feature raw-value strips.
+    order : {"index", "cost"}
+        Row order: ascending feature index, or descending cost contribution.
+    annotate : bool
+        Annotate raw values at the bar ends.
+    fmt : str
+        Format string for annotations.
+    max_features : int, optional
+        Cap on rows; the rest are summarized as ``"(+k more)"``.
+
+    Returns
+    -------
+    matplotlib axes, or an array of axes for ``units="raw"``.
+
+    Raises
+    ------
+    MissingExtraError
+        If matplotlib is not installed.
+    TreecfError
+        If the result carries no region, or an argument is unrecognized.
+    """
+    plt = _import_pyplot()
+    import numpy as np
+
+    from treecf._errors import TreecfError
+
+    if isinstance(result, tuple):
+        region, x_cf = result
+    else:
+        region = getattr(result, "region", None)
+        x_cf = getattr(result, "x_cf", None)
+    if region is None:
+        raise TreecfError("result has no region; pass region=True to explain")
+    if units not in ("sigma", "raw"):
+        raise TreecfError(f"unknown units {units!r}; use 'sigma' or 'raw'")
+    if order not in ("index", "cost"):
+        raise TreecfError(f"unknown order {order!r}; use 'index' or 'cost'")
+
+    x = np.asarray(x, dtype=np.float64)
+    x_cf = np.asarray(x_cf, dtype=np.float64)
+    names = tuple(explainer.ir.feature_names)
+    index = {name: j for j, name in enumerate(names)}
+    sigma = np.asarray(explainer.sigma, dtype=np.float64)
+    weights = np.asarray(explainer.weights, dtype=np.float64)
+    lo_b, hi_b, _frozen = explainer.compiled.instance_bounds(x)
+    lo_b = np.where(np.isnan(lo_b), -math.inf, lo_b)
+    hi_b = np.where(np.isnan(hi_b), math.inf, hi_b)
+
+    rows: list[tuple[int, str, str]] = []  # (feature index, name, kind)
+    for name in region.feature_intervals:
+        rows.append((index[name], name, "numeric"))
+    for name in getattr(region, "feature_categories", {}):
+        rows.append((index[name], name, "categorical"))
+
+    def cost_of(j: int) -> float:
+        if math.isnan(x[j]) or math.isnan(x_cf[j]) or x[j] == x_cf[j]:
+            return 0.0
+        delta = 1.0 if j in explainer.ir.categorical else abs(x_cf[j] - x[j])
+        return float(weights[j] * delta / sigma[j])
+
+    if order == "index":
+        rows.sort(key=lambda row: row[0])
+    else:
+        rows.sort(key=lambda row: (-cost_of(row[0]), row[0]))
+    total_rows = len(rows)
+    hidden = 0
+    if max_features is not None and total_rows > max_features:
+        hidden = total_rows - max_features
+        rows = rows[:max_features]
+
+    if units == "raw":
+        _, axes = plt.subplots(
+            len(rows), 1, figsize=(7, 1.1 * max(2, len(rows))), squeeze=False
+        )
+        axes = axes[:, 0]
+        for strip, (j, name, kind) in zip(axes, rows, strict=True):
+            _region_row(
+                strip, explainer, region, x, x_cf, j, name, kind,
+                sigma_units=False, y=0.0, lo_b=lo_b, hi_b=hi_b,
+                annotate=annotate, fmt=fmt,
+            )
+            strip.set_yticks([0.0])
+            strip.set_yticklabels([name])
+        _region_legend(axes[0])
+        axes[0].set_title(f"certified recourse region — {total_rows} feature(s)")
+        if hidden:
+            axes[-1].annotate(
+                f"(+{hidden} more)", xy=(0.99, 0.02), xycoords="axes fraction",
+                ha="right", fontsize=8, color="0.4",
+            )
+        return axes
+
+    if ax is None:
+        _, ax = plt.subplots(figsize=(7, 0.6 * max(2, len(rows))))
+    for i, (j, name, kind) in enumerate(rows):
+        _region_row(
+            ax, explainer, region, x, x_cf, j, name, kind,
+            sigma_units=True, y=float(len(rows) - 1 - i), lo_b=lo_b, hi_b=hi_b,
+            annotate=annotate, fmt=fmt,
+        )
+    ax.set_yticks([float(len(rows) - 1 - i) for i in range(len(rows))])
+    ax.set_yticklabels([name for _, name, _ in rows])
+    ax.set_xlabel("distance from the factual (sigma units)")
+    ax.set_title(f"certified recourse region — {total_rows} feature(s)")
+    if hidden:
+        ax.annotate(
+            f"(+{hidden} more)", xy=(0.99, 0.02), xycoords="axes fraction",
+            ha="right", fontsize=8, color="0.4",
+        )
+    _region_legend(ax)
+    return ax
+
+
+_CAP_MODEL = "stopped by the model"
+_CAP_CONSTRAINT = "stopped by a constraint"
+_CAP_CAVEAT = "certified, not necessarily maximal"
+
+
+def _constraint_limited(endpoint: float, bound: float) -> bool:
+    """The endpoint sits at the instance bound, within the one-float32-ulp
+    stepping region growth itself uses for open cell edges."""
+    import numpy as np
+
+    if not math.isfinite(bound):
+        return False
+    if endpoint == bound:
+        return True
+    with np.errstate(over="ignore"):
+        b32 = np.float32(bound)
+        ulp = abs(float(np.nextafter(b32, np.float32(math.inf))) - float(b32))
+    return abs(endpoint - bound) <= max(ulp, 4.0 * math.ulp(abs(bound)))
+
+
+def _region_row(
+    ax: Any,
+    explainer: Any,
+    region: Any,
+    x: Any,
+    x_cf: Any,
+    j: int,
+    name: str,
+    kind: str,
+    *,
+    sigma_units: bool,
+    y: float,
+    lo_b: Any,
+    hi_b: Any,
+    annotate: bool,
+    fmt: str,
+) -> None:
+    import numpy as np
+
+    if kind == "categorical":
+        _categorical_tiles(ax, explainer, region, x, x_cf, j, name, y)
+        return
+
+    sigma_j = float(explainer.sigma[j]) if sigma_units else 1.0
+    anchor = float(x[j]) if sigma_units else 0.0
+
+    def to_axis(value: float) -> float:
+        if not math.isfinite(value):
+            return value
+        return (value - anchor) / sigma_j if sigma_units else value
+
+    lo, hi = region.feature_intervals[name]
+    bound_lo, bound_hi = float(lo_b[j]), float(hi_b[j])
+
+    # faint whiskers for the instance bounds (finite parts only)
+    finite_lo = to_axis(bound_lo) if math.isfinite(bound_lo) else None
+    finite_hi = to_axis(bound_hi) if math.isfinite(bound_hi) else None
+    if finite_lo is not None or finite_hi is not None:
+        span = [v for v in (finite_lo, to_axis(lo), to_axis(hi), finite_hi) if v is not None]
+        span = [v for v in span if math.isfinite(v)]
+        if span:
+            ax.plot(
+                [min(span), max(span)], [y, y],
+                color="0.85", linewidth=1.0, zorder=1, solid_capstyle="butt",
+            )
+
+    seg_lo = to_axis(lo)
+    seg_hi = to_axis(hi)
+    finite_points = [v for v in (seg_lo, seg_hi, 0.0 if sigma_units else float(x[j]))
+                     if math.isfinite(v)]
+    draw_lo = seg_lo if math.isfinite(seg_lo) else min(finite_points, default=0.0) - 1.0
+    draw_hi = seg_hi if math.isfinite(seg_hi) else max(finite_points, default=0.0) + 1.0
+    ax.plot([draw_lo, draw_hi], [y, y], color="C0", linewidth=5, zorder=2,
+            solid_capstyle="butt")
+
+    for endpoint, drawn, side in ((lo, draw_lo, "lo"), (hi, draw_hi, "hi")):
+        if not math.isfinite(endpoint):
+            marker = "<" if side == "lo" else ">"
+            ax.plot([drawn], [y], marker=marker, markerfacecolor="none",
+                    markeredgecolor="C0", markersize=9, zorder=3,
+                    label="_region_open_end")
+            continue
+        bound = float(lo_b[j]) if side == "lo" else float(hi_b[j])
+        if _constraint_limited(endpoint, bound):
+            ax.plot([drawn], [y], marker="$[$" if side == "lo" else "$]$",
+                    color="C3", markersize=11, zorder=4, label="_cap_constraint")
+        else:
+            ax.plot([drawn], [y], marker="|", color="C0", markersize=11,
+                    markeredgewidth=2.5, zorder=4, label="_cap_model")
+        if annotate:
+            ax.annotate(
+                fmt.format(endpoint), xy=(drawn, y), xytext=(0, 8),
+                textcoords="offset points", ha="center", fontsize=7, color="0.35",
+            )
+
+    factual_pos = 0.0 if sigma_units else float(x[j])
+    if math.isfinite(factual_pos):
+        ax.plot([factual_pos], [y], marker="o", markerfacecolor="none",
+                markeredgecolor="0.2", markersize=7, zorder=5)
+    cf_pos = to_axis(float(x_cf[j]))
+    if math.isfinite(cf_pos):
+        ax.plot([cf_pos], [y], marker="o", color="C0", markersize=5, zorder=6)
+    del np
+
+
+def _categorical_tiles(
+    ax: Any, explainer: Any, region: Any, x: Any, x_cf: Any, j: int, name: str, y: float
+) -> None:
+    """Nominal tiles, one per category code, in axes-fraction x at data y."""
+    from matplotlib.patches import Rectangle
+    from matplotlib.transforms import blended_transform_factory
+
+    info = explainer.ir.categorical[j]
+    certified = set(region.feature_categories.get(name, ()))
+    allowed = explainer.compiled.allowed_categories.get(j)
+    trans = blended_transform_factory(ax.transAxes, ax.transData)
+    k = info.cardinality
+    pad = 0.08
+    width = (1.0 - 2 * pad) / k
+    for code in range(k):
+        left = pad + code * width
+        excluded = allowed is not None and code not in allowed
+        in_set = code in certified
+        face = "C0" if in_set else "none"
+        tile = Rectangle(
+            (left + 0.06 * width, y - 0.28), 0.88 * width, 0.56,
+            transform=trans,
+            facecolor=face, alpha=0.55 if in_set else 1.0,
+            edgecolor="0.2" if code == int(x[j]) else "0.6",
+            linewidth=2.2 if code == int(x[j]) else 0.8,
+            hatch="///" if excluded else None,
+        )
+        ax.add_patch(tile)
+        if code == int(x_cf[j]):
+            ax.plot([left + 0.5 * width], [y], marker="o", color="C0",
+                    markersize=5, zorder=6, transform=trans)
+        label = (
+            str(info.categories[code])
+            if info.categories is not None and code < len(info.categories)
+            else str(code)
+        )
+        ax.annotate(
+            label, xy=(left + 0.5 * width, y - 0.42), xycoords=trans,
+            ha="center", fontsize=6, color="0.35",
+        )
+
+
+def _region_legend(ax: Any) -> None:
+    from matplotlib.lines import Line2D
+
+    handles = [
+        Line2D([], [], marker="|", color="C0", markersize=10, markeredgewidth=2.5,
+               linestyle="none", label=_CAP_MODEL),
+        Line2D([], [], marker="$[$", color="C3", markersize=10, linestyle="none",
+               label=_CAP_CONSTRAINT),
+        Line2D([], [], linestyle="none", label=_CAP_CAVEAT),
+    ]
+    ax.legend(handles=handles, loc="best", fontsize=7, frameon=False)
+
+
+def _categorical_info(explainer: Any) -> dict[str, Any]:
+    """Per-feature categorical metadata keyed by name, when the explainer has any."""
+    ir = getattr(explainer, "ir", None)
+    categorical = getattr(ir, "categorical", None)
+    if ir is None or not categorical:
+        return {}
+    return {ir.feature_names[j]: info for j, info in categorical.items()}
+
+
+def _code_label(info: Any, value: float) -> str:
+    """A category code rendered by its display name when the model carries one."""
+    code = int(value)
+    names = getattr(info, "categories", None)
+    if names is not None and 0 <= code < len(names):
+        return str(names[code])
+    return str(code)
 
 
 def _import_pyplot() -> Any:

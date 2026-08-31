@@ -92,6 +92,7 @@ audit host with no xgboost installed explains identically to the native object. 
 [Models and the IR](concepts/models.md).
 
 ```python
+# docs: no-run — model / X_train stand in for your own trained model and data
 from treecf import Explainer, Freeze, Target, constraint
 
 exp = Explainer(
@@ -262,10 +263,13 @@ is snapped to conforming values *within their cells*; if snapping breaks validit
 reverted one at a time until the plan verifies again. What you get back is honest about it:
 
 ```python
-res = exp.explain(applicant, target=Target.probability(range=(0.0, 0.30)), seed=0)
+# exp, x: the docs explainer and one rejected applicant
+from treecf import Target
+
+res = exp.explain(x, target=Target.probability(range=(0.0, 0.05)), seed=0)
 res.proof        # "heuristic"
-res.score_prob   # 0.29…  — recomputed, in target
-res.changes      # {"utilization": (0.71, 0.419…), "max_dpd_12m": (9.0, 3.0)}
+res.score_prob   # recomputed, inside the target
+res.changes      # {"utilization": (0.52, 0.27…), ...}
 res.snapped      # which value policies actually applied
 ```
 
@@ -369,12 +373,12 @@ every feature outside the group frozen — freezing is already a constraint the 
 verifier understand, so no new search semantics are involved. For the running example:
 
 ```python
+# exp, x, target: the docs explainer, one rejected applicant, the target
 result = exp.explain_coalitions(
-    applicant, target=Target.probability(range=(0.0, 0.30)),
+    x, target=target,
     coalitions={
-        "debt history": ["max_dpd_30d", "max_dpd_12m", "months_since_last_delinq"],
-        "credit usage": ["utilization", "n_active_loans", "n_loans_total"],
-        "income":       ["income_monthly"],
+        "repayment":  ["utilization", "dpd_12m"],
+        "profile":    ["income", "tenure_months", "occupation"],
     },
     include_full=True, seed=0,
 )

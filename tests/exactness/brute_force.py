@@ -40,7 +40,7 @@ from dataclasses import dataclass
 import numpy as np
 import numpy.typing as npt
 
-from treecf.aim.cells import Cell
+from treecf.aim.cells import Cell, category_blocks
 from treecf.api import _snap
 from treecf.backends._exact_domains import _constraint_cells, _demanded_values
 from treecf.constraints.compile import CompiledConstraints
@@ -90,13 +90,39 @@ def solve_brute_force(
     # state when AllowMissing permits it; NaN factuals without AllowMissing stay NaN.
     # A value_policies entry snaps each non-NaN candidate; a cell whose snapped
     # representative leaves the cell ∩ bounds interval loses that option.
+    blocks = category_blocks(ir, if_ir) if if_ir is not None else category_blocks(ir)
+
     options: list[list[float]] = []
     for j in range(p):
         allow = j in compiled.allow_missing and not frozen[j]
         if math.isnan(x[j]) and not allow:
             options.append([math.nan])
             continue
-        values: list[float] = [math.nan] if allow else []
+        if j in blocks:
+            # categorical: one representative per block (plus keep/NaN); cost is
+            # flat within a block, so the smallest allowed member stands for all
+            # of it, and a declared allowed set filters both keep and blocks
+            allowed = compiled.allowed_categories.get(j)
+            values = [math.nan] if allow else []
+            if frozen[j]:
+                values.append(float(x[j]))
+                options.append(values)
+                continue
+            factual_ok = not math.isnan(x[j]) and (
+                allowed is None or (x[j] == int(x[j]) and int(x[j]) in allowed)
+            )
+            if factual_ok:
+                values.append(float(x[j]))
+            for block in blocks[j]:
+                members = block if allowed is None else [c for c in block if c in allowed]
+                if not members:
+                    continue
+                rep = float(members[0])
+                if rep not in values:
+                    values.append(rep)
+            options.append(values)
+            continue
+        values = [math.nan] if allow else []
         anchor = 0.0 if math.isnan(x[j]) else x[j]
         name = ir.feature_names[j]
         policy = value_policies.get(name) if value_policies is not None else None
@@ -148,7 +174,9 @@ def solve_brute_force(
             continue
         if not _relational_ok(candidate, compiled):
             continue
-        objective = _objective(candidate, x, sigma, weights, lam, compiled.allow_missing)
+        objective = _objective(
+            candidate, x, sigma, weights, lam, compiled.allow_missing, frozenset(blocks)
+        )
         if objective < best.objective:
             best = OracleResult(feasible=True, objective=objective, x_cf=candidate.copy())
     return best
@@ -216,6 +244,7 @@ def _objective(
     weights: FloatArray,
     lam: float,
     allow_missing: dict[int, tuple[float, float]],
+    categorical: frozenset[int] = frozenset(),
 ) -> float:
     total = 0.0
     for j in range(len(x)):
@@ -226,6 +255,9 @@ def _objective(
             total += weights[j] * allow_missing[j][0] / sigma[j] + lam
         elif x_nan:  # NaN -> value
             total += weights[j] * allow_missing[j][1] / sigma[j] + lam
+        elif j in categorical:
+            if candidate[j] != x[j]:  # a category change costs one flat unit
+                total += weights[j] * 1.0 / sigma[j] + lam
         else:
             delta = abs(candidate[j] - x[j])
             if delta > 0:

@@ -27,6 +27,9 @@ fn py_cmp(a: f64, b: f64) -> std::cmp::Ordering {
 
 /// One feature's contribution to the objective — the per-feature term of
 /// `genetic.objective()`, same four cases, same multiply-then-divide order.
+/// A categorical change (`is_cat`) costs one flat unit in place of the
+/// absolute code distance; NaN transitions keep their declared deltas.
+#[allow(clippy::too_many_arguments)]
 fn term_cost(
     x_j: f64,
     r: f64,
@@ -35,6 +38,7 @@ fn term_cost(
     lam: f64,
     to_miss: f64,
     from_miss: f64,
+    is_cat: bool,
 ) -> f64 {
     let x_nan = x_j.is_nan();
     let r_nan = r.is_nan();
@@ -50,11 +54,12 @@ fn term_cost(
     if r == x_j {
         return 0.0;
     }
-    let delta = (r - x_j).abs();
+    let delta = if is_cat { 1.0 } else { (r - x_j).abs() };
     lam + (weight_j * delta) / sigma_j
 }
 
 /// Full-row objective, accumulated in ascending feature index.
+/// `cardinality[j] > 0` marks feature j categorical (flat change cost).
 pub(crate) fn cost_of_row(
     x: &[f64],
     row: &[f64],
@@ -62,11 +67,21 @@ pub(crate) fn cost_of_row(
     weights: &[f64],
     lam: f64,
     deltas: &[(f64, f64)],
+    cardinality: &[u32],
 ) -> f64 {
     let mut total = 0.0;
     for j in 0..x.len() {
         let (to_miss, from_miss) = deltas[j];
-        total += term_cost(x[j], row[j], weights[j], sigma[j], lam, to_miss, from_miss);
+        total += term_cost(
+            x[j],
+            row[j],
+            weights[j],
+            sigma[j],
+            lam,
+            to_miss,
+            from_miss,
+            cardinality[j] > 0,
+        );
     }
     total
 }
@@ -376,6 +391,7 @@ pub(crate) fn build_domains(
     weights: &[f64],
     lam: f64,
     policies: &[Option<ValuePolicy>],
+    blocks: &[Vec<Vec<u32>>],
 ) -> Vec<Vec<State>> {
     let (lo, hi, frozen) = cons.instance_bounds(x);
     let lo: Vec<f64> = lo
@@ -414,6 +430,28 @@ pub(crate) fn build_domains(
         let (to_miss, from_miss) = deltas[j];
         let (weight_j, sigma_j) = (weights[j], sigma[j]);
 
+        if !blocks[j].is_empty() {
+            let allowed = cons
+                .allowed_categories
+                .iter()
+                .find(|(idx, _)| *idx as usize == j)
+                .map(|(_, words)| words.as_slice());
+            domains.push(categorical_states(
+                x_j,
+                &blocks[j],
+                allowed,
+                frozen[j],
+                allow_j,
+                suppress_nan[j],
+                weight_j,
+                sigma_j,
+                lam,
+                to_miss,
+                from_miss,
+            ));
+            continue;
+        }
+
         if frozen[j] {
             let idx = if x_nan {
                 cells.len()
@@ -429,11 +467,19 @@ pub(crate) fn build_domains(
             if !x_nan {
                 // the pin fixes the only value the feature may take; going
                 // missing is a separate question AllowMissing still answers
-                let cost = term_cost(x_j, v, weight_j, sigma_j, lam, to_miss, from_miss);
+                let cost = term_cost(x_j, v, weight_j, sigma_j, lam, to_miss, from_miss, false);
                 let mut states = vec![State::new(v, cost, cell_index(cells, v), false)];
                 if allow_j && !suppress_nan[j] {
-                    let nan_cost =
-                        term_cost(x_j, f64::NAN, weight_j, sigma_j, lam, to_miss, from_miss);
+                    let nan_cost = term_cost(
+                        x_j,
+                        f64::NAN,
+                        weight_j,
+                        sigma_j,
+                        lam,
+                        to_miss,
+                        from_miss,
+                        false,
+                    );
                     states.push(State::new(f64::NAN, nan_cost, cells.len(), true));
                     sort_states(&mut states);
                 }
@@ -449,7 +495,7 @@ pub(crate) fn build_domains(
                 states.push(State::new(f64::NAN, 0.0, cells.len(), true));
             }
             if allow_j {
-                let cost = term_cost(x_j, v, weight_j, sigma_j, lam, to_miss, from_miss);
+                let cost = term_cost(x_j, v, weight_j, sigma_j, lam, to_miss, from_miss, false);
                 states.push(State::new(v, cost, cell_index(cells, v), false));
             }
             sort_states(&mut states);
@@ -492,7 +538,8 @@ pub(crate) fn build_domains(
                     if keep_added && val == x_j {
                         continue;
                     }
-                    let cost = term_cost(x_j, val, weight_j, sigma_j, lam, to_miss, from_miss);
+                    let cost =
+                        term_cost(x_j, val, weight_j, sigma_j, lam, to_miss, from_miss, false);
                     states.push(State::new(val, cost, local_idx, false));
                 }
                 continue;
@@ -504,7 +551,7 @@ pub(crate) fn build_domains(
                 if !iv.contains(val) || (keep_added && val == x_j) {
                     continue;
                 }
-                let cost = term_cost(x_j, val, weight_j, sigma_j, lam, to_miss, from_miss);
+                let cost = term_cost(x_j, val, weight_j, sigma_j, lam, to_miss, from_miss, false);
                 states.push(State::new(val, cost, local_idx, false));
                 added_here.push(val);
             }
@@ -523,14 +570,23 @@ pub(crate) fn build_domains(
             if added_here.contains(&r) {
                 continue; // the demanded value was this cell's nearest point too
             }
-            let cost = term_cost(x_j, r, weight_j, sigma_j, lam, to_miss, from_miss);
+            let cost = term_cost(x_j, r, weight_j, sigma_j, lam, to_miss, from_miss, false);
             let mut state = State::new(r, cost, local_idx, false);
             state.snapped = snapped;
             states.push(state);
         }
 
         if allow_j && !suppress_nan[j] {
-            let nan_cost = term_cost(x_j, f64::NAN, weight_j, sigma_j, lam, to_miss, from_miss);
+            let nan_cost = term_cost(
+                x_j,
+                f64::NAN,
+                weight_j,
+                sigma_j,
+                lam,
+                to_miss,
+                from_miss,
+                false,
+            );
             states.push(State::new(f64::NAN, nan_cost, cells.len(), true));
         }
 
@@ -575,15 +631,121 @@ fn referenced_features(cons: &Constraints) -> Vec<bool> {
     for &(j, _, _) in &cons.allow_missing {
         refs[j as usize] = true;
     }
+    for (j, _) in &cons.allowed_categories {
+        refs[*j as usize] = true;
+    }
     refs
+}
+
+/// Candidate states of a categorical feature — the mirror of
+/// `_categorical_states`. A block's representative is its smallest member the
+/// declared allowed set admits (cost is flat within a block, so the choice is
+/// free; smallest is the determinism rule); a block with no admissible member
+/// contributes no state, and an allowed set admitting nothing empties the
+/// whole domain — the same certified-infeasible signal a contradictory
+/// numeric pin produces. `cell_idx` carries the block index; the NaN state's
+/// sentinel index is the block count.
+#[allow(clippy::too_many_arguments)]
+fn categorical_states(
+    x_j: f64,
+    blocks_j: &[Vec<u32>],
+    allowed: Option<&[u64]>,
+    frozen_j: bool,
+    allow_j: bool,
+    suppressed: bool,
+    weight_j: f64,
+    sigma_j: f64,
+    lam: f64,
+    to_miss: f64,
+    from_miss: f64,
+) -> Vec<State> {
+    use crate::constraints::code_allowed;
+
+    let x_nan = x_j.is_nan();
+    let n_blocks = blocks_j.len();
+    let block_of = |code: f64| -> usize {
+        blocks_j
+            .iter()
+            .position(|block| block.contains(&(code as u32)))
+            .expect("code not covered by blocks (should be impossible)")
+    };
+
+    if frozen_j {
+        let idx = if x_nan { n_blocks } else { block_of(x_j) };
+        return vec![State::new(x_j, 0.0, idx, x_nan)];
+    }
+
+    if x_nan && !allow_j {
+        if suppressed {
+            return Vec::new();
+        }
+        return vec![State::new(x_j, 0.0, n_blocks, true)];
+    }
+
+    let is_allowed = |code: f64| -> bool {
+        match allowed {
+            None => true,
+            Some(words) => code_allowed(words, code),
+        }
+    };
+
+    let mut states: Vec<State> = Vec::new();
+    let mut keep_block = usize::MAX;
+    if !x_nan && is_allowed(x_j) {
+        keep_block = block_of(x_j);
+        states.push(State::new(x_j, 0.0, keep_block, false));
+    }
+
+    for (block_idx, block) in blocks_j.iter().enumerate() {
+        if block_idx == keep_block {
+            continue; // the unchanged factual already represents its block
+        }
+        let member = block.iter().copied().find(|&c| is_allowed(c as f64));
+        if let Some(code) = member {
+            let rep = code as f64;
+            let cost = term_cost(x_j, rep, weight_j, sigma_j, lam, to_miss, from_miss, true);
+            states.push(State::new(rep, cost, block_idx, false));
+        }
+    }
+
+    if allow_j && !suppressed {
+        let nan_cost = term_cost(
+            x_j,
+            f64::NAN,
+            weight_j,
+            sigma_j,
+            lam,
+            to_miss,
+            from_miss,
+            true,
+        );
+        states.push(State::new(f64::NAN, nan_cost, n_blocks, true));
+    }
+
+    sort_states(&mut states);
+    states
 }
 
 /// Search order: descending split count in the joint grid, ties ascending index.
 /// A feature with no split anywhere and no referencing constraint is left out —
 /// its domain is a single keep state, so it never needs to branch.
-pub(crate) fn feature_order(grids: &[Vec<Cell>], cons: &Constraints) -> Vec<usize> {
+pub(crate) fn feature_order(
+    grids: &[Vec<Cell>],
+    cons: &Constraints,
+    blocks: &[Vec<Vec<u32>>],
+) -> Vec<usize> {
     let referenced = referenced_features(cons);
-    let split_counts: Vec<usize> = grids.iter().map(|cells| cells.len() - 1).collect();
+    let split_counts: Vec<usize> = grids
+        .iter()
+        .enumerate()
+        .map(|(j, cells)| {
+            if blocks[j].is_empty() {
+                cells.len() - 1
+            } else {
+                blocks[j].len() - 1
+            }
+        })
+        .collect();
     let mut included: Vec<usize> = (0..grids.len())
         .filter(|&j| split_counts[j] > 0 || referenced[j])
         .collect();
@@ -1107,7 +1269,8 @@ mod tests {
         let mut cons = cons_base(4);
         cons.freeze = vec![3]; // referenced but split-free: kept, and last
         let grids = constraint_cells(&cons, &[&ens]);
-        assert_eq!(feature_order(&grids, &cons), vec![1, 2, 3]);
+        let blocks = crate::cells::category_blocks_joint(&[&ens]);
+        assert_eq!(feature_order(&grids, &cons, &blocks), vec![1, 2, 3]);
     }
 
     #[test]
@@ -1115,6 +1278,7 @@ mod tests {
         let ens = golden_ens();
         let cons = cons_base(2);
         let grids = constraint_cells(&cons, &[&ens]);
+        let blocks = crate::cells::category_blocks_joint(&[&ens]);
         let domains = build_domains(
             &grids,
             &[2.0, 0.0],
@@ -1123,8 +1287,9 @@ mod tests {
             &[1.0, 1.0],
             0.0,
             &no_policies(2),
+            &blocks,
         );
-        let order = feature_order(&grids, &cons);
+        let order = feature_order(&grids, &cons, &blocks);
         assert_eq!(h_suffix(&order, &domains), vec![0.0, 0.0]);
     }
 

@@ -122,14 +122,14 @@ def test_rust_matches_python_and_golden_bitwise(path) -> None:
 
 
 def _python_domains(fixture: fixture_utils.ExactFixture) -> list[list[object]]:
-    grids = (
-        _constraint_cells(fixture.compiled, fixture.ir)
-        if fixture.if_ir is None
-        else _constraint_cells(fixture.compiled, fixture.ir, fixture.if_ir)
-    )
+    from treecf.aim.cells import category_blocks
+
+    irs = (fixture.ir,) if fixture.if_ir is None else (fixture.ir, fixture.if_ir)
+    grids = _constraint_cells(fixture.compiled, *irs)
+    blocks = category_blocks(*irs)
     return _build_domains(
         grids, fixture.x, fixture.compiled, fixture.sigma, fixture.weights, fixture.lam,
-        fixture.value_policies,
+        fixture.value_policies, blocks,
     )
 
 

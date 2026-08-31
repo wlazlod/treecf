@@ -14,7 +14,7 @@ from dataclasses import dataclass
 import numpy as np
 import numpy.typing as npt
 
-from treecf.aim.cells import feature_cells
+from treecf.aim.cells import category_blocks, feature_cells
 from treecf.constraints.compile import CompiledConstraints
 from treecf.ir.evaluate import raw_score_batch
 from treecf.ir.model import EnsembleIR
@@ -56,13 +56,35 @@ def solve_genetic(
         if not fixed[j]:
             can_be_nan[j] = True
 
-    # Per-feature candidate pool: nearest point of every cell to the factual value.
+    # Per-feature candidate pool: nearest point of every cell to the factual
+    # value; categorical features pool their block representatives plus the
+    # factual code (codes only — Gaussian jitter never touches them).
     cells = feature_cells(ir)
+    blocks = category_blocks(ir)
     anchor = np.where(np.isnan(x), 0.0, x)
-    pools = [
-        np.array([c.nearest_to(anchor[j]) for c in cells[j]]) if mutable[j] else np.empty(0)
-        for j in range(p)
-    ]
+    is_cat = np.zeros(p, dtype=bool)
+    is_cat[list(blocks)] = True
+    pools = []
+    for j in range(p):
+        if not mutable[j]:
+            pools.append(np.empty(0))
+        elif is_cat[j]:
+            allowed = compiled.allowed_categories.get(j)
+            pool = []
+            for block in blocks[j]:
+                # each block's smallest allowed member stands for the block;
+                # a block with no allowed member is unreachable and dropped
+                members = block if allowed is None else [c for c in block if c in allowed]
+                if members:
+                    pool.append(float(members[0]))
+            factual_ok = not math.isnan(x[j]) and (
+                allowed is None or (x[j] == int(x[j]) and int(x[j]) in allowed)
+            )
+            if factual_ok and float(x[j]) not in pool:
+                pool.append(float(x[j]))
+            pools.append(np.array(pool))
+        else:
+            pools.append(np.array([c.nearest_to(anchor[j]) for c in cells[j]]))
 
     def objective(X: FloatArray) -> FloatArray:
         total = np.zeros(len(X))
@@ -80,7 +102,10 @@ def solve_genetic(
             else:
                 went_nan = col_nan
                 moved = ~col_nan & (col != x[j])
-                delta = np.where(moved, np.abs(np.nan_to_num(col) - x[j]), 0.0)
+                if is_cat[j]:  # a category change costs one flat unit
+                    delta = np.where(moved, 1.0, 0.0)
+                else:
+                    delta = np.where(moved, np.abs(np.nan_to_num(col) - x[j]), 0.0)
                 total += went_nan * (weights[j] * to_miss / sigma[j] + lam)
                 total += moved * lam + weights[j] * delta / sigma[j]
         return total
@@ -107,7 +132,9 @@ def solve_genetic(
             )
             for pick in picks:
                 jj = int(pick)
-                X[i, jj] = _mutate_value(rng, x[jj], pools[jj], sigma[jj], can_be_nan[jj])
+                X[i, jj] = _mutate_value(
+                    rng, x[jj], pools[jj], sigma[jj], can_be_nan[jj], bool(is_cat[jj])
+                )
         return X
 
     # Initialization: single-feature cell moves + random multi-feature perturbations
@@ -164,7 +191,9 @@ def solve_genetic(
                 jj = int(pick)
                 roll = rng.random()
                 if roll < 0.15:
-                    child[jj] = _mutate_value(rng, child[jj], pools[jj], sigma[jj], can_be_nan[jj])
+                    child[jj] = _mutate_value(
+                        rng, child[jj], pools[jj], sigma[jj], can_be_nan[jj], bool(is_cat[jj])
+                    )
                 elif roll < 0.30:
                     child[jj] = x[jj]  # revert-to-factual: drives sparsity (L0)
             children.append(child)
@@ -186,11 +215,15 @@ def _mutate_value(
     pool: FloatArray,
     sigma_j: float,
     nan_allowed: bool,
+    is_cat: bool = False,
 ) -> float:
     roll = rng.random()
     if nan_allowed and roll < 0.15:
         return math.nan
-    if len(pool) > 0 and roll < 0.6:
+    if len(pool) > 0 and (roll < 0.6 or is_cat):
+        # a categorical coordinate only ever takes a pooled code
         return float(pool[rng.integers(0, len(pool))])
+    if is_cat:  # an empty categorical pool (all codes banned): nothing to move to
+        return current
     base = 0.0 if math.isnan(current) else current
     return float(base + rng.normal(scale=max(sigma_j, 1e-9)))

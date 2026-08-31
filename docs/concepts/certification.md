@@ -51,11 +51,15 @@ the search happened to find — only the "cheapest possible" claim is dropped. R
 `x_cf`'s presence, to know which claim you got:
 
 ```python
-res = exp.explain(applicant, target=t, backend="exact", seed=0)
+# exp, x, target: the docs explainer, one rejected applicant, the target
+from treecf import Counterfactual
+
+res = exp.explain(x, target=target, backend="exact", seed=0)
 if isinstance(res, Counterfactual):
-    res.proof         # "optimal" | "optimal_within_gap" | "heuristic"
+    res.proof          # "optimal" | "optimal_within_gap" | "heuristic"
     res.solver_stats   # nodes_expanded, nodes_pruned_score, nodes_pruned_cost,
-                        # lower_bound, gap, completed, warm_start_used
+                       # lower_bound, gap, completed, warm_start_used,
+                       # presolve_removed, presolve_certified
 ```
 
 **Certified infeasibility comes only from a completed search.** `Infeasible.proof="certified"`
@@ -113,6 +117,30 @@ policy differently:
 
 The two backends can therefore legitimately return different answers on the same policy run —
 not because one is wrong, but because they are certifying against different candidate sets.
+
+## Presolve: pruning before the search starts
+
+Before the exact backend expands a single node, a **presolve** pass filters each feature's
+candidate list independently: for every candidate state it computes, holding all other features
+free, the interval of raw scores the ensemble could still reach (and, when plausibility is
+configured, the reachable anomaly-score bracket) and discards the state when even that most
+optimistic bracket cannot meet the target. The pass never changes any answer — a discarded state
+is one no completion could have made feasible — it only shrinks the space branch-and-bound must
+visit, so node counts drop while results stay bit-identical.
+
+Two read-outs land in `solver_stats`:
+
+- `presolve_removed`: how many candidate states the filter discarded across all features.
+- `presolve_certified`: `True` when some feature's domain emptied entirely — the target is
+  provably unreachable and the search returns `Infeasible.proof="certified"` immediately, with
+  zero nodes expanded.
+
+Because each state is tested with all other features free, the filter reaches a fixpoint in one
+pass; it deliberately does not fold inter-feature constraints into the brackets, so a state kept
+by presolve can still be pruned later by the search itself. Presolve runs on every exact solve,
+point or [region](#regions-certified-not-maximal-not-monotone), in both engine implementations,
+and its statistics appear in [certificates](#audit-certificates) like the rest of
+`solver_stats`.
 
 ## Regions: certified, not maximal, not monotone
 
@@ -244,7 +272,10 @@ against *this* explainer, re-runs the verification block from the certificate's 
 factual/plan, and reports — it never raises on a mismatch:
 
 ```python
-cert = exp.certificate(x_row, res, target, seed=0, time_budget_s=10.0)
+# exp, x, target, res: the docs explainer, applicant, target, and solved plan
+import json
+
+cert = exp.certificate(x, res, target, seed=0, time_budget_s=10.0)
 stored = json.dumps(cert, allow_nan=False, sort_keys=True)   # file it with the decision
 
 # two years later, on the model and constraints the validator was handed:

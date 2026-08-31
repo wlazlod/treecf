@@ -12,12 +12,12 @@ from typing import TYPE_CHECKING, Any, cast
 import numpy as np
 import numpy.typing as npt
 
-from treecf._errors import TreecfError, TreecfWarning
+from treecf._errors import ConstraintValidationError, TreecfError, TreecfWarning
 from treecf.aim.cells import cell_index, feature_cells
 from treecf.constraints.compile import compile_constraints
 from treecf.constraints.objects import Constraint
 from treecf.ir.evaluate import TreeArrays, apply_link, prepare_tree_arrays, raw_score
-from treecf.ir.model import EnsembleIR, Link
+from treecf.ir.model import EnsembleIR, Link, apply_categories, validate_feature_matrix
 from treecf.ir.parsers import parse_model
 from treecf.objective import fit_normalizers
 from treecf.plausibility import Plausibility
@@ -67,13 +67,16 @@ class Grid:
     6-month increments, prices in 5-cent ticks, and similar). The exact backend
     treats the grid as a hard constraint on its own candidates; the genetic
     backend snaps its winning row afterward, reverting the snap if it would break
-    feasibility — see
-    [Certification — value policies](concepts/certification.md#value-policies-under-certification).
+    feasibility — see [Certification — value
+    policies](../concepts/certification.md#value-policies-under-certification).
 
-    Attributes:
-        step: Spacing between adjacent grid points. Must be positive.
-        anchor: Offset of the grid from zero; grid points are
-            ``anchor + k * step`` for integer ``k``. Defaults to ``0.0``.
+    Attributes
+    ----------
+    step
+        Spacing between adjacent grid points. Must be positive.
+    anchor
+        Offset of the grid from zero; grid points are
+        ``anchor + k * step`` for integer ``k``. Defaults to ``0.0``.
     """
 
     step: float
@@ -96,44 +99,56 @@ class Counterfactual:
     proved none exists more than that relative fraction cheaper, and — more
     rarely — ``"heuristic"`` for a row it is not claiming is cheapest: see
     ``Explainer.explain`` for when that happens. See
-    [Certification](concepts/certification.md) for the full proof taxonomy.
+    [Certification](../concepts/certification.md) for the full proof taxonomy.
 
-    Attributes:
-        x_cf: The full counterfactual feature vector, same order and length as
-            the factual; unchanged features keep the factual's own value.
-        changes: ``{feature: (factual_value, counterfactual_value)}`` for every
-            feature that actually differs (including a transition to or from
-            ``NaN``); unchanged features are omitted.
-        distance: The weighted, normalized sum of per-feature changes
-            (``sum(weight * |delta| / sigma)``, with ``AllowMissing``'s
-            ``delta_miss``/``delta_from_miss`` pricing any NaN transition),
-            excluding the sparsity term. When ``sparsity_weight > 0`` the
-            search minimizes ``distance + sparsity_weight * n_changed``, so
-            ``distance`` alone does not reproduce the search's own ranking.
-        n_changed: ``len(changes)`` — the number of features actually changed.
-        score_raw: The model's raw score at ``x_cf`` (pre-link, i.e. margin for
-            a sigmoid-link model).
-        score_prob: ``sigmoid(score_raw)`` for a sigmoid-link model, otherwise
-            ``None``.
-        proof: The optimality claim this result makes; see above.
-        solver_stats: Backend-specific diagnostics. Populated by the exact
-            backend (``nodes_expanded``, ``nodes_pruned_score``,
-            ``nodes_pruned_cost``, ``lower_bound``, ``gap``, ``completed``,
-            ``warm_start_used``); empty or backend-specific for genetic/python.
-        snapped: ``{feature: bool}`` for every feature under a ``value_policy``
-            that also changed — ``True`` when the genetic backend's post-hoc
-            snap held, ``False`` when it was reverted (or never applied) to keep
-            the result feasible. Empty when no changed feature carries a policy,
-            or on the exact backend (policies are baked into its own search and
-            never post-hoc snapped).
-        region: The certified box around ``x_cf``, set only when the search ran
-            with ``region=True`` (``Explainer.explain``/``explain_batch``/
-            ``explain_coalitions``); ``None`` otherwise.
-        score_calibrated: The calibrator's probability at ``x_cf`` — set only
-            for a calibrated-space target whose calibrator exposes
-            ``predict_proba``; ``None`` otherwise. Presentational: the engine
-            optimized and verified against the raw interval the calibrator's
-            ``interval_inverse`` produced, never against this value.
+    Attributes
+    ----------
+    x_cf
+        The full counterfactual feature vector, same order and length as
+        the factual; unchanged features keep the factual's own value.
+    changes
+        ``{feature: (factual_value, counterfactual_value)}`` for every
+        feature that actually differs (including a transition to or from
+        ``NaN``); unchanged features are omitted.
+    distance
+        The weighted, normalized sum of per-feature changes
+        (``sum(weight * |delta| / sigma)``, with ``AllowMissing``'s
+        ``delta_miss``/``delta_from_miss`` pricing any NaN transition),
+        excluding the sparsity term. When ``sparsity_weight > 0`` the
+        search minimizes ``distance + sparsity_weight * n_changed``, so
+        ``distance`` alone does not reproduce the search's own ranking.
+    n_changed
+        ``len(changes)`` — the number of features actually changed.
+    score_raw
+        The model's raw score at ``x_cf`` (pre-link, i.e. margin for
+        a sigmoid-link model).
+    score_prob
+        ``sigmoid(score_raw)`` for a sigmoid-link model, otherwise
+        ``None``.
+    proof
+        The optimality claim this result makes; see above.
+    solver_stats
+        Backend-specific diagnostics. Populated by the exact
+        backend (``nodes_expanded``, ``nodes_pruned_score``,
+        ``nodes_pruned_cost``, ``lower_bound``, ``gap``, ``completed``,
+        ``warm_start_used``); empty or backend-specific for genetic/python.
+    snapped
+        ``{feature: bool}`` for every feature under a ``value_policy``
+        that also changed — ``True`` when the genetic backend's post-hoc
+        snap held, ``False`` when it was reverted (or never applied) to keep
+        the result feasible. Empty when no changed feature carries a policy,
+        or on the exact backend (policies are baked into its own search and
+        never post-hoc snapped).
+    region
+        The certified box around ``x_cf``, set only when the search ran
+        with ``region=True`` (``Explainer.explain``/``explain_batch``/
+        ``explain_coalitions``); ``None`` otherwise.
+    score_calibrated
+        The calibrator's probability at ``x_cf`` — set only
+        for a calibrated-space target whose calibrator exposes
+        ``predict_proba``; ``None`` otherwise. Presentational: the engine
+        optimized and verified against the raw interval the calibrator's
+        ``interval_inverse`` produced, never against this value.
     """
 
     x_cf: FloatArray
@@ -160,16 +175,20 @@ class Infeasible:
     whether a counterfactual exists at all. ``"certified"`` is exact-backend
     only: every assignment the searched grid allows was tried and none was
     feasible, so ``reason`` names the node count behind that proof. See
-    [Certification](concepts/certification.md) for the full proof taxonomy.
+    [Certification](../concepts/certification.md) for the full proof taxonomy.
 
-    Attributes:
-        reason: Human-readable explanation of why no counterfactual was
-            returned; names the node count behind a ``"certified"`` proof, or
-            describes the exhaustion/repair cause for ``"search_exhausted"``.
-        proof: The claim this non-result makes; see above.
-        solver_stats: Backend-specific diagnostics, populated the same way as
-            ``Counterfactual.solver_stats`` for the exact backend; empty for
-            genetic/python.
+    Attributes
+    ----------
+    reason
+        Human-readable explanation of why no counterfactual was
+        returned; names the node count behind a ``"certified"`` proof, or
+        describes the exhaustion/repair cause for ``"search_exhausted"``.
+    proof
+        The claim this non-result makes; see above.
+    solver_stats
+        Backend-specific diagnostics, populated the same way as
+        ``Counterfactual.solver_stats`` for the exact backend; empty for
+        genetic/python.
     """
 
     reason: str
@@ -340,50 +359,68 @@ class Explainer:
     normalizers once at construction, so repeated ``explain``/``explain_batch``/
     ``explain_coalitions`` calls reuse that work.
 
-    Args:
-        model: A native model object (XGBoost/LightGBM/CatBoost/sklearn
-            ensemble), a JSON dump file path or dict, or an already-parsed
-            ``EnsembleIR``. See [Models and the IR](concepts/models.md) for
-            which native types are supported.
-        background: Sample used to fit the per-feature distance normalizers
-            (``sigma``, one per feature). Required unless ``normalizers`` is
-            given instead; ignored when it is.
-        constraints: Constraint objects (``Freeze``, ``Range``, ``Monotone``,
-            ``Linear``, ``Implies``, ``OneHot``, ``AllowMissing``, or a string
-            parsed by ``constraint()``) compiled and validated immediately.
-            Defaults to no constraints. See [Constraints](concepts/constraints.md).
-        weights: Per-feature multiplier on distance cost, ``{feature: weight}``;
-            a feature not listed defaults to ``1.0``. Use to make some levers
-            relatively cheaper or more expensive than the normalized default.
-        normalizers: Per-feature distance scale ``sigma``, either an array
-            aligned to the model's feature order or a ``{feature: sigma}``
-            dict. Pass this instead of ``background`` to reuse known scales
-            (e.g. across several explainers on the same features).
-        value_policy: Per-feature snapping rule, ``{feature: policy}``, where
-            a policy is ``"raw"`` (no snapping; the default for a feature not
-            listed), ``"integer"`` (round to the nearest feasible integer), a
-            ``Grid(step, anchor=0.0)`` (snap to a fixed lattice), or a callable
-            ``float -> float``. The exact backend treats a policy as a hard
-            constraint on its candidates; the genetic backend snaps its
-            winning row afterward and reverts the snap if it would break
-            feasibility (``Counterfactual.snapped`` records which happened) —
-            see [Certification](concepts/certification.md#value-policies-under-certification).
-        plausibility: Optional hard isolation-forest bound keeping every
-            returned counterfactual inside the data manifold (see
-            ``Plausibility.isolation_forest``). Cannot be combined with
-            ``AllowMissing``, and ``explain``/``explain_batch``/
-            ``explain_coalitions`` reject a factual containing NaN once it is
-            set (isolation forests define no NaN routing) — see
-            [Plausibility](concepts/plausibility.md).
+    Parameters
+    ----------
+    model
+        A native model object (XGBoost/LightGBM/CatBoost/sklearn
+        ensemble), a JSON dump file path or dict, or an already-parsed
+        ``EnsembleIR``. See [Models and the IR](../concepts/models.md) for
+        which native types are supported.
+    background
+        Sample used to fit the per-feature distance normalizers
+        (``sigma``, one per feature). Required unless ``normalizers`` is
+        given instead; ignored when it is.
+    constraints
+        Constraint objects (``Freeze``, ``Range``, ``Monotone``,
+        ``Linear``, ``Implies``, ``OneHot``, ``AllowMissing``, or a string
+        parsed by ``constraint()``) compiled and validated immediately.
+        Defaults to no constraints. See [Constraints](../concepts/constraints.md).
+    weights
+        Per-feature multiplier on distance cost, ``{feature: weight}``;
+        a feature not listed defaults to ``1.0``. Use to make some levers
+        relatively cheaper or more expensive than the normalized default.
+    normalizers
+        Per-feature distance scale ``sigma``, either an array
+        aligned to the model's feature order or a ``{feature: sigma}``
+        dict. Pass this instead of ``background`` to reuse known scales
+        (e.g. across several explainers on the same features).
+    value_policy
+        Per-feature snapping rule, ``{feature: policy}``, where
+        a policy is ``"raw"`` (no snapping; the default for a feature not
+        listed), ``"integer"`` (round to the nearest feasible integer), a
+        ``Grid(step, anchor=0.0)`` (snap to a fixed lattice), or a callable
+        ``float -> float``. The exact backend treats a policy as a hard
+        constraint on its candidates; the genetic backend snaps its
+        winning row afterward and reverts the snap if it would break
+        feasibility (``Counterfactual.snapped`` records which happened) —
+        see [Certification](../concepts/certification.md#value-policies-under-certification).
+    plausibility
+        Optional hard isolation-forest bound keeping every
+        returned counterfactual inside the data manifold (see
+        ``Plausibility.isolation_forest``). Cannot be combined with
+        ``AllowMissing``, and ``explain``/``explain_batch``/
+        ``explain_coalitions`` reject a factual containing NaN once it is
+        set (isolation forests define no NaN routing) — see
+        [Plausibility](../concepts/plausibility.md).
+    categories
+        Display names for categorical features,
+        ``{feature: [name_for_code_0, name_for_code_1, ...]}``. Required
+        for CatBoost models with native categorical features (their
+        categories are stored as hashes); optional elsewhere — it fills
+        names and may extend a feature's declared cardinality beyond the
+        codes seen in training.
 
-    Raises:
-        TreecfError: If neither ``background`` nor ``normalizers`` is given, if
-            ``normalizers`` omits a feature or resolves to a non-positive
-            scale, if ``value_policy`` names an unknown feature or an
-            unrecognized string policy, or if ``plausibility`` is given
-            together with ``AllowMissing`` or a mismatched feature space.
-        ConstraintValidationError: If ``constraints`` contains a malformed or
-            self-contradictory constraint.
+    Raises
+    ------
+    TreecfError
+        If neither ``background`` nor ``normalizers`` is given, if
+        ``normalizers`` omits a feature or resolves to a non-positive
+        scale, if ``value_policy`` names an unknown feature or an
+        unrecognized string policy, or if ``plausibility`` is given
+        together with ``AllowMissing`` or a mismatched feature space.
+    ConstraintValidationError
+        If ``constraints`` contains a malformed or
+        self-contradictory constraint.
     """
 
     _rust_cache: dict[str, object]  # marshaled Rust objects, filled on first solve
@@ -398,10 +435,14 @@ class Explainer:
         normalizers: FloatArray | dict[str, float] | None = None,
         value_policy: dict[str, ValuePolicy] | None = None,
         plausibility: Plausibility | None = None,
+        categories: Mapping[str, Sequence[str]] | None = None,
     ) -> None:
-        self.ir = model if isinstance(model, EnsembleIR) else parse_model(model)
+        if isinstance(model, EnsembleIR):
+            self.ir = apply_categories(model, categories) if categories else model
+        else:
+            self.ir = parse_model(model, categories)
         names = self.ir.feature_names
-        self.compiled = compile_constraints(constraints, names)
+        self.compiled = compile_constraints(constraints, names, self.ir.categorical)
         self.plausibility = plausibility
         if plausibility is not None:
             if plausibility.if_ir.n_features != self.ir.n_features:
@@ -414,13 +455,20 @@ class Explainer:
         self.background = (
             None if background is None else np.asarray(background, dtype=np.float64)
         )
-        self.sigma = _resolve_sigma(names, background, normalizers)
+        if self.background is not None:
+            validate_feature_matrix(self.ir, self.background, where="background")
+        self.sigma = _resolve_sigma(names, background, normalizers, frozenset(self.ir.categorical))
         self.weights = np.array([(weights or {}).get(name, 1.0) for name in names])
         self.value_policy = value_policy or {}
         self._rust_cache = {}
         for name, policy in self.value_policy.items():
             if name not in names:
                 raise TreecfError(f"value_policy references unknown feature {name!r}")
+            if names.index(name) in self.ir.categorical:
+                raise ConstraintValidationError(
+                    f"value_policy({name!r}): {name!r} is a categorical feature — its "
+                    "values are codes already; use AllowedCategories to restrict them"
+                )
             if isinstance(policy, str) and policy not in ("raw", "integer"):
                 raise TreecfError(f"unknown value policy {policy!r} for {name!r}")
 
@@ -499,26 +547,31 @@ class Explainer:
         attempted per-feature, per-direction expansion; see
         ``Explainer.recourse_region``.
 
-        Returns:
-            A single ``Counterfactual`` or ``Infeasible`` when ``target`` is a
-            plain interval (``Target.raw``/``probability``/``calibrated``); a
-            ``{band_name: Counterfactual | Infeasible}`` dict, one entry per
-            band in solved order, when ``target`` is a ``Target.bands``
-            ladder. ``Infeasible`` means the search found no verified
-            counterfactual — see ``Infeasible.proof`` for whether that is a
-            certified impossibility or just an unsuccessful search.
+        Returns
+        -------
+        A single ``Counterfactual`` or ``Infeasible`` when ``target`` is a
+        plain interval (``Target.raw``/``probability``/``calibrated``); a
+        ``{band_name: Counterfactual | Infeasible}`` dict, one entry per
+        band in solved order, when ``target`` is a ``Target.bands``
+        ladder. ``Infeasible`` means the search found no verified
+        counterfactual — see ``Infeasible.proof`` for whether that is a
+        certified impossibility or just an unsuccessful search.
 
-        Raises:
-            ValueError: If ``warm_start``, ``node_budget``, or ``gap`` is
-                given a non-default value together with a ``backend`` other
-                than ``"exact"``.
-            TreecfError: If ``backend`` is not one of ``"genetic"``,
-                ``"python"``, or ``"exact"``, or if ``plausibility`` is
-                configured on this explainer and ``x`` contains NaN.
-            ConstraintValidationError: If ``backend="exact"`` and this
-                explainer's constraints include an unsupported multi-feature
-                ``Linear`` shape, or a callable ``value_policy``; the message
-                names ``backend="genetic"`` as the fallback.
+        Raises
+        ------
+        ValueError
+            If ``warm_start``, ``node_budget``, or ``gap`` is
+            given a non-default value together with a ``backend`` other
+            than ``"exact"``.
+        TreecfError
+            If ``backend`` is not one of ``"genetic"``,
+            ``"python"``, or ``"exact"``, or if ``plausibility`` is
+            configured on this explainer and ``x`` contains NaN.
+        ConstraintValidationError
+            If ``backend="exact"`` and this
+            explainer's constraints include an unsupported multi-feature
+            ``Linear`` shape, or a callable ``value_policy``; the message
+            names ``backend="genetic"`` as the fallback.
         """
         return self._explain(
             x, target, backend, time_budget_s, sparsity_weight, seed, warn_factual=True,
@@ -551,6 +604,7 @@ class Explainer:
         (``target.bands_spec`` rows never receive one — batch, the only caller that
         passes one, already rejects bands)."""
         x = np.asarray(x, dtype=np.float64)
+        validate_feature_matrix(self.ir, x, where="factual")
         if warn_factual:
             violations = self.compiled.factual_violations(x)
             if violations:
@@ -675,7 +729,7 @@ class Explainer:
         replaces ``warm_start``'s N sequential per-row (or, in seeds mode,
         per-attempt) genetic warm passes with a single vectorized one across
         every row — see ``treecf.batch.explain_batch`` for exactly which
-        modes it covers and which keep 0.2.0's per-solve behavior.
+        modes it covers and which keep per-solve warm starts.
         ``node_budget``/``gap`` thread through to every solve unchanged; see
         ``Explainer.explain``. A ``KeyboardInterrupt`` during any batch solve
         discards whatever the batch has not yet finished — there is no
@@ -683,24 +737,28 @@ class Explainer:
         ``RecourseRegion`` (``BatchRecord.region``) to every feasible record,
         at the same one-oracle-call-per-expansion cost.
 
-        Returns:
-            A ``BatchResult`` holding one ``BatchRecord`` per (row, plan) pair
-            — infeasible rows/plans get a record with ``feasible=False`` and
-            no ``x_cf`` rather than being omitted.
+        Returns
+        -------
+        A ``BatchResult`` holding one ``BatchRecord`` per (row, plan) pair
+        — infeasible rows/plans get a record with ``feasible=False`` and
+        no ``x_cf`` rather than being omitted.
 
-        Raises:
-            TreecfError: If ``target`` is a ``Target.bands`` ladder, if
-                ``diversity`` is not ``"seeds"``, ``"lever-blocking"``, or
-                ``"coalitions"``, if ``coalitions``/``include_full`` is given
-                outside ``diversity="coalitions"`` (or omitted inside it), or
-                if ``ids`` does not have one entry per row of ``X``.
-            ValueError: If ``warm_start``, ``node_budget``, or ``gap`` is
-                given a non-default value together with a ``backend`` other
-                than ``"exact"``; if ``backend="exact"`` is requested without
-                ``allow_exact_batch=True`` (message names the wall time
-                estimate, a floor rather than a ceiling); or if
-                ``allow_exact_batch=True`` is passed with a ``backend`` other
-                than ``"exact"``.
+        Raises
+        ------
+        TreecfError
+            If ``target`` is a ``Target.bands`` ladder, if
+            ``diversity`` is not ``"seeds"``, ``"lever-blocking"``, or
+            ``"coalitions"``, if ``coalitions``/``include_full`` is given
+            outside ``diversity="coalitions"`` (or omitted inside it), or
+            if ``ids`` does not have one entry per row of ``X``.
+        ValueError
+            If ``warm_start``, ``node_budget``, or ``gap`` is
+            given a non-default value together with a ``backend`` other
+            than ``"exact"``; if ``backend="exact"`` is requested without
+            ``allow_exact_batch=True`` (message names the wall time
+            estimate, a floor rather than a ceiling); or if
+            ``allow_exact_batch=True`` is passed with a ``backend`` other
+            than ``"exact"``.
         """
         from treecf.batch import explain_batch
 
@@ -747,19 +805,23 @@ class Explainer:
         collapsed into one aggregate ``TreecfWarning`` for the whole call,
         rather than one per coalition.
 
-        Returns:
-            ``{coalition_name: Counterfactual | Infeasible}``, one entry per
-            key of ``coalitions`` plus ``"(all levers)"`` when
-            ``include_full=True``, in that insertion order.
+        Returns
+        -------
+        ``{coalition_name: Counterfactual | Infeasible}``, one entry per
+        key of ``coalitions`` plus ``"(all levers)"`` when
+        ``include_full=True``, in that insertion order.
 
-        Raises:
-            TreecfError: If ``target`` is a ``Target.bands`` ladder, if
-                ``coalitions`` is empty, names a coalition with no members, or
-                references an unknown feature, or if ``include_full=True`` and
-                a coalition is named ``"(all levers)"`` (the reserved key).
-            ValueError: If ``warm_start``, ``node_budget``, or ``gap`` is
-                given a non-default value together with a ``backend`` other
-                than ``"exact"``.
+        Raises
+        ------
+        TreecfError
+            If ``target`` is a ``Target.bands`` ladder, if
+            ``coalitions`` is empty, names a coalition with no members, or
+            references an unknown feature, or if ``include_full=True`` and
+            a coalition is named ``"(all levers)"`` (the reserved key).
+        ValueError
+            If ``warm_start``, ``node_budget``, or ``gap`` is
+            given a non-default value together with a ``backend`` other
+            than ``"exact"``.
         """
         if target.bands_spec is not None:
             raise TreecfError(
@@ -991,6 +1053,7 @@ class Explainer:
                 cost = _cost_of_row(
                     x, warm.x_cf, self.sigma, self.weights, sparsity_weight,
                     self.compiled.allow_missing,
+                    categorical=frozenset(self.ir.categorical),
                 )
                 incumbent = (cost, warm.x_cf)
 
@@ -1245,16 +1308,19 @@ class Explainer:
         ``RecourseRegion``. The returned region is certified
         but neither maximal nor monotone in ``target``: a strictly narrower
         target can still grow a strictly wider region on some feature. See
-        [Certification](concepts/certification.md#regions-certified-not-maximal-not-monotone).
+        [Certification](../concepts/certification.md#regions-certified-not-maximal-not-monotone).
 
-        Returns:
-            The certified ``RecourseRegion`` around ``x_cf``.
+        Returns
+        -------
+        The certified ``RecourseRegion`` around ``x_cf``.
 
-        Raises:
-            TreecfError: If ``target`` is a ``Target.bands`` ladder (pass the
-                single band's own interval instead), or if ``x_cf`` fails the
-                float-space re-check against ``x``/``target`` — the message
-                names the specific check that failed.
+        Raises
+        ------
+        TreecfError
+            If ``target`` is a ``Target.bands`` ladder (pass the
+            single band's own interval instead), or if ``x_cf`` fails the
+            float-space re-check against ``x``/``target`` — the message
+            names the specific check that failed.
         """
         x = np.asarray(x, dtype=np.float64)
         x_cf = np.asarray(x_cf, dtype=np.float64)
@@ -1304,7 +1370,7 @@ class Explainer:
         ``proof="optimal"`` claim is true — re-running with the recorded seed
         and budgets on a fingerprint-matching model is how a validator checks
         that. See
-        [Certification — audit certificates](concepts/certification.md#audit-certificates)
+        [Certification — audit certificates](../concepts/certification.md#audit-certificates)
         for the schema.
 
         The certificate is a plain ``dict`` (``"schema_version": 1``) that
@@ -1324,25 +1390,38 @@ class Explainer:
         not carry them, so they are caller-supplied, and the block's name
         makes that provenance explicit.
 
-        Args:
-            x: The factual instance the result was solved from.
-            result: The ``Counterfactual`` or ``Infeasible`` to certify.
-            target: The target the result was solved against.
-            band: For a ``Target.bands`` result, the band this result belongs
-                to; required then, invalid otherwise.
-            seed: The seed the solve ran with, if the caller wants it recorded.
-            node_budget: The node budget the solve ran with, likewise.
-            gap: The relative gap the solve ran with, likewise.
-            time_budget_s: The time budget the solve ran with, likewise.
-            warm_start: The warm-start setting the solve ran with, likewise.
+        Parameters
+        ----------
+        x
+            The factual instance the result was solved from.
+        result
+            The ``Counterfactual`` or ``Infeasible`` to certify.
+        target
+            The target the result was solved against.
+        band
+            For a ``Target.bands`` result, the band this result belongs
+            to; required then, invalid otherwise.
+        seed
+            The seed the solve ran with, if the caller wants it recorded.
+        node_budget
+            The node budget the solve ran with, likewise.
+        gap
+            The relative gap the solve ran with, likewise.
+        time_budget_s
+            The time budget the solve ran with, likewise.
+        warm_start
+            The warm-start setting the solve ran with, likewise.
 
-        Returns:
-            The certificate as a strict-JSON-serializable ``dict``.
+        Returns
+        -------
+        The certificate as a strict-JSON-serializable ``dict``.
 
-        Raises:
-            TreecfError: If ``target`` is a ``Target.bands`` ladder and
-                ``band`` is missing or unknown, or if ``band`` is given for a
-                plain-interval target.
+        Raises
+        ------
+        TreecfError
+            If ``target`` is a ``Target.bands`` ladder and
+            ``band`` is missing or unknown, or if ``band`` is given for a
+            plain-interval target.
         """
         from treecf.audit import build_certificate
 
@@ -1373,18 +1452,22 @@ class Explainer:
         identity). Neither mode requires treecf to import a calibration
         library.
 
-        Args:
-            cert: A certificate produced by ``Explainer.certificate`` (a
-                ``json.loads`` round trip of one works identically).
-            calibrator: Optional duck-typed calibrator (the object handed to
-                ``Target.calibrated``) to additionally verify calibrator
-                provenance against a calibrated-target certificate.
+        Parameters
+        ----------
+        cert
+            A certificate produced by ``Explainer.certificate`` (a
+            ``json.loads`` round trip of one works identically).
+        calibrator
+            Optional duck-typed calibrator (the object handed to
+            ``Target.calibrated``) to additionally verify calibrator
+            provenance against a calibrated-target certificate.
 
-        Returns:
-            ``{"model_match": bool, "constraints_match": bool,
-            "verification_ok": bool, "mismatches": [...]}`` with one
-            human-readable string per mismatch, plus ``"calibrator_match":
-            bool`` when ``calibrator=`` was given.
+        Returns
+        -------
+        ``{"model_match": bool, "constraints_match": bool,
+        "verification_ok": bool, "mismatches": [...]}`` with one
+        human-readable string per mismatch, plus ``"calibrator_match":
+        bool`` when ``calibrator=`` was given.
         """
         from treecf.audit import check_certificate
 
@@ -1474,6 +1557,8 @@ class Explainer:
                 delta = self.compiled.allow_missing[j][0]
             elif x_nan:  # NaN -> value priced by delta_from_miss
                 delta = self.compiled.allow_missing[j][1]
+            elif j in self.ir.categorical:  # a category change costs one flat unit
+                delta = 1.0
             else:
                 delta = abs(x_cf[j] - x[j])
             distance += self.weights[j] * delta / self.sigma[j]
@@ -1521,6 +1606,7 @@ def _resolve_sigma(
     names: tuple[str, ...],
     background: FloatArray | None,
     normalizers: FloatArray | dict[str, float] | None,
+    categorical: frozenset[int] = frozenset(),
 ) -> FloatArray:
     if normalizers is not None:
         if isinstance(normalizers, dict):
@@ -1531,7 +1617,7 @@ def _resolve_sigma(
         else:
             sigma = np.asarray(normalizers, dtype=np.float64)
     elif background is not None:
-        sigma = fit_normalizers(np.asarray(background, dtype=np.float64))
+        sigma = fit_normalizers(np.asarray(background, dtype=np.float64), categorical)
     else:
         raise TreecfError("provide either background (to fit normalizers) or normalizers")
     if len(sigma) != len(names) or np.any(sigma <= 0):

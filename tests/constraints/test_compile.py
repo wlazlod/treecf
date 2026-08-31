@@ -8,11 +8,13 @@ import pytest
 
 from treecf._errors import ConstraintValidationError
 from treecf.constraints import (
+    AllowedCategories,
     AllowMissing,
     Equals,
     Freeze,
     Implies,
     Linear,
+    Monotone,
     OneHot,
     Range,
     compile_constraints,
@@ -250,3 +252,118 @@ class TestFactualViolations:
         assert len(descs) == 2
         assert any(d.startswith("Implies") for d in descs)
         assert any(d.startswith("OneHot") for d in descs)
+
+
+class TestAllowedCategories:
+    """Name resolution, rejections, membership checks, and the repair rule."""
+
+    @staticmethod
+    def _cats(cardinality: int = 4, names: tuple[str, ...] | None = None):
+        from treecf.ir.model import CategoricalFeature
+
+        return {1: CategoricalFeature(cardinality=cardinality, categories=names)}
+
+    NAMES = ("amount", "occupation")
+
+    def test_codes_resolve_and_intersect(self) -> None:
+        compiled = compile_constraints(
+            [
+                AllowedCategories("occupation", (0, 1, 2)),
+                AllowedCategories("occupation", (1, 2, 3)),
+            ],
+            self.NAMES,
+            self._cats(),
+        )
+        assert compiled.allowed_categories == {1: frozenset({1, 2})}
+
+    def test_names_resolve_through_categories(self) -> None:
+        compiled = compile_constraints(
+            [AllowedCategories("occupation", ("clerk", "manager"))],
+            self.NAMES,
+            self._cats(names=("clerk", "manager", "nurse", "smith")),
+        )
+        assert compiled.allowed_categories == {1: frozenset({0, 1})}
+
+    def test_name_without_model_names_raises(self) -> None:
+        with pytest.raises(ConstraintValidationError, match="no names"):
+            compile_constraints(
+                [AllowedCategories("occupation", ("clerk",))], self.NAMES, self._cats()
+            )
+
+    def test_unknown_name_and_out_of_range_code_raise(self) -> None:
+        with pytest.raises(ConstraintValidationError, match="unknown category name"):
+            compile_constraints(
+                [AllowedCategories("occupation", ("astronaut",))],
+                self.NAMES,
+                self._cats(names=("clerk", "manager", "nurse", "smith")),
+            )
+        with pytest.raises(ConstraintValidationError, match=r"outside \[0, 4\)"):
+            compile_constraints(
+                [AllowedCategories("occupation", (7,))], self.NAMES, self._cats()
+            )
+
+    def test_on_numeric_feature_raises(self) -> None:
+        with pytest.raises(ConstraintValidationError, match="numeric feature — use Range"):
+            compile_constraints(
+                [AllowedCategories("amount", (1,))], self.NAMES, self._cats()
+            )
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            Range("occupation", 0.0, 2.0),
+            Monotone("occupation", "increase"),
+            Equals("occupation", 1.0),
+            Linear({"occupation": 1.0}, "<=", 2.0),
+            Implies(Equals("occupation", 1.0), Equals("amount", 0.0)),
+            OneHot(("occupation", "amount")),
+        ],
+    )
+    def test_interval_constraints_on_categorical_raise(self, bad) -> None:
+        with pytest.raises(ConstraintValidationError, match="categorical feature"):
+            compile_constraints([bad], self.NAMES, self._cats())
+
+    def test_freeze_and_allow_missing_still_apply(self) -> None:
+        compiled = compile_constraints(
+            [Freeze("occupation"), AllowMissing("amount", delta_miss=0.5)],
+            self.NAMES,
+            self._cats(),
+        )
+        assert compiled.allowed_categories == {}
+
+    def test_check_matrix_membership(self) -> None:
+        compiled = compile_constraints(
+            [AllowedCategories("occupation", (1, 3))], self.NAMES, self._cats()
+        )
+        x = np.array([0.0, 1.0])
+        X = np.array(
+            [[0.0, 1.0], [0.0, 3.0], [0.0, 2.0], [0.0, 1.5], [0.0, 7.0]]
+        )
+        np.testing.assert_array_equal(
+            compiled.check_matrix(X, x), [True, True, False, False, False]
+        )
+
+    def test_repair_keeps_allowed_else_smallest(self) -> None:
+        compiled = compile_constraints(
+            [AllowedCategories("occupation", (1, 3))], self.NAMES, self._cats()
+        )
+        x = np.array([0.0, 1.0])
+        X = np.array([[0.0, 3.0], [0.0, 2.0], [0.0, 0.0]])
+        repaired = compiled.repair_matrix(X, x)
+        np.testing.assert_array_equal(repaired[:, 1], [3.0, 1.0, 1.0])
+
+    def test_factual_violation_wording(self) -> None:
+        compiled = compile_constraints(
+            [AllowedCategories("occupation", (1,))], self.NAMES, self._cats()
+        )
+        violations = compiled.factual_violations(np.array([0.0, 2.0]))
+        assert any("factual's category not in allowed set" in v for v in violations)
+        assert compiled.factual_violations(np.array([0.0, 1.0])) == ()
+
+    def test_empty_allowed_set_compiles(self) -> None:
+        compiled = compile_constraints(
+            [AllowedCategories("occupation", ()), ], self.NAMES, self._cats()
+        )
+        assert compiled.allowed_categories == {1: frozenset()}
+        ok = compiled.check_matrix(np.array([[0.0, 1.0]]), np.array([0.0, 1.0]))
+        assert not ok[0]

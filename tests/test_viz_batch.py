@@ -183,3 +183,106 @@ class TestDeltas:
         dots = [ln for ln in ax.lines if ln.get_marker() == "o"]
         assert list(dots[0].get_xdata()) == [pytest.approx(0.5)]  # 2.0 / sigma 4.0
         assert "σ" in ax.get_xlabel()
+
+
+class TestRecourseBurden:
+    """Segment-level burden and availability, numbers first."""
+
+    @staticmethod
+    def _burden_batch() -> BatchResult:
+        from dataclasses import replace as dc_replace
+
+        records = (
+            # row 0 (group A): two plans; the cheaper one carries the burden
+            _rec(0, 0, {"a": (0.0, 2.0)}, 2.0),
+            _rec(0, 1, {"b": (0.0, 5.0)}, 5.0),
+            # row 1 (group A): single plan
+            _rec(1, 0, {"a": (0.0, 4.0)}, 4.0),
+            # row 2 (group B): certified no recourse
+            dc_replace(_infeasible(2), proof="certified"),
+            # row 3 (group B): search exhausted — not a proven no
+            dc_replace(_infeasible(3), proof="search_exhausted"),
+            # row 4 (group B): feasible
+            _rec(4, 0, {"a": (0.0, 8.0)}, 8.0),
+        )
+        return _batch(list(records))
+
+    GROUPS = ("A", "A", "B", "B", "B")
+
+    def test_table_values_on_a_hand_built_batch(self) -> None:
+        from treecf.viz_batch import recourse_burden_table
+
+        table = recourse_burden_table(self._burden_batch(), self.GROUPS, min_group_size=2)
+        assert [entry["group"] for entry in table] == ["A", "B"]
+        a, b = table
+        assert a["n"] == 2 and a["recourse_share"] == 1.0
+        assert a["median_burden"] == 3.0  # cheapest plans: 2.0 and 4.0
+        assert a["certified_no_share"] == 0.0 and a["unproven_no_share"] == 0.0
+        assert b["n"] == 3
+        assert b["recourse_share"] == pytest.approx(1 / 3)
+        assert b["certified_no_share"] == pytest.approx(1 / 3)
+        assert b["unproven_no_share"] == pytest.approx(1 / 3)
+        assert b["median_burden"] == 8.0
+        assert a["small"] is False and b["small"] is False
+
+    def test_group_order_is_deterministic_and_overridable(self) -> None:
+        from treecf.viz_batch import recourse_burden_table
+
+        default = recourse_burden_table(self._burden_batch(), self.GROUPS)
+        assert [entry["group"] for entry in default] == ["A", "B"]
+        flipped = recourse_burden_table(
+            self._burden_batch(), self.GROUPS, group_order=("B", "A")
+        )
+        assert [entry["group"] for entry in flipped] == ["B", "A"]
+
+    def test_mismatched_groups_length_raises(self) -> None:
+        from treecf import TreecfError
+        from treecf.viz_batch import recourse_burden_table
+
+        with pytest.raises(TreecfError, match="5 rows"):
+            recourse_burden_table(self._burden_batch(), ("A", "B"))
+
+    def test_ecdf_line_count_matches_groups_with_feasible_rows(self) -> None:
+        from treecf.viz_batch import plot_recourse_burden
+
+        axes = plot_recourse_burden(self._burden_batch(), self.GROUPS, min_group_size=2)
+        assert len(axes[0].lines) == 2  # A and B both have >= 1 feasible row
+
+    def test_zero_feasible_group_has_a_bar_but_no_line(self) -> None:
+        from dataclasses import replace as dc_replace
+
+        from treecf.viz_batch import plot_recourse_burden
+
+        records = [
+            _rec(0, 0, {"a": (0.0, 2.0)}, 2.0),
+            dc_replace(_infeasible(1), proof="certified"),
+        ]
+        batch = _batch(records)
+        axes = plot_recourse_burden(batch, ("A", "B"), min_group_size=1)
+        assert len(axes[0].lines) == 1  # only A draws an ECDF
+        assert len(axes[1].get_xticklabels()) == 2  # both groups get a bar
+
+    def test_three_stacked_segments_with_hatched_unproven(self) -> None:
+        from treecf.viz_batch import plot_recourse_burden
+
+        axes = plot_recourse_burden(self._burden_batch(), self.GROUPS, min_group_size=2)
+        bars = axes[1].patches
+        hatched = [bar for bar in bars if bar.get_hatch()]
+        assert hatched  # the search-exhausted share is visually distinct
+        labels = [t.get_text() for t in axes[1].get_legend().get_texts()]
+        assert labels == ["has recourse", "certified no recourse", "unproven no recourse"]
+
+    def test_small_group_flag_lands_in_the_legend(self) -> None:
+        from treecf.viz_batch import plot_recourse_burden
+
+        axes = plot_recourse_burden(self._burden_batch(), self.GROUPS, min_group_size=10)
+        legend_texts = [t.get_text() for t in axes[0].get_legend().get_texts()]
+        assert all("— small" in text for text in legend_texts)
+
+    def test_agg_smoke_on_both_entry_points(self) -> None:
+        from treecf.viz_batch import plot_recourse_burden, recourse_burden_table
+
+        table = recourse_burden_table(self._burden_batch(), self.GROUPS)
+        assert len(table) == 2
+        axes = plot_recourse_burden(self._burden_batch(), self.GROUPS, stat="p90")
+        assert len(axes) == 2

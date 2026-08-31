@@ -109,3 +109,91 @@ def _representative(cell: Cell, rng: np.random.Generator) -> float:
         if cell.contains(v):
             return v
     return cell.nearest_to((lo + hi) / 2.0)
+
+
+class TestCategoryBlocks:
+    """Blocks are routing-equivalence classes of codes, numbered by smallest member."""
+
+    @staticmethod
+    def _set_ir(sets: list[frozenset[int]], cardinality: int, feature: int = 0):
+        from treecf.ir.model import CategoricalFeature, EnsembleIR, Link, Node, Tree
+
+        trees = []
+        for members in sets:
+            trees.append(
+                Tree(
+                    nodes=(
+                        Node(0, feature, None, None, True, 1, 2, None, categories=members),
+                        Node(1, None, None, None, None, None, None, -1.0),
+                        Node(2, None, None, None, None, None, None, 1.0),
+                    )
+                )
+            )
+        if not trees:
+            trees = [Tree(nodes=(Node(0, None, None, None, None, None, None, 0.0),))]
+        return EnsembleIR(
+            trees=tuple(trees),
+            base_score=0.0,
+            link=Link.IDENTITY,
+            n_features=feature + 1,
+            feature_names=tuple(f"x{i}" for i in range(feature + 1)),
+            meta={},
+            categorical={feature: CategoricalFeature(cardinality=cardinality)},
+        )
+
+    def test_no_splits_one_block(self) -> None:
+        from treecf.aim.cells import category_blocks
+
+        assert category_blocks(self._set_ir([], 4)) == {0: ((0, 1, 2, 3),)}
+
+    def test_one_set_two_blocks(self) -> None:
+        from treecf.aim.cells import category_blocks
+
+        assert category_blocks(self._set_ir([frozenset({0, 2})], 4)) == {0: ((0, 2), (1, 3))}
+
+    def test_two_sets_refine(self) -> None:
+        from treecf.aim.cells import category_blocks
+
+        ir = self._set_ir([frozenset({0, 2}), frozenset({2, 3})], 4)
+        assert category_blocks(ir) == {0: ((0,), (1,), (2,), (3,))}
+
+    def test_joint_refinement_across_ensembles(self) -> None:
+        from treecf.aim.cells import category_blocks
+
+        a = self._set_ir([frozenset({0, 2})], 4)
+        b = self._set_ir([frozenset({2, 3})], 4)
+        assert category_blocks(a, b) == {0: ((0,), (1,), (2,), (3,))}
+        assert category_blocks(a) == {0: ((0, 2), (1, 3))}
+
+    def test_numeric_split_on_categorical_feature_refines(self) -> None:
+        # an isolation forest splits the code column numerically at 1.5
+        from treecf.aim.cells import category_blocks
+        from treecf.ir.model import CategoricalFeature, EnsembleIR, Link, Node, SplitOp, Tree
+
+        model = self._set_ir([frozenset({0, 2})], 4)
+        forest = EnsembleIR(
+            trees=(
+                Tree(
+                    nodes=(
+                        Node(0, 0, 1.5, SplitOp.LE, None, 1, 2, None),
+                        Node(1, None, None, None, None, None, None, 1.0),
+                        Node(2, None, None, None, None, None, None, 2.0),
+                    )
+                ),
+            ),
+            base_score=0.0,
+            link=Link.IDENTITY,
+            n_features=1,
+            feature_names=("x0",),
+            meta={},
+            categorical={0: CategoricalFeature(cardinality=4)},
+        )
+        assert category_blocks(model, forest) == {0: ((0,), (1,), (2,), (3,))}
+
+    def test_cardinality_disagreement_raises(self) -> None:
+        import pytest as _pytest
+
+        from treecf.aim.cells import category_blocks
+
+        with _pytest.raises(ValueError, match="cardinality"):
+            category_blocks(self._set_ir([], 4), self._set_ir([], 5))

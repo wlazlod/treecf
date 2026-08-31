@@ -82,16 +82,50 @@ pub fn solve_genetic(
         })
         .collect();
 
-    // per-feature candidate pools: nearest point of every MODEL cell to the anchor
+    // per-feature candidate pools: nearest point of every MODEL cell to the
+    // anchor; categorical features pool their block representatives plus the
+    // factual code (codes only — Gaussian jitter never touches them)
     let anchor: Vec<f64> = x
         .iter()
         .map(|&v| if v.is_nan() { 0.0 } else { v })
         .collect();
     let all_cells = ens.feature_cells();
+    let all_blocks = ens.category_blocks();
+    let is_cat: Vec<bool> = (0..p).map(|j| ens.cardinality[j] > 0).collect();
     let pools: Vec<Vec<f64>> = (0..p)
         .map(|j| {
             if fixed[j] {
                 Vec::new()
+            } else if is_cat[j] {
+                // each block's smallest allowed member stands for the block; a
+                // block with no allowed member is unreachable and dropped
+                let allowed = cons
+                    .allowed_categories
+                    .iter()
+                    .find(|(idx, _)| *idx as usize == j)
+                    .map(|(_, words)| words.as_slice());
+                let mut pool: Vec<f64> = Vec::new();
+                for block in &all_blocks[j] {
+                    let member = match allowed {
+                        None => block.first().copied(),
+                        Some(words) => block
+                            .iter()
+                            .copied()
+                            .find(|&c| crate::constraints::code_allowed(words, c as f64)),
+                    };
+                    if let Some(code) = member {
+                        pool.push(code as f64);
+                    }
+                }
+                let factual_ok = !x[j].is_nan()
+                    && match allowed {
+                        None => true,
+                        Some(words) => crate::constraints::code_allowed(words, x[j]),
+                    };
+                if factual_ok && !pool.contains(&x[j]) {
+                    pool.push(x[j]);
+                }
+                pool
             } else {
                 all_cells[j]
                     .iter()
@@ -101,18 +135,28 @@ pub fn solve_genetic(
         })
         .collect();
 
-    let mutate_value =
-        |rng: &mut Pcg64Mcg, current: f64, pool: &[f64], sigma_j: f64, nan_allowed: bool| -> f64 {
-            let roll: f64 = rng.random();
-            if nan_allowed && roll < 0.15 {
-                return f64::NAN;
-            }
-            if !pool.is_empty() && roll < 0.6 {
-                return pool[rng.random_range(0..pool.len())];
-            }
-            let base = if current.is_nan() { 0.0 } else { current };
-            base + normal.sample(rng) * sigma_j.max(1e-9)
-        };
+    let mutate_value = |rng: &mut Pcg64Mcg,
+                        current: f64,
+                        pool: &[f64],
+                        sigma_j: f64,
+                        nan_allowed: bool,
+                        is_cat_j: bool|
+     -> f64 {
+        let roll: f64 = rng.random();
+        if nan_allowed && roll < 0.15 {
+            return f64::NAN;
+        }
+        if !pool.is_empty() && (roll < 0.6 || is_cat_j) {
+            // a categorical coordinate only ever takes a pooled code
+            return pool[rng.random_range(0..pool.len())];
+        }
+        if is_cat_j {
+            // an empty categorical pool (all codes banned): nothing to move to
+            return current;
+        }
+        let base = if current.is_nan() { 0.0 } else { current };
+        base + normal.sample(rng) * sigma_j.max(1e-9)
+    };
 
     // --- initialization: factual + single-feature cell moves + NaN flips + background mixes ---
     let mut pop: Vec<f64> = Vec::new();
@@ -154,7 +198,14 @@ pub fn solve_genetic(
             let k = rng.random_range(1..(mutable.len() + 1).max(2));
             let picks = sample_without_replacement(&mut rng, &mutable, k.min(mutable.len()));
             for jj in picks {
-                row[jj] = mutate_value(&mut rng, x[jj], &pools[jj], sigma[jj], can_be_nan[jj]);
+                row[jj] = mutate_value(
+                    &mut rng,
+                    x[jj],
+                    &pools[jj],
+                    sigma[jj],
+                    can_be_nan[jj],
+                    is_cat[jj],
+                );
             }
         }
         push_row(&mut pop, &row);
@@ -228,8 +279,14 @@ pub fn solve_genetic(
             for &jj in &mutable {
                 let roll: f64 = rng.random();
                 if roll < 0.15 {
-                    child[jj] =
-                        mutate_value(&mut rng, child[jj], &pools[jj], sigma[jj], can_be_nan[jj]);
+                    child[jj] = mutate_value(
+                        &mut rng,
+                        child[jj],
+                        &pools[jj],
+                        sigma[jj],
+                        can_be_nan[jj],
+                        is_cat[jj],
+                    );
                 } else if roll < 0.30 {
                     child[jj] = x[jj]; // revert-to-factual: drives sparsity
                 }
@@ -366,7 +423,15 @@ fn rank_keys(
             2
         };
         if tier[r] == 0 {
-            key[r] = objective_row(&pop[r * p..(r + 1) * p], x, sigma, weights, lam, deltas);
+            key[r] = objective_row(
+                &pop[r * p..(r + 1) * p],
+                x,
+                sigma,
+                weights,
+                lam,
+                deltas,
+                &ens.cardinality,
+            );
         } else {
             let gap = (lo_t - s).max(0.0) + (s - hi_t).max(0.0);
             // np.nan_to_num(gap, posinf=1e18): NaN -> 0.0, +inf -> 1e18
@@ -382,6 +447,7 @@ fn rank_keys(
     (tier, key)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn objective_row(
     row: &[f64],
     x: &[f64],
@@ -389,6 +455,7 @@ fn objective_row(
     weights: &[f64],
     lam: f64,
     deltas: &[(f64, f64)],
+    cardinality: &[u32],
 ) -> f64 {
     let mut total = 0.0;
     for j in 0..row.len() {
@@ -404,7 +471,13 @@ fn objective_row(
             }
             let moved = !col_nan && row[j] != x[j];
             if moved {
-                total += lam + weights[j] * (row[j] - x[j]).abs() / sigma[j];
+                // a category change costs one flat unit; numeric moves cost |delta|
+                let delta = if cardinality[j] > 0 {
+                    1.0
+                } else {
+                    (row[j] - x[j]).abs()
+                };
+                total += lam + weights[j] * delta / sigma[j];
             }
         }
     }
@@ -444,6 +517,7 @@ mod tests {
             implications: vec![],
             onehot: vec![],
             allow_missing: vec![],
+            allowed_categories: vec![],
         }
     }
 

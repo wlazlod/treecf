@@ -11,6 +11,11 @@ class UnsupportedModelError(TreecfError):
     """The model (or one of its nodes/objectives) cannot be represented in the IR."""
 
 
+class ParserError(UnsupportedModelError):
+    """A model dump was recognized but cannot be parsed as given; the message
+    names what to change (an argument to supply, or a retraining recipe)."""
+
+
 class MissingExtraError(TreecfError):
     """An optional dependency is required; message carries the pip install command."""
 

@@ -39,6 +39,15 @@ def _core() -> Any:
 
 def build_rust_ensemble(ir: EnsembleIR) -> Any:
     flat = flatten_ir(ir)
+    categorical = {}
+    if "node_set" in flat:
+        categorical = {
+            "node_set": flat["node_set"],
+            "set_offsets": flat["set_offsets"],
+            "set_words": flat["set_words"],
+            "cat_idx": flat["cat_idx"],
+            "cat_card": flat["cat_card"],
+        }
     return _core().RustEnsemble(
         flat["feature"],
         flat["threshold"],
@@ -51,6 +60,7 @@ def build_rust_ensemble(ir: EnsembleIR) -> Any:
         flat["base_score"],
         flat["link"],
         flat["n_features"],
+        **categorical,
     )
 
 
@@ -81,6 +91,9 @@ def build_rust_constraints(compiled: CompiledConstraints) -> Any:
         flat["am_idx"],
         flat["am_to"],
         flat["am_from"],
+        ac_idx=flat["ac_idx"],
+        ac_offsets=flat["ac_offsets"],
+        ac_words=flat["ac_words"],
     )
 
 

@@ -112,6 +112,8 @@ class ExactFixture:
     golden_nodes_pruned_score: int
     golden_nodes_pruned_cost: int
     golden_completed: bool
+    golden_presolve_removed: int
+    golden_presolve_certified: bool
 
 
 def build_fixture_payload(
@@ -174,6 +176,8 @@ def golden_block(result: ExactResult) -> dict[str, Any]:
         "nodes_pruned_score": result.stats["nodes_pruned_score"],
         "nodes_pruned_cost": result.stats["nodes_pruned_cost"],
         "completed": result.stats["completed"],
+        "presolve_removed": result.stats["presolve_removed"],
+        "presolve_certified": result.stats["presolve_certified"],
     }
 
 
@@ -193,7 +197,7 @@ def _fixture_from_payload(
     ir = decode_ensemble(payload["ensemble"])
     if_ir = decode_ensemble(payload["if_ensemble"]) if payload.get("if_ensemble") else None
     constraints = build_constraints(payload["constraints"])
-    compiled = compile_constraints(constraints, ir.feature_names)
+    compiled = compile_constraints(constraints, ir.feature_names, ir.categorical)
     interval_raw = decode_floats(payload["interval"])
     incumbent_raw = payload.get("incumbent")
     incumbent = (
@@ -234,6 +238,8 @@ def _fixture_from_payload(
         golden_nodes_pruned_score=int(golden.get("nodes_pruned_score", 0)),
         golden_nodes_pruned_cost=int(golden.get("nodes_pruned_cost", 0)),
         golden_completed=bool(golden.get("completed", False)),
+        golden_presolve_removed=int(golden.get("presolve_removed", 0)),
+        golden_presolve_certified=bool(golden.get("presolve_certified", False)),
     )
 
 
@@ -280,6 +286,7 @@ class RegionFixture:
     compiled: CompiledConstraints
     golden_lo: FloatArray
     golden_hi: FloatArray
+    golden_cat_sets: dict[int, tuple[int, ...]]
 
 
 def build_region_fixture_payload(
@@ -306,8 +313,13 @@ def build_region_fixture_payload(
     }
 
 
-def region_golden_block(lo: FloatArray, hi: FloatArray) -> dict[str, Any]:
-    return {"lo": encode_floats(lo), "hi": encode_floats(hi)}
+def region_golden_block(
+    lo: FloatArray, hi: FloatArray, cat_sets: dict[int, set[int]] | None = None
+) -> dict[str, Any]:
+    block: dict[str, Any] = {"lo": encode_floats(lo), "hi": encode_floats(hi)}
+    if cat_sets:
+        block["cat_sets"] = {str(j): sorted(members) for j, members in sorted(cat_sets.items())}
+    return block
 
 
 def region_fixture_paths() -> list[Path]:
@@ -326,7 +338,7 @@ def _region_fixture_from_payload(
     ir = decode_ensemble(payload["ensemble"])
     if_ir = decode_ensemble(payload["if_ensemble"]) if payload.get("if_ensemble") else None
     constraints = build_constraints(payload["constraints"])
-    compiled = compile_constraints(constraints, ir.feature_names)
+    compiled = compile_constraints(constraints, ir.feature_names, ir.categorical)
     interval_raw = decode_floats(payload["interval"])
     golden = golden or {}
     golden_lo = golden.get("lo")
@@ -346,10 +358,16 @@ def _region_fixture_from_payload(
         golden_hi=(
             np.empty(0) if golden_hi is None else np.asarray(decode_floats(golden_hi))
         ),
+        golden_cat_sets={
+            int(j): tuple(int(c) for c in members)
+            for j, members in (golden.get("cat_sets") or {}).items()
+        },
     )
 
 
-def solve_region_payload(payload: Mapping[str, Any]) -> tuple[FloatArray, FloatArray]:
+def solve_region_payload(
+    payload: Mapping[str, Any],
+) -> tuple[FloatArray, FloatArray, dict[int, set[int]]]:
     """Run the pure-Python region growth over a payload dict built by
     ``build_region_fixture_payload`` (no ``golden`` block needed)."""
     fixture = _region_fixture_from_payload(payload, golden=None)
@@ -371,20 +389,38 @@ def region_degenerate_and_bounds(
     return degenerate, lo_b, hi_b
 
 
-def run_region_fixture(fixture: RegionFixture) -> tuple[FloatArray, FloatArray]:
+def run_region_fixture(
+    fixture: RegionFixture,
+) -> tuple[FloatArray, FloatArray, dict[int, set[int]]]:
     """Run the pure-Python growth loop (bypasses the rust-first dispatch in
     ``treecf.regions._recourse_region``) over a loaded fixture."""
-    from treecf.regions import _grow_box
+    import math as math_mod
+
+    from treecf.regions import _categorical_candidates, _grow_box
 
     degenerate, lo_b, hi_b = region_degenerate_and_bounds(fixture)
+    if fixture.ir.categorical:
+        frozen = fixture.compiled.instance_bounds(fixture.x)[2]
+        degenerate = degenerate | frozenset(fixture.ir.categorical)
+        cat_candidates = _categorical_candidates(
+            fixture.ir, fixture.if_ir, fixture.compiled, frozen, fixture.x_cf
+        )
+    else:
+        cat_candidates = {}
+    del math_mod
     min_total_path = fixture.min_total_path if fixture.min_total_path is not None else 0.0
     return _grow_box(
         fixture.ir, fixture.x_cf, fixture.interval, fixture.compiled,
-        fixture.if_ir, min_total_path, degenerate, lo_b, hi_b,
+        fixture.if_ir, min_total_path, degenerate, lo_b, hi_b, cat_candidates,
     )
 
 
-def diff_region_golden(fixture: RegionFixture, lo: FloatArray, hi: FloatArray) -> list[str]:
+def diff_region_golden(
+    fixture: RegionFixture,
+    lo: FloatArray,
+    hi: FloatArray,
+    cat_sets: dict[int, set[int]] | None = None,
+) -> list[str]:
     """Byte-exact comparison, ``float`` bits via ``encode_floats``. Empty = match."""
     problems: list[str] = []
     got_lo, want_lo = encode_floats(lo), encode_floats(fixture.golden_lo)
@@ -393,6 +429,9 @@ def diff_region_golden(fixture: RegionFixture, lo: FloatArray, hi: FloatArray) -
     got_hi, want_hi = encode_floats(hi), encode_floats(fixture.golden_hi)
     if got_hi != want_hi:
         problems.append(f"hi: golden={want_hi!r} got={got_hi!r}")
+    got_sets = {j: tuple(sorted(members)) for j, members in sorted((cat_sets or {}).items())}
+    if got_sets != fixture.golden_cat_sets:
+        problems.append(f"cat_sets: golden={fixture.golden_cat_sets!r} got={got_sets!r}")
     return problems
 
 
@@ -416,6 +455,8 @@ def diff_golden(fixture: ExactFixture, result: ExactResult) -> list[str]:
         ("nodes_pruned_score", fixture.golden_nodes_pruned_score),
         ("nodes_pruned_cost", fixture.golden_nodes_pruned_cost),
         ("completed", fixture.golden_completed),
+        ("presolve_removed", fixture.golden_presolve_removed),
+        ("presolve_certified", fixture.golden_presolve_certified),
     ):
         got = result.stats[key]
         if got != want:

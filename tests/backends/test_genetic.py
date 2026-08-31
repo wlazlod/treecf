@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from treecf import AllowMissing, Counterfactual, Explainer, Freeze, Infeasible, Monotone, Target
+from treecf.backends.genetic import solve_genetic
 from treecf.ir.evaluate import raw_score
 from treecf.ir.model import EnsembleIR, Link, Node, SplitOp, Tree
 
@@ -123,3 +124,66 @@ class TestOracleSoundness:
             assert heur.score_raw >= lo_t  # float-verified by the API already
             assert heur.distance >= oracle.objective - 1e-9  # never beats the optimum
             assert heur.distance <= oracle.objective + 1.0  # and lands reasonably close
+
+
+class TestCategoricalPools:
+    """Categorical coordinates only ever take pooled codes — never jitter."""
+
+    @staticmethod
+    def _mixed_explainer_parts():
+        import numpy as np
+
+        from treecf.constraints.compile import compile_constraints
+        from treecf.ir.model import CategoricalFeature, EnsembleIR, Link, Node, SplitOp, Tree
+
+        # tree 0: set split on feature 0 ({2, 3} -> +1); tree 1: numeric on feature 1
+        t0 = Tree(
+            nodes=(
+                Node(0, 0, None, None, True, 1, 2, None, categories=frozenset({2, 3})),
+                Node(1, None, None, None, None, None, None, 1.0),
+                Node(2, None, None, None, None, None, None, 0.0),
+            )
+        )
+        t1 = Tree(
+            nodes=(
+                Node(0, 1, 0.5, SplitOp.LE, True, 1, 2, None),
+                Node(1, None, None, None, None, None, None, 0.0),
+                Node(2, None, None, None, None, None, None, 1.0),
+            )
+        )
+        ir = EnsembleIR(
+            trees=(t0, t1),
+            base_score=0.0,
+            link=Link.IDENTITY,
+            n_features=2,
+            feature_names=("occupation", "amount"),
+            meta={},
+            categorical={0: CategoricalFeature(cardinality=5)},
+        )
+        compiled = compile_constraints((), ir.feature_names)
+        x = np.array([0.0, 0.0])
+        sigma = np.ones(2)
+        weights = np.ones(2)
+        return ir, compiled, x, sigma, weights
+
+    @pytest.mark.parametrize("seed", range(5))
+    def test_solution_uses_a_valid_code(self, seed: int) -> None:
+        ir, compiled, x, sigma, weights = self._mixed_explainer_parts()
+        result = solve_genetic(
+            ir, x, (2.0, math.inf), compiled, sigma, weights, lam=0.0, seed=seed
+        )
+        assert result.x_cf is not None
+        code = result.x_cf[0]
+        assert code == int(code) and 0 <= code < 5
+        assert code in (2.0, 3.0)  # only these codes reach the target
+        assert result.x_cf[1] > 0.5
+
+    @pytest.mark.parametrize("seed", range(20))
+    def test_population_never_carries_fractional_codes(self, seed: int) -> None:
+        ir, compiled, x, sigma, weights = self._mixed_explainer_parts()
+        result = solve_genetic(
+            ir, x, (2.0, math.inf), compiled, sigma, weights, lam=0.0, seed=seed,
+            max_generations=15,
+        )
+        if result.x_cf is not None:
+            assert result.x_cf[0] == int(result.x_cf[0])

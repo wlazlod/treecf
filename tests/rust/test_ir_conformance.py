@@ -45,8 +45,13 @@ def probe_grid(ir: EnsembleIR, rng: np.random.Generator, n_random: int = 2000) -
         for node in tree.nodes:
             if node.feature is None:
                 continue
-            t = float(node.threshold)  # type: ignore[arg-type]
-            for v in (t, np.nextafter(t, -np.inf), np.nextafter(t, np.inf)):
+            if node.categories is not None:
+                probes = [float(c) for c in sorted(node.categories)]
+                probes += [max(probes) + 1.0, -1.0, 0.5]
+            else:
+                t = float(node.threshold)  # type: ignore[arg-type]
+                probes = [t, float(np.nextafter(t, -np.inf)), float(np.nextafter(t, np.inf))]
+            for v in probes:
                 row = base.copy()
                 row[node.feature] = v
                 rows.append(row.reshape(1, -1))
@@ -65,6 +70,33 @@ def test_random_irs_bitwise(seed: int) -> None:
     X = probe_grid(ir, rng)
     np.testing.assert_array_equal(
         np.asarray(rust_ensemble(ir).raw_score_batch(X)),  # type: ignore[attr-defined]
+        raw_score_batch(ir, X),
+    )
+
+
+@pytest.mark.parametrize("seed", range(8))
+def test_random_mixed_irs_bitwise(seed: int) -> None:
+    from treecf.backends.genetic_rust import build_rust_ensemble
+
+    from ..conftest import make_random_mixed_ir
+
+    rng = np.random.default_rng(seed)
+    cardinality = int(rng.integers(2, 70))
+    ir = make_random_mixed_ir(
+        rng,
+        n_features=4,
+        n_trees=int(rng.integers(1, 8)),
+        depth=int(rng.integers(1, 5)),
+        categorical={1: cardinality, 3: 4},
+    )
+    X = probe_grid(ir, rng)
+    # overwrite the categorical columns with codes, unseen codes, and NaN holes
+    X[:, 1] = rng.integers(0, cardinality + 3, size=len(X)).astype(np.float64)
+    X[:, 3] = rng.integers(0, 7, size=len(X)).astype(np.float64)
+    nan_rows = rng.random(len(X)) < 0.1
+    X[nan_rows, 1] = np.nan
+    np.testing.assert_array_equal(
+        np.asarray(build_rust_ensemble(ir).raw_score_batch(X)),
         raw_score_batch(ir, X),
     )
 

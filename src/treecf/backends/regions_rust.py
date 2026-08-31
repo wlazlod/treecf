@@ -76,8 +76,9 @@ def compute_region_rust(
     degenerate: frozenset[int],
     if_ir: EnsembleIR | None,
     min_total_path: float,
+    cat_candidates: dict[int, list[tuple[int, ...]]] | None = None,
     cache: dict[str, Any] | None = None,
-) -> tuple[FloatArray, FloatArray]:
+) -> tuple[FloatArray, FloatArray, dict[int, set[int]]]:
     """Drop-in for ``treecf.regions._grow_box``; ``cache`` (e.g. the
     ``Explainer``'s ``_rust_cache``) avoids re-marshaling the ensembles and
     constraints on every call, exactly as ``solve_exact_rust``'s does."""
@@ -101,7 +102,19 @@ def compute_region_rust(
 
     p = len(x_cf)
     open_set = np.asarray(sorted(j for j in range(p) if j not in degenerate), dtype=np.uint32)
-    lo, hi = core.compute_region_raw(
+    # the categorical growth channel, flattened: per open categorical feature,
+    # its blocks' admissible members (two-level CSR, canonical block order)
+    cat_candidates = cat_candidates or {}
+    cat_open = sorted(cat_candidates)
+    cat_feat_offsets = [0]
+    cat_block_offsets = [0]
+    cat_members: list[int] = []
+    for j in cat_open:
+        for members in cat_candidates[j]:
+            cat_members.extend(members)
+            cat_block_offsets.append(len(cat_members))
+        cat_feat_offsets.append(len(cat_block_offsets) - 1)
+    lo, hi, grown_offsets, grown_members = core.compute_region_raw(
         cache["ensemble"],
         cache["missing_defined"],
         cache["constraints"],
@@ -114,5 +127,19 @@ def compute_region_rust(
         if_ensemble=if_ens,
         if_missing_defined=if_missing_defined,
         min_total_path=None if if_ir is None else float(min_total_path),
+        cat_open=np.asarray(cat_open, dtype=np.uint32),
+        cat_feat_offsets=np.asarray(cat_feat_offsets, dtype=np.uint32),
+        cat_block_offsets=np.asarray(cat_block_offsets, dtype=np.uint32),
+        cat_members=np.asarray(cat_members, dtype=np.uint32),
     )
-    return np.asarray(lo, dtype=np.float64), np.asarray(hi, dtype=np.float64)
+    grown_offsets = np.asarray(grown_offsets, dtype=np.uint32)
+    grown_members = np.asarray(grown_members, dtype=np.uint32)
+    grown_sets = {
+        j: {int(c) for c in grown_members[grown_offsets[k] : grown_offsets[k + 1]]}
+        for k, j in enumerate(cat_open)
+    }
+    return (
+        np.asarray(lo, dtype=np.float64),
+        np.asarray(hi, dtype=np.float64),
+        grown_sets,
+    )

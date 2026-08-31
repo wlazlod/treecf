@@ -11,19 +11,18 @@ The mode is **opt-in and never the default** — plain `explain` behavior is unc
 ## One row
 
 ```python
+# exp, x, target: the docs explainer, one rejected applicant, the target
 result = exp.explain_coalitions(
-    applicant,
-    target=Target.probability(range=(0.0, 0.30)),
+    x,
+    target=target,
     coalitions={
-        "debt history": ["max_dpd_30d", "max_dpd_12m", "months_since_last_delinq"],
-        "credit usage": ["utilization", "n_active_loans", "n_loans_total"],
-        "income":       ["income_monthly"],
+        "repayment": ["utilization", "dpd_12m"],
+        "profile":   ["income", "tenure_months", "occupation"],
     },
     include_full=True,      # adds the unrestricted "(all levers)" baseline
     seed=0,
 )
-result   # {"(all levers)": Counterfactual, "debt history": Counterfactual,
-         #  "credit usage": Counterfactual, "income": Infeasible}
+result   # {"(all levers)": Counterfactual, "repayment": Counterfactual, ...}
 ```
 
 The result is a dict in coalition order (baseline first when requested), one
@@ -35,14 +34,15 @@ that a mixed plan would have hidden inside one big change-set.
 ## A whole dataset
 
 ```python
-batch = exp.explain_batch(
-    X_declined, target=t,
+# exp, X_bg, target: the docs explainer, its background rows, the target
+coalition_batch = exp.explain_batch(
+    X_bg[:10], target=target,
     diversity="coalitions",
-    coalitions={...},
+    coalitions={"repayment": ["utilization", "dpd_12m"], "income": ["income"]},
     include_full=True,
-    ids=app_ids, seed=0,
+    seed=0,
 )
-batch.to_frame()   # one row per (id, coalition); the `coalition` column names the group
+# one row per (id, coalition); the `coalition` column names the group
 ```
 
 Each row gets one record per coalition: feasible plans ranked by distance (`k = 0, 1, …`),
@@ -76,11 +76,12 @@ The outcome dict plugs straight into the comparison plots — coalition names be
 infeasible groups are skipped:
 
 ```python
+# result: the coalition plans solved above
 from treecf.viz import plot_alternatives, plot_recourse_map, plot_tradeoff
 
 plot_alternatives(result, explainer=exp)   # per-plan changes, one color per coalition
-plot_tradeoff(result, target=t)            # what each group's plan costs and buys
-plot_recourse_map(exp, applicant, result, target=t)   # one applicant, model output vs. cost
+plot_tradeoff(result, target=target)       # what each group's plan costs and buys
+plot_recourse_map(exp, x, result, target=target)   # one applicant, output vs. cost
 ```
 
 ## When to use it

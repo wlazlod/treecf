@@ -41,15 +41,31 @@ def parity_tolerance(ir: EnsembleIR) -> float:
 
 
 def threshold_adjacent_rows(ir: EnsembleIR, base_row: FloatArray) -> FloatArray:
-    """For every split: base_row with the feature at threshold and one float32 ulp each side."""
+    """For every split: base_row with the feature at the routing boundary.
+
+    Numeric splits probe the threshold and one float32 ulp each side; set
+    splits probe every member code plus one code outside the set.
+    """
     rows: list[FloatArray] = []
     for tree in ir.trees:
         for node in tree.nodes:
             if node.feature is None:
                 continue
+            if node.categories is not None:
+                info = ir.categorical.get(node.feature)
+                outside = [
+                    c
+                    for c in range(info.cardinality if info else max(node.categories) + 2)
+                    if c not in node.categories
+                ]
+                for code in [*sorted(node.categories), *outside[:1]]:
+                    row = base_row.copy()
+                    row[node.feature] = float(code)
+                    rows.append(row)
+                continue
             assert node.threshold is not None
-            t32 = np.float32(node.threshold)
-            with np.errstate(over="ignore"):  # nextafter past float32 max is fine to skip
+            with np.errstate(over="ignore"):  # past float32 max is fine to skip
+                t32 = np.float32(node.threshold)
                 candidates = (
                     float(t32),
                     float(np.nextafter(t32, np.float32(-np.inf))),

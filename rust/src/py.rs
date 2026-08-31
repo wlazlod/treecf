@@ -56,6 +56,11 @@ pub struct RustEnsemble {
 impl RustEnsemble {
     #[new]
     #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (
+        feature, threshold, is_lt, missing_left, left, right, value, tree_roots,
+        base_score, link, n_features,
+        node_set=None, set_offsets=None, set_words=None, cat_idx=None, cat_card=None
+    ))]
     fn new(
         feature: PyReadonlyArray1<i32>,
         threshold: PyReadonlyArray1<f64>,
@@ -68,13 +73,18 @@ impl RustEnsemble {
         base_score: f64,
         link: &str,
         n_features: usize,
+        node_set: Option<PyReadonlyArray1<i32>>,
+        set_offsets: Option<PyReadonlyArray1<u32>>,
+        set_words: Option<PyReadonlyArray1<u64>>,
+        cat_idx: Option<PyReadonlyArray1<u32>>,
+        cat_card: Option<PyReadonlyArray1<u32>>,
     ) -> PyResult<Self> {
         let link = match link {
             "identity" => Link::Identity,
             "sigmoid" => Link::Sigmoid,
             other => return Err(PyValueError::new_err(format!("unknown link {other:?}"))),
         };
-        let inner = Ensemble::new(
+        let mut inner = Ensemble::new(
             feature.as_slice()?.to_vec(),
             threshold.as_slice()?.to_vec(),
             is_lt.as_slice()?.iter().map(|&b| b != 0).collect(),
@@ -88,6 +98,28 @@ impl RustEnsemble {
             n_features,
         )
         .map_err(PyValueError::new_err)?;
+        if let (Some(node_set), Some(set_offsets), Some(set_words)) =
+            (node_set, set_offsets, set_words)
+        {
+            let mut cardinality = vec![0u32; n_features];
+            if let (Some(cat_idx), Some(cat_card)) = (cat_idx, cat_card) {
+                for (&j, &k) in cat_idx.as_slice()?.iter().zip(cat_card.as_slice()?.iter()) {
+                    let j = j as usize;
+                    if j >= n_features {
+                        return Err(PyValueError::new_err("categorical index out of range"));
+                    }
+                    cardinality[j] = k;
+                }
+            }
+            inner = inner
+                .with_categories(
+                    node_set.as_slice()?.to_vec(),
+                    set_offsets.as_slice()?.to_vec(),
+                    set_words.as_slice()?.to_vec(),
+                    cardinality,
+                )
+                .map_err(PyValueError::new_err)?;
+        }
         Ok(Self { inner })
     }
 
@@ -119,6 +151,13 @@ pub struct RustConstraints {
 impl RustConstraints {
     #[new]
     #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (
+        n_features, freeze, range_idx, range_lo, range_hi, equals_idx, equals_val,
+        mono_idx, mono_dir, lin_offsets, lin_indices, lin_coefs, lin_op, lin_rhs,
+        lin_policy, imp_cond_idx, imp_cond_val, imp_cons_idx, imp_cons_val,
+        oh_offsets, oh_indices, am_idx, am_to, am_from,
+        ac_idx=None, ac_offsets=None, ac_words=None
+    ))]
     fn new(
         n_features: usize,
         freeze: PyReadonlyArray1<u32>,
@@ -144,6 +183,9 @@ impl RustConstraints {
         am_idx: PyReadonlyArray1<u32>,
         am_to: PyReadonlyArray1<f64>,
         am_from: PyReadonlyArray1<f64>,
+        ac_idx: Option<PyReadonlyArray1<u32>>,
+        ac_offsets: Option<PyReadonlyArray1<u32>>,
+        ac_words: Option<PyReadonlyArray1<u64>>,
     ) -> PyResult<Self> {
         let lin_offsets = lin_offsets.as_slice()?;
         let lin_indices = lin_indices.as_slice()?;
@@ -203,6 +245,16 @@ impl RustConstraints {
             .zip(mono_dir.as_slice()?)
             .map(|(&j, &d)| (j, d))
             .collect();
+        let mut allowed_categories = Vec::new();
+        if let (Some(ac_idx), Some(ac_offsets), Some(ac_words)) = (ac_idx, ac_offsets, ac_words) {
+            let idx = ac_idx.as_slice()?;
+            let offsets = ac_offsets.as_slice()?;
+            let words = ac_words.as_slice()?;
+            for (k, &j) in idx.iter().enumerate() {
+                let (start, end) = (offsets[k] as usize, offsets[k + 1] as usize);
+                allowed_categories.push((j, words[start..end].to_vec()));
+            }
+        }
         Ok(Self {
             inner: Constraints {
                 n_features,
@@ -214,6 +266,7 @@ impl RustConstraints {
                 implications,
                 onehot,
                 allow_missing,
+                allowed_categories,
             },
         })
     }
@@ -459,8 +512,9 @@ fn solve_genetic_batch_raw<'py>(
 
 /// Full exact-backend solve — port of `treecf.backends.exact.solve_exact`.
 /// Returns `(x_cf | None, distance | None, proof, stats, snapped)`: `stats` is
-/// the 7-tuple `(nodes_expanded, nodes_pruned_score, nodes_pruned_cost,
-/// lower_bound, gap, completed, warm_start_used)`; `snapped` is the winning
+/// the 9-tuple `(nodes_expanded, nodes_pruned_score, nodes_pruned_cost,
+/// lower_bound, gap, completed, warm_start_used, presolve_removed,
+/// presolve_certified)`; `snapped` is the winning
 /// row's snapped feature indices, in search order — `exact_rust.py` maps them
 /// back to names to rebuild `ExactResult` losslessly. A `PyValueError`
 /// mirrors Python's `ConstraintValidationError` for a multi-feature Linear
@@ -505,7 +559,7 @@ fn solve_exact_raw<'py>(
     Option<Bound<'py, PyArray1<f64>>>,
     Option<f64>,
     &'static str,
-    (u64, u64, u64, f64, f64, bool, bool),
+    (u64, u64, u64, f64, f64, bool, bool, u64, bool),
     Bound<'py, PyArray1<u64>>,
 )> {
     let x_own = x.as_slice()?.to_vec();
@@ -594,6 +648,8 @@ fn solve_exact_raw<'py>(
         stats.gap,
         stats.completed,
         stats.warm_start_used,
+        stats.presolve_removed,
+        stats.presolve_certified,
     );
     let snapped: Vec<u64> = result.snapped.iter().map(|&i| i as u64).collect();
     Ok((
@@ -660,6 +716,7 @@ fn debug_domains_raw<'py>(
         Some(if_e) => vec![ens, &if_e.inner],
     };
     let grids = crate::exact::domains::constraint_cells(cons, &ensembles);
+    let blocks = crate::cells::category_blocks_joint(&ensembles);
     let domains = crate::exact::domains::build_domains(
         &grids,
         &x_own,
@@ -668,6 +725,7 @@ fn debug_domains_raw<'py>(
         &weights_own,
         lam,
         &policies,
+        &blocks,
     );
 
     let mut offsets: Vec<u32> = Vec::with_capacity(domains.len() + 1);
@@ -717,7 +775,9 @@ fn debug_domains_raw<'py>(
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 #[pyo3(signature = (ensemble, missing_defined, constraints, x_cf, lo_t, hi_t,
                     lo_b, hi_b, open_set,
-                    if_ensemble=None, if_missing_defined=None, min_total_path=None))]
+                    if_ensemble=None, if_missing_defined=None, min_total_path=None,
+                    cat_open=None, cat_feat_offsets=None, cat_block_offsets=None,
+                    cat_members=None))]
 fn compute_region_raw<'py>(
     py: Python<'py>,
     ensemble: &RustEnsemble,
@@ -732,7 +792,16 @@ fn compute_region_raw<'py>(
     if_ensemble: Option<&RustEnsemble>,
     if_missing_defined: Option<PyReadonlyArray1<u8>>,
     min_total_path: Option<f64>,
-) -> PyResult<(Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>)> {
+    cat_open: Option<PyReadonlyArray1<u32>>,
+    cat_feat_offsets: Option<PyReadonlyArray1<u32>>,
+    cat_block_offsets: Option<PyReadonlyArray1<u32>>,
+    cat_members: Option<PyReadonlyArray1<u32>>,
+) -> PyResult<(
+    Bound<'py, PyArray1<f64>>,
+    Bound<'py, PyArray1<f64>>,
+    Bound<'py, PyArray1<u32>>,
+    Bound<'py, PyArray1<u32>>,
+)> {
     let x_cf_own = x_cf.as_slice()?.to_vec();
     let lo_b_own = lo_b.as_slice()?.to_vec();
     let hi_b_own = hi_b.as_slice()?.to_vec();
@@ -746,6 +815,30 @@ fn compute_region_raw<'py>(
         Some(arr) => Some(arr.as_slice()?.iter().map(|&b| b != 0).collect()),
         None => None,
     };
+    // unpack the two-level CSR of the categorical channel: per open feature,
+    // its blocks' admissible member codes
+    let mut cat_open_own: Vec<usize> = Vec::new();
+    let mut cat_blocks_own: Vec<Vec<Vec<u32>>> = Vec::new();
+    if let (Some(cat_open), Some(feat_offsets), Some(block_offsets), Some(members)) = (
+        &cat_open,
+        &cat_feat_offsets,
+        &cat_block_offsets,
+        &cat_members,
+    ) {
+        let feat_offsets = feat_offsets.as_slice()?;
+        let block_offsets = block_offsets.as_slice()?;
+        let members = members.as_slice()?;
+        for (k, &j) in cat_open.as_slice()?.iter().enumerate() {
+            cat_open_own.push(j as usize);
+            let mut blocks: Vec<Vec<u32>> = Vec::new();
+            for b in feat_offsets[k] as usize..feat_offsets[k + 1] as usize {
+                blocks.push(
+                    members[block_offsets[b] as usize..block_offsets[b + 1] as usize].to_vec(),
+                );
+            }
+            cat_blocks_own.push(blocks);
+        }
+    }
     let ens = &ensemble.inner;
     let cons = &constraints.inner;
     let if_pair = match (if_ensemble, &if_missing_defined_own) {
@@ -774,6 +867,8 @@ fn compute_region_raw<'py>(
             &open_set_own,
             if_pair,
             min_total_path.unwrap_or(0.0),
+            &cat_open_own,
+            &cat_blocks_own,
             &mut probe,
         )
     });
@@ -790,7 +885,19 @@ fn compute_region_raw<'py>(
                 .expect("interrupt probe always stores the pending PyErr"));
         }
     };
-    Ok((result.lo.into_pyarray(py), result.hi.into_pyarray(py)))
+    let mut grown_offsets: Vec<u32> = Vec::with_capacity(result.cat_sets.len() + 1);
+    grown_offsets.push(0);
+    let mut grown_members: Vec<u32> = Vec::new();
+    for members in &result.cat_sets {
+        grown_members.extend_from_slice(members);
+        grown_offsets.push(grown_members.len() as u32);
+    }
+    Ok((
+        result.lo.into_pyarray(py),
+        result.hi.into_pyarray(py),
+        grown_offsets.into_pyarray(py),
+        grown_members.into_pyarray(py),
+    ))
 }
 
 #[pymodule]
