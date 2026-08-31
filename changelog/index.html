@@ -1,0 +1,3659 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Constrained, threshold-aware counterfactual explanations for tree ensembles.">
+      
+      
+      
+        <link rel="canonical" href="https://wlazlod.github.io/treecf/changelog/">
+      
+      
+        <link rel="prev" href="../faq/">
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Changelog - treecf</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#changelog" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="treecf" class="md-header__button md-logo" aria-label="treecf" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            treecf
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Changelog
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="teal" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/wlazlod/treecf" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    wlazlod/treecf
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="treecf" class="md-nav__button md-logo" aria-label="treecf" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    treecf
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/wlazlod/treecf" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    wlazlod/treecf
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Learn
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Learn
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install and quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../how-it-works/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    How it works
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../notebooks/01-quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_1" >
+        
+          
+          <label class="md-nav__link" for="__nav_3_1" id="__nav_3_1_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Workflows
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_1">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Workflows
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../guide/models/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Bring your model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../guide/targets/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Set the target
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../guide/constraints/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Constrain the search
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../guide/explain/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Run the search
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../guide/certify/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Certify and widen
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../guide/auditability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Auditability
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../guide/visualize/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Visualize
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_3_2" id="__nav_3_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Integrations
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Integrations
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../guide/probcal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    probcal calibration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../guide/no-solver/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Restricted environments
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Concepts
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_1" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_1" id="__nav_4_1_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Foundations
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_1">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Foundations
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/models/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Models and the IR
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/cells/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cells and category blocks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/targets/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Targets
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/missing-values/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Missing values
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_2" id="__nav_4_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Search
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Search
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/backends/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backends and proofs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/plausibility/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Plausibility
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/coalitions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coalitions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_3" id="__nav_4_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Certification
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Certification
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/certification/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Certification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/calibration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Calibration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_4" id="__nav_4_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Constraints
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Constraints
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/constraints/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Constraints
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_5" id="__nav_4_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Categorical
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Categorical
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/categorical/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Categorical features
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tutorials
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Tutorials
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../notebooks/02-credit-risk-tutorial/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Credit-risk tutorial
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../notebooks/03-no-solver-environments/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Restricted environments: JSON dumps + the Rust genetic engine
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Benchmarks
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Benchmarks
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../benchmarks/comparison/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Comparison
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    API reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/explainer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Explainer and results
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/constraints/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Constraints
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/targets/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Targets
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/viz/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Visualization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api-stability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API stability
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../faq/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    FAQ
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#unreleased" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        [Unreleased]
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#030-2026-08-31" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        [0.3.0] - 2026-08-31
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="[0.3.0] - 2026-08-31">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#invariants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Invariants
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#024-2026-08-23" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        [0.2.4] - 2026-08-23
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="[0.2.4] - 2026-08-23">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#compatibility" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Compatibility
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#023-2026-08-23" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        [0.2.3] - 2026-08-23
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="[0.2.3] - 2026-08-23">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#internal" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Internal
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#022-2026-08-19" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        [0.2.2] - 2026-08-19
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="[0.2.2] - 2026-08-19">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Notes
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#021-2026-08-15" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        [0.2.1] - 2026-08-15
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="[0.2.1] - 2026-08-15">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#docs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Docs
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#020-2026-08-14" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        [0.2.0] - 2026-08-14
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="[0.2.0] - 2026-08-14">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#011-2026-08-08" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        [0.1.1] - 2026-08-08
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="[0.1.1] - 2026-08-08">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#010-2026-07-23" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        [0.1.0] - 2026-07-23
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="[0.1.0] - 2026-07-23">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#001-2026-07-13" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        [0.0.1] - 2026-07-13
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="[0.0.1] - 2026-07-13">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#changed_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#added_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#removed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Removed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#unreleased_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        unreleased
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="unreleased">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_8" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#known-limitations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Known limitations
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#unreleased" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        [Unreleased]
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#030-2026-08-31" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        [0.3.0] - 2026-08-31
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="[0.3.0] - 2026-08-31">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#invariants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Invariants
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#024-2026-08-23" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        [0.2.4] - 2026-08-23
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="[0.2.4] - 2026-08-23">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#compatibility" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Compatibility
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#023-2026-08-23" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        [0.2.3] - 2026-08-23
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="[0.2.3] - 2026-08-23">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#internal" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Internal
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#022-2026-08-19" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        [0.2.2] - 2026-08-19
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="[0.2.2] - 2026-08-19">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Notes
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#021-2026-08-15" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        [0.2.1] - 2026-08-15
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="[0.2.1] - 2026-08-15">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#docs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Docs
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#020-2026-08-14" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        [0.2.0] - 2026-08-14
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="[0.2.0] - 2026-08-14">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#011-2026-08-08" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        [0.1.1] - 2026-08-08
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="[0.1.1] - 2026-08-08">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#010-2026-07-23" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        [0.1.0] - 2026-07-23
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="[0.1.0] - 2026-07-23">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#001-2026-07-13" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        [0.0.1] - 2026-07-13
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="[0.0.1] - 2026-07-13">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#changed_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#added_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#removed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Removed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#unreleased_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        unreleased
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="unreleased">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_8" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#known-limitations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Known limitations
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="changelog">Changelog<a class="headerlink" href="#changelog" title="Permanent link">&para;</a></h1>
+<p>All notable changes to this project will be documented in this file.</p>
+<p>The format is based on <a href="https://keepachangelog.com/en/1.1.0/">Keep a Changelog</a>,
+and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semantic Versioning</a>.</p>
+<!-- Release checklist:
+  1. Run `uv run python scripts/bump_version.py X.Y.Z` (rewrites every version
+     location, promotes [Unreleased], refreshes both lockfiles).
+  2. Review the diff.
+  3. Tag vX.Y.Z -> release.yml checks version consistency, builds, smoke-tests,
+     and publishes.
+-->
+
+<h2 id="unreleased">[Unreleased]<a class="headerlink" href="#unreleased" title="Permanent link">&para;</a></h2>
+<h2 id="030-2026-08-31">[0.3.0] - 2026-08-31<a class="headerlink" href="#030-2026-08-31" title="Permanent link">&para;</a></h2>
+<h3 id="added">Added<a class="headerlink" href="#added" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Native categorical splits.</strong> Models trained with native categorical support now parse
+  exactly into set-membership IR nodes: LightGBM (<code>categorical_feature</code>), XGBoost
+  (<code>enable_categorical</code>), scikit-learn <code>HistGradientBoosting</code> (<code>categorical_features</code>,
+  including string categories via <code>categories=</code>), and CatBoost (<code>cat_features</code>; one-hot and
+  single-feature-statistic splits, hashing reproduced bit-exactly). CatBoost models built with
+  categorical feature <em>combinations</em> raise <code>ParserError</code> naming the <code>max_ctr_complexity=1</code>
+  retraining recipe; the new <code>ParserError</code> type covers "recognized but unparseable as given".</li>
+<li><strong><code>Explainer(categories=...)</code>.</strong> Display names (and, where useful, declared cardinalities
+  beyond training) for categorical features; required for CatBoost with native categorical
+  features and for HistGradientBoosting trained on string categories, optional elsewhere.</li>
+<li><strong>Category blocks.</strong> Every backend searches categorical features over routing-equivalence
+  classes of codes, so search cost scales with how finely the ensemble partitions the feature,
+  not its cardinality. Categorical distance is flat: any change of code costs one weighted
+  unit.</li>
+<li><strong><code>AllowedCategories</code> constraint.</strong> Whitelist a categorical feature's codes by display name
+  or raw code; order- and arithmetic-shaped constraints (<code>Range</code>, <code>Monotone</code>, <code>Linear</code>,
+  <code>Equals</code>, <code>Implies</code>, <code>OneHot</code>) are rejected on categorical features at construction.</li>
+<li><strong>Categorical exact search and regions.</strong> <code>backend="exact"</code> proves optimality and certified
+  infeasibility over the block grid; <code>region=True</code> certifies <em>category sets</em> per categorical
+  feature (<code>RecourseRegion.feature_categories</code> / <code>.category_names</code> / <code>.cat_sets</code>), stored in
+  certificates as schema version 2. Schema version 1 certificates still verify, pinned by a
+  committed golden file.</li>
+<li><strong>Presolve.</strong> The exact backend filters each feature's candidate states by reachable score
+  and plausibility brackets before branching; <code>solver_stats</code> gains <code>presolve_removed</code> and
+  <code>presolve_certified</code>, and an emptied domain certifies infeasibility with zero nodes
+  expanded. Results are bit-identical with presolve on; only node counts drop.</li>
+<li><strong>Visualization.</strong> <code>plot_region</code> (the certified box, with per-bound cap markers and
+  categorical tiles) and <code>plot_recourse_burden</code> / <code>recourse_burden_table</code> (feasible share and
+  cost distribution by segment, kept side by side).</li>
+<li><strong>Docs.</strong> Reader-oriented navigation (workflow guides, grouped concepts, split API pages,
+  benchmarks and changelog pages); every fenced snippet executed in CI against a committed
+  docs model; a structure test pins that no published URL disappears and every plot function
+  ships a committed figure.</li>
+<li><code>SECURITY.md</code>, <code>CONTRIBUTING.md</code>, <code>scripts/bump_version.py</code> (with a version-consistency
+  test), and <code>#![forbid(unsafe_code)]</code> in the Rust core.</li>
+</ul>
+<h3 id="changed">Changed<a class="headerlink" href="#changed" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Exact-search performance.</strong> Presolve, a feature-to-trees index, and per-tree bracket
+  caching in region growth. Measured before/after (same machine, same seeds, medians):</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Scenario (exact backend, warm start, 5 s / 2M-node budgets, 10 seeds, 4-core x86_64)</th>
+<th>0.2.4 median</th>
+<th>0.3.0 median</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>30 trees / depth 4 / 8 features — every solve proved optimal</td>
+<td>0.292 s</td>
+<td>0.295 s</td>
+</tr>
+<tr>
+<td>60 trees / depth 5 / 12 features — budget-capped, best-found</td>
+<td>5.014 s</td>
+<td>5.012 s</td>
+</tr>
+<tr>
+<td>300 trees / depth 6 / 50 features — budget-capped, best-found</td>
+<td>5.208 s</td>
+<td>5.133 s</td>
+</tr>
+</tbody>
+</table>
+<p>No legacy case regresses (the largest change is +1.0% on the small case, within run
+  noise); on the large budget-capped case the search now expands 308,822 nodes in the same
+  budget where 0.2.4 expanded 205,755. New certification measurements (60 s budget,
+  3 seeds): the 200-tree / depth-5 / 12-feature reference case does <strong>not</strong> certify within
+  60 s on the 4-core benchmark machine; the native-categorical suite (4 numeric levers plus
+  cardinality-3/8/15 categoricals, LightGBM) certifies in 0.022 s median even at 200 trees.
+  Full tables: the docs benchmarks page, generated from the same measured JSON.</p>
+<h3 id="invariants">Invariants<a class="headerlink" href="#invariants" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Numeric-model results are byte-identical to the previous release: fingerprints, solves,
+  regions, and stored fixtures are unchanged, pinned by a dedicated invariance suite.</li>
+<li>No genetic or parity fixture was regenerated; exact fixtures were regenerated only under an
+  equality guard asserting identical plans, distances, and proofs.</li>
+<li>The Python and Rust engines remain byte-identical on every solve, domain, and region,
+  including the new categorical paths.</li>
+</ul>
+<h2 id="024-2026-08-23">[0.2.4] - 2026-08-23<a class="headerlink" href="#024-2026-08-23" title="Permanent link">&para;</a></h2>
+<h3 id="added_1">Added<a class="headerlink" href="#added_1" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Calibrator provenance in certificates.</strong> For calibrated-space targets the certificate's
+  <code>target.calibrator</code> block is now structured — <code>{embedded: false, fingerprint, type,
+  buffer_logit}</code> — with the fingerprint duck-read from the calibrator's own <code>fingerprint()</code>
+  (<code>null</code> when absent; probcal calibrators provide one). <code>check_certificate</code> accepts an
+  optional <code>calibrator=</code> keyword: when given, the report gains <code>calibrator_match</code>, true only
+  if the fingerprints agree and re-inverting the stored calibrated bounds through the passed
+  calibrator reproduces the stored raw interval.</li>
+<li><strong>Calibrator provenance in batch records.</strong> <code>BatchRecord.calibrator_fingerprint</code> repeats the
+  target calibrator's fingerprint on every row, so each JSON line stays self-contained.</li>
+<li><strong><code>score_calibrated</code> read-out.</strong> <code>Counterfactual</code>, <code>BatchRecord</code>, and the certificate's
+  <code>factual</code> block now carry the calibrator's probability at the result (and at the factual)
+  for calibrated targets whose calibrator exposes <code>predict_proba</code>; <code>None</code> otherwise.
+  Presentational only: the engine still optimizes and verifies against the raw interval.</li>
+<li><strong>Plateau-aware exactness tests.</strong> Calibrated targets on and one float above step-calibrator
+  plateau levels, cross-checked against brute-force enumeration in calibrated space and
+  against real probcal isotonic/centered-isotonic fits.</li>
+<li><strong>probcal test matrix.</strong> New optional <code>test</code> extra (and probcal in the <code>dev</code> extra):
+  7 fitted probcal calibrators x target ops x buffer levels on sklearn and LightGBM models,
+  every plan re-verified through the model and calibrator; dedicated CI job with pinned
+  probcal + lightgbm. <code>src/</code> never imports probcal — the duck-typed protocol is unchanged.</li>
+<li><strong>Docs.</strong> <code>concepts/calibration.md</code> gains provenance, read-out, and worked-example
+  sections, and pins the guarantee that <code>explain_batch</code> calls <code>interval_inverse</code> exactly
+  once per call (once per band for ladders), backed by counting tests.</li>
+</ul>
+<h3 id="compatibility">Compatibility<a class="headerlink" href="#compatibility" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Strictly additive. All new dataclass fields default to <code>None</code>; 0.2.x batch JSON and
+  certificates load with the new fields defaulted. <code>check_certificate</code> without <code>calibrator=</code>
+  produces byte-identical reports to 0.2.3. Calibrators missing optional duck members
+  (<code>fingerprint</code>, <code>predict_proba</code>) degrade to <code>null</code>/<code>None</code>, never an error.</li>
+</ul>
+<h2 id="023-2026-08-23">[0.2.3] - 2026-08-23<a class="headerlink" href="#023-2026-08-23" title="Permanent link">&para;</a></h2>
+<h3 id="fixed">Fixed<a class="headerlink" href="#fixed" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>sklearn <code>tree_</code>-based ensembles (RandomForest, GradientBoosting, IsolationForest) routed
+  differently from sklearn itself at split boundaries</strong>, because sklearn casts inputs to
+  float32 before comparing against the float64 threshold while the IR evaluates in float64.
+  A counterfactual whose coordinate landed exactly on a split threshold — the natural optimum
+  of a smallest-change search, since <code>&lt;=</code> cells are closed on the left — could flip through
+  many trees at once: in the reproducing case (<code>GradientBoostingClassifier</code>,
+  <code>subsample=0.8</code>), the exact backend stamped <code>proof="optimal"</code> on an <code>x_cf</code> whose true
+  <code>decision_function</code> margin was 3.09 raw-score units away from the reported <code>score_raw</code>,
+  silently violating the target. Thresholds are now re-expressed at parse time as the exact
+  float64 boundary of the float32 cast (largest float64 <code>T</code> with <code>float32(T) &lt;= t</code>,
+  round-half-to-even handled), so float64 IR routing reproduces sklearn bit-for-bit for
+  every input — search, certificates, and <code>score_raw</code> included. Verified by a 138k-probe
+  property sweep, new unquantized conformance tests (exact-threshold and float64-neighbour
+  probes; the old harness quantized all probes to the float32 grid, which is exactly why
+  this never surfaced), and probcal's joint recourse scenarios. HistGradientBoosting
+  predicts on the float64 grid and is unchanged; XGBoost also casts features to float32
+  natively and should get the same treatment once a reproducing case is confirmed
+  (follow-up).</li>
+</ul>
+<h3 id="internal">Internal<a class="headerlink" href="#internal" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Restructured a late-initialized binding in the exact search's proof/lower-bound
+  epilogue (behavior-identical) — clippy 1.98's <code>needless_late_init</code> began rejecting
+  the old form under <code>-D warnings</code> on the freshly installed stable toolchain in CI.</li>
+</ul>
+<h2 id="022-2026-08-19">[0.2.2] - 2026-08-19<a class="headerlink" href="#022-2026-08-19" title="Permanent link">&para;</a></h2>
+<h3 id="added_2">Added<a class="headerlink" href="#added_2" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Audit certificates</strong>: <code>Explainer.certificate(x, result, target)</code> turns any stored
+  <code>Counterfactual</code> or <code>Infeasible</code> (the certified "no" included) into a strict-JSON-serializable
+  audit record — a reproducibility record plus a fresh verification. It binds the claim to a
+  model fingerprint, a constraint fingerprint, and the solve parameters, and re-verifies the
+  returned plan (score, target membership, constraint check, plausibility, sampled region
+  points) at issue time; it does not cryptographically prove that a search ran or that a
+  <code>proof="optimal"</code> claim is true — re-running with the recorded seed/budgets on a
+  fingerprint-matching model is how a validator checks that. A certificate whose fresh
+  verification fails is still issued with the failing checks recorded, plus a <code>TreecfWarning</code>
+  naming them. <code>Explainer.check_certificate(cert)</code> is the validator's tool: it recomputes both
+  fingerprints against the current explainer, re-runs the verification block, and reports
+  (<code>model_match</code>/<code>constraints_match</code>/<code>verification_ok</code>/<code>mismatches</code>) without ever raising on a
+  mismatch. The new <code>treecf.audit</code> module exposes the underlying <code>ir_fingerprint</code> and
+  <code>constraints_fingerprint</code> (SHA-256 over canonical byte encodings — stable across Python
+  versions, platforms, and dict ordering; a callable <code>value_policy</code> has no canonical encoding
+  and marks the certificate <code>"reproducible": false</code> with a reason).</li>
+<li><code>BatchRecord.proof</code> and <code>BatchRecord.solver_stats</code>: every batch record now carries the claim
+  and (for exact solves) the diagnostics of the single-instance result that produced it —
+  <code>Counterfactual.proof</code> values for feasible records, <code>Infeasible.proof</code>
+  (<code>"search_exhausted"</code>/<code>"certified"</code>) for infeasibility markers. Genetic/python records carry
+  empty stats (those engines report no per-row diagnostics). <code>BatchResult.to_frame</code> gains a
+  <code>proof</code> column (<code>solver_stats</code> stays record-only); <code>save</code>/<code>load</code> round-trip both fields, and
+  files from earlier versions load with feasibility-based defaults.</li>
+</ul>
+<h3 id="fixed_1">Fixed<a class="headerlink" href="#fixed_1" title="Permanent link">&para;</a></h3>
+<ul>
+<li>The batch aggregate degraded-result warning pointed at "each result's own
+  proof/solver_stats" while <code>BatchRecord</code> exposed neither field; the fields now exist, so the
+  message is true as written (the wording itself is unchanged).</li>
+</ul>
+<h3 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">&para;</a></h3>
+<ul>
+<li>No solver behavior changes; no fixtures touched; no Rust source changes (only the mirrored
+  version in <code>rust/Cargo.toml</code>/<code>Cargo.lock</code>).</li>
+</ul>
+<h2 id="021-2026-08-15">[0.2.1] - 2026-08-15<a class="headerlink" href="#021-2026-08-15" title="Permanent link">&para;</a></h2>
+<h3 id="added_3">Added<a class="headerlink" href="#added_3" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Interruptibility</strong>: a <code>Ctrl-C</code> during an exact search, a certified-region growth, or a
+  batch genetic solve now raises <code>KeyboardInterrupt</code> promptly instead of waiting for the
+  whole search to finish. The Rust core polls for it from inside its released GIL (about
+  every 2^18 nodes for the exact search); the pure-Python exact fallback already raised
+  promptly, since Python delivers signals between bytecode instructions. Reliable only when
+  the call happens on the main thread. Nothing is returned on interrupt -- whatever
+  incumbent or partially grown region existed is discarded.</li>
+<li>The exact backend now always warns when it returns a degraded result
+  (<code>solver_stats["completed"] is False</code>): a <code>TreecfWarning</code> names whether the search
+  genuinely ran out of budget or instead withdrew its optimality certificate through a
+  conservative constraint repair without touching the budget -- the two causes are never
+  conflated, and the message includes a lower-bound/gap parenthetical when one is
+  available, plus an unseeded-warm-start clause when the incumbent came from an unseeded
+  warm pass. <code>Target.bands</code>, <code>explain_coalitions</code>, and <code>explain_batch</code> collapse every
+  degraded solve in one call into a single aggregate warning instead of one per solve.</li>
+<li><code>explain_batch(..., backend="exact")</code> is now opt-in behind <code>allow_exact_batch=True</code>:
+  without it, raises <code>ValueError</code> naming a worst-case wall-time estimate (rows × plans ×
+  <code>time_budget_s</code>) instead of running unbounded. Opting in also replaces <code>warm_start</code>'s
+  per-row (or, in <code>diversity="seeds"</code> mode, per-attempt) genetic warm passes with a single
+  vectorized warm pass shared across the whole batch -- in seeds mode this means every
+  attempt of a row now shares one incumbent instead of each attempt warm-starting its own
+  (with <code>n_per_example=1</code> the result still matches a sequential <code>explain(...,
+  backend="exact")</code> call exactly).</li>
+</ul>
+<h3 id="changed_1">Changed<a class="headerlink" href="#changed_1" title="Permanent link">&para;</a></h3>
+<ul>
+<li>README and the package's one-line description refreshed to cover the exact backend,
+  certified infeasibility, and recourse regions (updates the PyPI project page on the next
+  release).</li>
+<li>No result of any non-interrupted call changes in this release, and no fixtures were
+  regenerated: the full pre-existing test suite passes unchanged.</li>
+</ul>
+<h3 id="fixed_2">Fixed<a class="headerlink" href="#fixed_2" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>Ctrl-C</code> latency during an exact search, region growth, or batch genetic solve used to
+  equal however much of the search remained; it is now near-immediate (see
+  Interruptibility above).</li>
+</ul>
+<h3 id="docs">Docs<a class="headerlink" href="#docs" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Every public API object rendered on the API reference now documents its parameters
+  (with default semantics, not just default values), return shape, and deliberate raises
+  to the same depth, with cross-references to the relevant concepts pages; several
+  objects that previously had no docstring at all (<code>Target.raw</code>/<code>bands</code>,
+  <code>BatchResult.for_id</code>/<code>save</code>/<code>load</code>, <code>suggest_constraints</code> and its result types,
+  <code>Plausibility.isolation_forest</code>/<code>anomaly_score</code>) were entirely absent from the rendered
+  docs and are now covered.</li>
+<li>README quick-look comment recalibrated to name the warned-degrade case alongside
+  <code>proof="optimal"</code> and a certified "no"; new <a href="https://wlazlod.github.io/treecf/concepts/certification/">Certification</a>
+  sections cover interruption and the always-on degraded-result warning.</li>
+</ul>
+<h2 id="020-2026-08-14">[0.2.0] - 2026-08-14<a class="headerlink" href="#020-2026-08-14" title="Permanent link">&para;</a></h2>
+<h3 id="added_4">Added<a class="headerlink" href="#added_4" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong><code>backend="exact"</code></strong>: a branch-and-bound search over the same routing-atomic cell grid the
+  genetic backend shares, reporting <code>proof="optimal"</code> (no cheaper feasible row exists) or
+  <code>proof="optimal_within_gap"</code> (within a <code>gap &gt; 0</code> relative fraction of the optimum) instead of
+  <code>"heuristic"</code>. Rust-first with a byte-identical pure-Python fallback when the extension is not
+  importable. <code>warm_start</code> (default <code>True</code>) seeds the search with a short genetic pass;
+  <code>node_budget</code> (default 2,000,000 assignments) and <code>gap</code> (default <code>0.0</code>) trade proof strength
+  against wall time. Supports single-feature <code>Linear</code> constraints and the canonical two-feature
+  order pair exactly; any other multi-feature <code>Linear</code> or a callable <code>value_policy</code> raises
+  <code>ConstraintValidationError</code> naming <code>backend="genetic"</code> as the fallback.</li>
+<li><strong>Certified infeasibility</strong>: <code>Infeasible.proof="certified"</code> from the exact backend means the
+  whole reachable grid was tried and every row rejected — not merely that a budget ran out. New
+  <code>Infeasible.proof</code> (<code>"search_exhausted"</code> | <code>"certified"</code>) and <code>Infeasible.solver_stats</code> fields;
+  both default so existing code is unaffected.</li>
+<li><strong>Recourse regions</strong>: <code>explain(..., region=True)</code> (also on <code>explain_coalitions</code>/
+  <code>explain_batch</code>) widens a verified counterfactual into a <code>RecourseRegion</code> — a per-feature box
+  where every point is certified feasible by interval arithmetic over the whole box, not
+  sampled. Works with every
+  backend via <code>Explainer.recourse_region</code>; <code>Counterfactual.region</code> carries it, and
+  <code>BatchRecord.region</code> persists it through batch save/load.</li>
+<li><code>plot_recourse_map</code>: one-axes map of a single applicant's recourse options — model
+  output on x, recourse cost J on y — with the accept band, an arrow per plan, infeasible
+  coalitions marked, and a <code>schematic=True</code> slide-style mode.</li>
+<li>Docs: new <a href="https://wlazlod.github.io/treecf/concepts/certification/">Certification</a> concepts page covering the proof
+  taxonomy, what a certificate does and does not cover, and the region layer's guarantees.</li>
+</ul>
+<h3 id="changed_2">Changed<a class="headerlink" href="#changed_2" title="Permanent link">&para;</a></h3>
+<ul>
+<li>PyPI development-status classifier raised to <code>4 - Beta</code>.</li>
+<li>Rust core: rand upgraded 0.9 → 0.10 (with rand_distr 0.6 and rand_pcg 0.10).
+  Seeded runs stay deterministic for a given treecf version, but the random
+  stream may differ from builds against rand 0.9, so genetic-search results for
+  the same seed can change across this upgrade.</li>
+<li>The genetic backend itself is unchanged by this release: the full pre-existing test suite
+  passes without fixture regeneration.</li>
+</ul>
+<h3 id="fixed_3">Fixed<a class="headerlink" href="#fixed_3" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Derived per-feature bounds from single-feature linear constraints now include the
+  linear check's tolerance, so they no longer exclude counterfactuals the
+  constraint itself admits (previously possible with very small or very large
+  coefficients).</li>
+</ul>
+<h2 id="011-2026-08-08">[0.1.1] - 2026-08-08<a class="headerlink" href="#011-2026-08-08" title="Permanent link">&para;</a></h2>
+<h3 id="added_5">Added<a class="headerlink" href="#added_5" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>TreecfWarning</code>, emitted when a factual violates its constraints — once per
+  <code>explain</code> call, and as a single per-constraint aggregate in <code>explain_batch</code>.
+  The warning spells out that the returned plan includes changes made solely
+  to satisfy the violated constraints.</li>
+<li>Derived per-feature bounds for single-feature <code>Linear</code> constraints
+  (<code>constraint("income &gt;= 100")</code> now clips candidates like the equivalent
+  <code>Range</code>); vacuous zero-coefficient linears are dropped, unsatisfiable ones
+  rejected at compile time.</li>
+<li>Declared Rust MSRV (rustc 1.86) in <code>rust/Cargo.toml</code> with an enforcing CI
+  job; building from the sdist needs 1.86+, wheels need no toolchain.</li>
+<li>Wheel smoke tests in the release workflow: every runnable wheel target is
+  installed into a fresh venv (musllinux inside an Alpine container) and runs
+  one <code>explain</code> per backend before upload.</li>
+<li><code>CITATION.cff</code> version is now checked against <code>treecf.__version__</code> in the
+  test suite.</li>
+</ul>
+<h3 id="fixed_4">Fixed<a class="headerlink" href="#fixed_4" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Satisfiable <code>Linear</code> constraints whose feasible set lies far from the
+  factual no longer come back <code>Infeasible</code>: single-feature linears lower into
+  bounds, and multi-feature linears get halfspace-projection repair.</li>
+<li><code>apply_link</code> no longer raises <code>OverflowError</code> for raw scores below ≈ −710;
+  mid-range sigmoid outputs are bit-for-bit unchanged.</li>
+<li><code>CITATION.cff</code> and <code>rust/Cargo.toml</code> version drift (both said 0.0.1 while
+  the released package was 0.1.0).</li>
+</ul>
+<h3 id="changed_3">Changed<a class="headerlink" href="#changed_3" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Repair for non-canonical linear constraints now runs a 3-round cyclic
+  halfspace projection; <strong>seeded results from 0.1.0 that involve such
+  constraints are not reproducible in 0.1.1</strong>. The canonical order-pair
+  repair (<code>a - b &lt;= 0</code>) is unchanged, and the existing parity fixtures
+  regenerated byte-identical; a new <code>11-linear-projection</code> fixture pins the
+  projection behavior.</li>
+</ul>
+<h2 id="010-2026-07-23">[0.1.0] - 2026-07-23<a class="headerlink" href="#010-2026-07-23" title="Permanent link">&para;</a></h2>
+<h3 id="added_6">Added<a class="headerlink" href="#added_6" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Calibrated targets</strong>: <code>Target.calibrated(calibrator, ...)</code> expresses the
+  target on the post-hoc <em>calibrated</em> probability scale and lazily inverts it
+  through the calibrator's duck-typed generalized inverse
+  (<code>interval_inverse(lo, hi, *, space="logit", buffer_logit=...)</code> +
+  <code>is_monotone_</code>) — no calibration-library dependency. <code>Target.bands</code> accepts
+  <code>space="calibrated"</code> with <code>calibrator=</code>/<code>buffer_logit=</code> for masterscales
+  defined on calibrated PD. <code>Target.probability</code> now documents that it targets
+  the <em>uncalibrated</em> model probability.</li>
+</ul>
+<h3 id="fixed_5">Fixed<a class="headerlink" href="#fixed_5" title="Permanent link">&para;</a></h3>
+<ul>
+<li>
+<p><strong><code>Target.band_intervals</code> field propagation</strong>: per-band targets were rebuilt
+  from <code>(space, lo, hi)</code> only, silently dropping any other field — now all
+  fields propagate (surfaced by the calibrated-bands work).</p>
+</li>
+<li>
+<p><strong>Competitor benchmark</strong>: <code>scripts/bench_vs_competitors.py</code> (PEP 723,
+  self-contained via <code>uv run</code>) compares treecf with DiCE and NICE on two
+  model scales; results published in <em>Backends and proofs</em> — 8–3400× faster
+  than DiCE with far cheaper plans, cheapest plans overall, 157 rows/s batch
+  production on the medium model; NICE's per-instance speed and treecf's own
+  misses reported as-is.</p>
+</li>
+<li><strong>Post-solve pruning</strong>: every returned plan now drops changes that
+  verification proves unnecessary (cheapest first, each revert re-verified in
+  float space). The search's revert-to-factual mutation is stochastic, so a
+  stalled run could ship a residual micro-change that crossed no decision
+  threshold — pure distance cost with zero score effect.</li>
+<li><code>CITATION.cff</code>.</li>
+</ul>
+<h3 id="changed_4">Changed<a class="headerlink" href="#changed_4" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Compiled extensions are no longer tracked in git (history rewritten to drop
+  the committed <code>.so</code>; wheels come from CI, local builds via maturin).</li>
+<li>Publish steps skip files already on the index, making tag-triggered
+  re-releases idempotent; retroactive <code>v0.0.1</code> tag and GitHub release created.</li>
+<li>PyPI keywords no longer mention the removed CP-SAT backend; README/docs
+  state the published version (0.0.1) consistently.</li>
+</ul>
+<h2 id="001-2026-07-13">[0.0.1] - 2026-07-13<a class="headerlink" href="#001-2026-07-13" title="Permanent link">&para;</a></h2>
+<p>First published release (PyPI). Version deliberately resets BELOW 0.1.0 (which
+was never published): the Rust-backed rebuild supersedes the prior pure-Python
+implementation outright and restarts the version line.</p>
+<h3 id="changed_5">Changed<a class="headerlink" href="#changed_5" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>The genetic backend runs on a Rust core by default</strong> (44-58x faster
+  than the numpy implementation on realistic workloads; 24.6x single-threaded).
+  <code>backend="genetic"</code> uses Rust; the pure-Python GA remains available as
+  <code>backend="python"</code>.</li>
+<li>Packaging switched from hatchling (pure Python) to maturin (single mixed
+  Rust/Python package). Installing from source now requires a Rust toolchain;
+  platform wheels are built in CI. The numpy-only-core dependency policy ends;
+  runtime Python dependencies are unchanged (numpy only).</li>
+<li><strong>Release</strong>: platform wheels now include <strong>linux-aarch64</strong> (Graviton, Docker
+  on Apple Silicon) alongside linux/musllinux x86_64, macOS arm64/x86_64, and
+  Windows x64; the PyPI description no longer mentions the removed CP-SAT
+  backend.</li>
+<li><strong>Docs</strong>: the standalone Benchmarks page is gone; the headline numbers, the
+  single-core explanation, and the batch-parallelism caveat now live in a
+  "Performance" section of <em>Backends and proofs</em>. Full protocol and
+  reproduction stay in <code>scripts/bench_genetic.py</code> / <code>scripts/bench_batch.py</code>.</li>
+<li><strong><code>explain_batch</code> runs its solves in parallel inside the Rust core</strong>: the
+  seeds path solves one wave of independently seeded attempts per Rust call
+  (rayon across tasks, GIL released) and lever-blocking batches all primary
+  solves; per-wave verification scores come from one vectorized IR pass.
+  Records are identical to the former sequential per-row loop (same seeds,
+  dedup, and stopping rule), with one caveat: a solve that hits its
+  per-task <code>time_budget_s</code> under core contention may stop at a different
+  generation than it would sequentially. Also: routing-atomic cells are now
+  cached on the Rust ensemble instead of rebuilt per solve, and
+  lever-blocking clones reuse the parent's marshaled Rust ensembles.
+  ~1.7x batch throughput on a 4-core machine (<code>scripts/bench_batch.py</code>);
+  the gain grows with core count.</li>
+</ul>
+<h3 id="added_7">Added<a class="headerlink" href="#added_7" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Coalitions mode (opt-in)</strong>: <code>Explainer.explain_coalitions(x, target,
+  coalitions={...}, include_full=False)</code> produces one counterfactual per named
+  feature group, each solve allowed to change only that group (everything else
+  frozen); <code>Infeasible</code> per group means that group alone cannot reach the
+  target. <code>explain_batch(..., diversity="coalitions")</code> scales it to datasets
+  (one record per group per row; new <code>coalition</code> field on <code>BatchRecord</code>,
+  persisted and exposed in <code>to_frame()</code>). <code>plot_alternatives</code>/<code>plot_tradeoff</code>
+  accept the outcome mapping directly, labeling plans by coalition name.
+  Never the default mode. Documented in a new Concepts page, a "Grouped
+  recourse" section of How it works, and a tutorial section.</li>
+<li><strong>Single-instance comparison plots</strong> (<code>treecf.viz</code>): <code>plot_alternatives</code>
+  (every alternative plan's changes on shared axes, one color per plan,
+  σ-standardized with an explainer) and <code>plot_tradeoff</code> (cost vs achieved
+  score per plan, with target lines). Both accept <code>Counterfactual</code> objects or
+  feasible <code>BatchRecord</code> entries.</li>
+<li><strong>Docs</strong>: pipeline and genetic-loop diagrams (Mermaid) in "How it works";
+  reorganized Home and Getting started (single install section, alternatives
+  walkthrough, "where next" links), pipeline-ordered Concepts nav, and the
+  stale <code>proof</code> values from the removed CP-SAT era corrected.</li>
+<li><strong>Batch visualizations</strong> (<code>treecf.viz_batch</code>, <code>[viz]</code> extra): <code>plot_batch_levers</code>
+  (which levers plans use, by direction, with essential-lever annotations),
+  <code>plot_batch_matrix</code> (plans × features heatmap, effort-shaded with an
+  explainer), <code>plot_batch_summary</code> (cost / sparsity / feasibility panel), and
+  <code>plot_batch_deltas</code> (per-lever delta distributions, σ-standardized with an
+  explainer). Demonstrated in the credit-risk tutorial.</li>
+<li><strong>Docs</strong>: long-form <a href="https://wlazlod.github.io/treecf/how-it-works/">"How treecf finds counterfactuals"</a>
+  article walking one applicant from objective to verified counterfactual;
+  MathJax wired into the docs build for the objective and plausibility formulas.</li>
+<li><strong>Batch production</strong>: <code>Explainer.explain_batch(X, target, n_per_example=k,
+  diversity="seeds"|"lever-blocking", ids=...)</code> mass-produces counterfactuals
+  for a dataset (~ms/row via the Rust engine); <code>BatchResult</code> persists to
+  portable JSON (<code>save</code>/<code>load</code>), supports <code>for_id</code> lookup and a lazy-pandas
+  <code>to_frame()</code>. Lever-blocking mode also records per-row <em>essential levers</em>.</li>
+<li><strong>New visualizations</strong>: <code>plot_waterfall</code> (SHAP-style waterfall of exact
+  score deltas per change, cutoff line, probability space for sigmoid models)
+  and <code>plot_effort</code> (decomposition of the distance J across changes).</li>
+<li><code>treecf._treecf_core</code> extension: tree-IR evaluation (bitwise-identical to
+  the Python evaluator), constraint check/repair (bitwise-identical), and the
+  genetic algorithm (statistically indistinguishable across 200 seeds x 10
+  scenarios; every result float-verified in Python).</li>
+<li>Parity harness: flat-array cross-language contract
+  (<code>treecf.ir.flatten</code>, <code>treecf.constraints.flatten</code>), golden per-seed
+  fixtures and 200-seed distributional baselines under tests/fixtures/parity/.</li>
+</ul>
+<h3 id="removed">Removed<a class="headerlink" href="#removed" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>The exact CP-SAT backend, entirely</strong>: <code>backend="cpsat"</code>, the <code>[cpsat]</code>/ortools
+  extra, the AIM integer encoding, the HiGHS stub, optimality proofs
+  (<code>proof="optimal"</code>), <code>n_counterfactuals</code>/diversity cuts, infeasibility
+  <code>relaxation_hint</code>, and the bands single-compilation amortization. The
+  genetic engines are the sole backends (<code>"genetic"</code> = Rust default,
+  <code>"python"</code> = numpy reference); <code>Target.bands</code> still works (one search per
+  band). Users needing provable optimality should pair the IR with a
+  dedicated exact-optimization package. The brute-force oracle remains the
+  test-suite's optimality bracket.</li>
+</ul>
+<h3 id="fixed_6">Fixed<a class="headerlink" href="#fixed_6" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Counterfactual values adjacent to open cell bounds now step one <strong>float32</strong>
+  ulp inside (previously float64): a float64-ulp neighbour of a threshold
+  collapses onto it in native float32 comparisons, so the deployed model
+  could route such values opposite to the IR. Both engines changed
+  identically; parity fixtures regenerated.</li>
+</ul>
+<h2 id="unreleased_1">unreleased<a class="headerlink" href="#unreleased_1" title="Permanent link">&para;</a></h2>
+<h3 id="added_8">Added<a class="headerlink" href="#added_8" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Parser breadth: LightGBM / sklearn (RF, GB, HistGB) / CatBoost parsers, all
+  conformance-gated; isolation-forest plausibility as a hard constraint;
+  <code>Target.bands</code> rating ladder (one compilation, N solves); diverse
+  counterfactuals via no-good cuts; infeasibility relaxation hints;
+  <code>suggest_constraints</code> data mining with transitive reduction and
+  near-invariant data-quality findings; <code>viz</code> module
+  (<code>plot_changes</code>/<code>plot_counterfactuals</code>/<code>plot_ladder</code>).</li>
+<li>Genetic backend: numpy-only constrained GA (Deb ranking, seeded,
+  <code>proof="heuristic"</code>), vectorized constraint check/repair, cross-backend
+  soundness suite.</li>
+<li>Constraint layer: string sugar parser, <code>Linear</code>/<code>Equals</code>/<code>Implies</code>/
+  <code>OneHot</code>/<code>AllowMissing</code>, NaN as a first-class counterfactual value,
+  per-feature value policies with cell-safe snapping.</li>
+<li>Vertical slice: XGBoost (object/JSON dump) → tree IR → routing-atomic
+  cells → CP-SAT → provably optimal counterfactual, with <code>Freeze</code>/<code>Monotone</code>/
+  <code>Range</code> constraints, raw/probability targets, MAD-chain normalizers,
+  float-space verification with K×10 retry, and a brute-force exactness oracle
+  gating the backend (50-case randomized suite).</li>
+<li>Release engineering: CI conformance matrix over library versions,
+  mkdocs-material docs with three executed tutorial notebooks
+  (quickstart, credit-risk walkthrough, no-solver environments),
+  performance smoke benchmark, clean-venv packaging verification.</li>
+<li>Project skeleton: packaging, CI, docs infrastructure.</li>
+</ul>
+<h3 id="known-limitations">Known limitations<a class="headerlink" href="#known-limitations" title="Permanent link">&para;</a></h3>
+<ul>
+<li>CP-SAT solve time misses the &lt;1s target at 300+ trees (~40s median on the
+  benchmark suite); planned v0.2 optimization via table-constraint encoding.</li>
+<li>Plausibility cannot combine with AllowMissing/NaN factuals.</li>
+<li><code>n_counterfactuals &gt; 1</code> requires the CP-SAT backend.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.sections", "navigation.top", "content.code.copy"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="../javascripts/mathjax.js"></script>
+      
+        <script src="https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js"></script>
+      
+    
+  </body>
+</html>
