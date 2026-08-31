@@ -40,7 +40,7 @@ def constraint(text: str, feature_names: Sequence[str] | None = None) -> Linear:
     comparisons) must be written as constraint objects directly. Terms on
     both sides are folded into ``coefficients``/``rhs`` on the left-hand
     side's convention, so ``"a <= b"`` and ``"a - b <= 0"`` produce the same
-    ``Linear``. See [Constraints](concepts/constraints.md).
+    ``Linear``. See [Constraints](../concepts/constraints.md).
 
     Parameters
     ----------

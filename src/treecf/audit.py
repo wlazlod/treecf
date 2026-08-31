@@ -11,7 +11,7 @@ version 1 files, which carry no categorical fields, still verify)
 that serialize with ``json.dumps(cert, allow_nan=False, sort_keys=True)``:
 non-finite floats are encoded as the strings ``"NaN"``, ``"Infinity"``, and
 ``"-Infinity"`` wherever they can occur. See
-[Certification — audit certificates](concepts/certification.md#audit-certificates).
+[Certification — audit certificates](../concepts/certification.md#audit-certificates).
 """
 
 from __future__ import annotations

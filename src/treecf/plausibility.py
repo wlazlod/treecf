@@ -33,7 +33,7 @@ class Plausibility:
     ``anomaly_score(x_cf) <= max_anomaly_score``, enforced as a hard
     constraint by every backend. Cannot be combined with ``AllowMissing`` or a
     NaN-containing factual (isolation forests define no NaN routing). See
-    [Plausibility](concepts/plausibility.md).
+    [Plausibility](../concepts/plausibility.md).
 
     Attributes
     ----------

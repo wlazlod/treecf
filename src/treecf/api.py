@@ -67,8 +67,8 @@ class Grid:
     6-month increments, prices in 5-cent ticks, and similar). The exact backend
     treats the grid as a hard constraint on its own candidates; the genetic
     backend snaps its winning row afterward, reverting the snap if it would break
-    feasibility — see
-    [Certification — value policies](concepts/certification.md#value-policies-under-certification).
+    feasibility — see [Certification — value
+    policies](../concepts/certification.md#value-policies-under-certification).
 
     Attributes
     ----------
@@ -99,7 +99,7 @@ class Counterfactual:
     proved none exists more than that relative fraction cheaper, and — more
     rarely — ``"heuristic"`` for a row it is not claiming is cheapest: see
     ``Explainer.explain`` for when that happens. See
-    [Certification](concepts/certification.md) for the full proof taxonomy.
+    [Certification](../concepts/certification.md) for the full proof taxonomy.
 
     Attributes
     ----------
@@ -175,7 +175,7 @@ class Infeasible:
     whether a counterfactual exists at all. ``"certified"`` is exact-backend
     only: every assignment the searched grid allows was tried and none was
     feasible, so ``reason`` names the node count behind that proof. See
-    [Certification](concepts/certification.md) for the full proof taxonomy.
+    [Certification](../concepts/certification.md) for the full proof taxonomy.
 
     Attributes
     ----------
@@ -364,7 +364,7 @@ class Explainer:
     model
         A native model object (XGBoost/LightGBM/CatBoost/sklearn
         ensemble), a JSON dump file path or dict, or an already-parsed
-        ``EnsembleIR``. See [Models and the IR](concepts/models.md) for
+        ``EnsembleIR``. See [Models and the IR](../concepts/models.md) for
         which native types are supported.
     background
         Sample used to fit the per-feature distance normalizers
@@ -374,7 +374,7 @@ class Explainer:
         Constraint objects (``Freeze``, ``Range``, ``Monotone``,
         ``Linear``, ``Implies``, ``OneHot``, ``AllowMissing``, or a string
         parsed by ``constraint()``) compiled and validated immediately.
-        Defaults to no constraints. See [Constraints](concepts/constraints.md).
+        Defaults to no constraints. See [Constraints](../concepts/constraints.md).
     weights
         Per-feature multiplier on distance cost, ``{feature: weight}``;
         a feature not listed defaults to ``1.0``. Use to make some levers
@@ -393,7 +393,7 @@ class Explainer:
         constraint on its candidates; the genetic backend snaps its
         winning row afterward and reverts the snap if it would break
         feasibility (``Counterfactual.snapped`` records which happened) —
-        see [Certification](concepts/certification.md#value-policies-under-certification).
+        see [Certification](../concepts/certification.md#value-policies-under-certification).
     plausibility
         Optional hard isolation-forest bound keeping every
         returned counterfactual inside the data manifold (see
@@ -401,7 +401,7 @@ class Explainer:
         ``AllowMissing``, and ``explain``/``explain_batch``/
         ``explain_coalitions`` reject a factual containing NaN once it is
         set (isolation forests define no NaN routing) — see
-        [Plausibility](concepts/plausibility.md).
+        [Plausibility](../concepts/plausibility.md).
     categories
         Display names for categorical features,
         ``{feature: [name_for_code_0, name_for_code_1, ...]}``. Required
@@ -1308,7 +1308,7 @@ class Explainer:
         ``RecourseRegion``. The returned region is certified
         but neither maximal nor monotone in ``target``: a strictly narrower
         target can still grow a strictly wider region on some feature. See
-        [Certification](concepts/certification.md#regions-certified-not-maximal-not-monotone).
+        [Certification](../concepts/certification.md#regions-certified-not-maximal-not-monotone).
 
         Returns
         -------
@@ -1370,7 +1370,7 @@ class Explainer:
         ``proof="optimal"`` claim is true — re-running with the recorded seed
         and budgets on a fingerprint-matching model is how a validator checks
         that. See
-        [Certification — audit certificates](concepts/certification.md#audit-certificates)
+        [Certification — audit certificates](../concepts/certification.md#audit-certificates)
         for the schema.
 
         The certificate is a plain ``dict`` (``"schema_version": 1``) that

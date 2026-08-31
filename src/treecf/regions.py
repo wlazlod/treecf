@@ -64,7 +64,7 @@ class RecourseRegion:
     narrower target can still produce a strictly wider region on some
     feature: growth is greedy and order-dependent, so a feature that is
     forced to stop early frees room a later feature grows into). See
-    [Certification](concepts/certification.md#regions-certified-not-maximal-not-monotone).
+    [Certification](../concepts/certification.md#regions-certified-not-maximal-not-monotone).
 
     Attributes
     ----------

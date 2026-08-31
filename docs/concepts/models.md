@@ -9,13 +9,14 @@ backend touches a native model object.
 
 | Library | Native objects | Dump input | Notes |
 |---|---|---|---|
-| XGBoost | `Booster`, sklearn wrappers | `save_model("*.json")` path or dict | `binary:logistic`, `reg:squarederror`; LT convention |
-| LightGBM | `Booster`, sklearn wrappers | `dump_model()` dict or its JSON | `binary`, `regression`; LE convention; `zero_as_missing` and categorical splits raise |
-| CatBoost | classifier/regressor | `save_model(format="json")` | oblivious trees expanded to binary trees |
-| scikit-learn | RF, GB, HistGB | — | see raw-score semantics below |
+| XGBoost | `Booster`, sklearn wrappers | `save_model("*.json")` path or dict | `binary:logistic`, `reg:squarederror`; LT convention; `enable_categorical` splits parsed as set-membership nodes |
+| LightGBM | `Booster`, sklearn wrappers | `dump_model()` dict or its JSON | `binary`, `regression`; LE convention; `categorical_feature` splits parsed (NaN routes right at them, LightGBM's own rule); `zero_as_missing` raises |
+| CatBoost | classifier/regressor | `save_model(format="json")` | oblivious trees expanded to binary trees; native categorical one-hot and single-feature-statistic splits parsed (`categories=` required; feature combinations raise `ParserError`) |
+| scikit-learn | RF, GB, HistGB | — | see raw-score semantics below; HistGB `categorical_features` bitsets parsed through the estimator's own encoder |
 
-Unsupported constructs (multiclass, dart/gblinear, native categorical splits)
-raise `UnsupportedModelError` — parsers never degrade silently. Every parser is
+Native categorical splits become set-membership IR nodes — the semantics, cost model, and
+search treatment are in [Categorical features](categorical.md). Unsupported constructs
+(multiclass, dart/gblinear) raise `UnsupportedModelError` — parsers never degrade silently. Every parser is
 gated by a conformance suite that compares IR evaluation against native
 predictions on ≥10k probes including NaN patterns and threshold-adjacent points.
 

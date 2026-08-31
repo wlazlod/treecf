@@ -1,7 +1,7 @@
 """Canonical constraint objects. Frozen dataclasses; validation at compile time.
 
 Pass these (or a ``constraint()`` string) to ``Explainer(..., constraints=[...])``.
-See [Constraints](concepts/constraints.md) for what each one compiles to and
+See [Constraints](../concepts/constraints.md) for what each one compiles to and
 how they compose.
 """
 
@@ -70,7 +70,7 @@ class Linear:
     order-pair shape exactly; any other multi-feature shape raises
     ``ConstraintValidationError`` naming ``backend="genetic"`` as the
     fallback — see
-    [Certification](concepts/certification.md#what-the-exact-backend-does-not-certify-yet).
+    [Certification](../concepts/certification.md#what-the-exact-backend-does-not-certify-yet).
 
     Attributes
     ----------
@@ -172,7 +172,7 @@ class AllowMissing:
 
     ``delta_miss`` prices the value<->NaN transition; pass ``delta_from_miss``
     for an asymmetric NaN->value cost (defaults to ``delta_miss``). See
-    [Missing values](concepts/missing-values.md).
+    [Missing values](../concepts/missing-values.md).
 
     Attributes
     ----------

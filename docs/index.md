@@ -27,10 +27,22 @@ res.changes   # {"utilization": (0.71, 0.419), "max_dpd_12m": (9.0, 3.0)}
   ([constraints](concepts/constraints.md)), with optional mining from background data.
 - **NaN as a first-class counterfactual value** with per-feature opt-in and transition
   costs ([missing values](concepts/missing-values.md)).
+- **Native categorical features** — set-membership splits from LightGBM, XGBoost,
+  CatBoost, and HistGradientBoosting parsed exactly, searched over category blocks,
+  certified as category sets ([categorical](concepts/categorical.md)).
 - **Optional plausibility** as a hard isolation-forest constraint
   ([plausibility](concepts/plausibility.md)).
 - **Batch production** — thousands of rows solved in parallel inside the Rust core, with
   portable storage and batch-level plots ([tutorial](notebooks/02-credit-risk-tutorial.ipynb)).
+- **Coalitions** — recourse restricted to named feature groups, solved per group
+  ([coalitions](concepts/coalitions.md)).
+- **An exact backend** that proves optimality or **certified infeasibility**, widens plans
+  into certified recourse **regions**, and needs no external solver
+  ([certification](concepts/certification.md)).
+- **Audit certificates** — self-contained JSON records a validator re-checks years later
+  with `check_certificate` ([auditability](guide/auditability.md)).
+- **probcal integration** — recourse against calibrated cutoffs and masterscale bands
+  through one duck-typed protocol ([probcal](guide/probcal.md)).
 
 ## Where to start
 

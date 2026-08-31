@@ -39,8 +39,8 @@ class Target:
     shorthand into ``lo``/``hi``. ``Target.bands`` builds a named ladder of
     intervals (rating grades); ``Explainer.explain`` then returns one result
     per band instead of a single ``Counterfactual``/``Infeasible``. See
-    [Targets](concepts/targets.md) and, for ``calibrated``,
-    [Calibration](concepts/calibration.md).
+    [Targets](../concepts/targets.md) and, for ``calibrated``,
+    [Calibration](../concepts/calibration.md).
 
     Attributes
     ----------
@@ -170,7 +170,7 @@ class Target:
         logit space before inversion, making the counterfactual robust to
         future recalibration or central-tendency drift of that magnitude.
         Specify exactly one of ``range=(lo, hi)`` or ``op=``/``value=``, as in
-        ``Target.raw``. See [Calibration](concepts/calibration.md).
+        ``Target.raw``. See [Calibration](../concepts/calibration.md).
 
         Parameters
         ----------

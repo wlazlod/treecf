@@ -33,7 +33,7 @@ class SuggestedConstraint:
     suggestions are real domain rules, and pass their ``constraint`` objects
     to ``Explainer(..., constraints=[...])`` explicitly. See
     [Constraints — mining candidates from
-    data](concepts/constraints.md#mining-candidates-from-data).
+    data](../concepts/constraints.md#mining-candidates-from-data).
 
     Attributes
     ----------
@@ -200,7 +200,7 @@ def suggest_constraints(
     pass the ones you accept to ``Explainer(..., constraints=[...])``
     yourself. See
     [Constraints — mining candidates from
-    data](concepts/constraints.md#mining-candidates-from-data).
+    data](../concepts/constraints.md#mining-candidates-from-data).
 
     Parameters
     ----------

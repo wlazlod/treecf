@@ -170,7 +170,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Plausibility.isolation_forest`/`anomaly_score`) were entirely absent from the rendered
   docs and are now covered.
 - README quick-look comment recalibrated to name the warned-degrade case alongside
-  `proof="optimal"` and a certified "no"; new [Certification](docs/concepts/certification.md)
+  `proof="optimal"` and a certified "no"; new [Certification](https://wlazlod.github.io/treecf/concepts/certification/)
   sections cover interruption and the always-on degraded-result warning.
 
 ## [0.2.0] - 2026-08-14
@@ -199,7 +199,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `plot_recourse_map`: one-axes map of a single applicant's recourse options — model
   output on x, recourse cost J on y — with the accept band, an arrow per plan, infeasible
   coalitions marked, and a `schematic=True` slide-style mode.
-- Docs: new [Certification](docs/concepts/certification.md) concepts page covering the proof
+- Docs: new [Certification](https://wlazlod.github.io/treecf/concepts/certification/) concepts page covering the proof
   taxonomy, what a certificate does and does not cover, and the region layer's guarantees.
 
 ### Changed
@@ -363,7 +363,7 @@ implementation outright and restarts the version line.
   explainer), `plot_batch_summary` (cost / sparsity / feasibility panel), and
   `plot_batch_deltas` (per-lever delta distributions, σ-standardized with an
   explainer). Demonstrated in the credit-risk tutorial.
-- **Docs**: long-form ["How treecf finds counterfactuals"](docs/how-it-works.md)
+- **Docs**: long-form ["How treecf finds counterfactuals"](https://wlazlod.github.io/treecf/how-it-works/)
   article walking one applicant from objective to verified counterfactual;
   MathJax wired into the docs build for the objective and plausibility formulas.
 - **Batch production**: `Explainer.explain_batch(X, target, n_per_example=k,

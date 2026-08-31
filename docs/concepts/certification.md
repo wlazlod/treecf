@@ -118,6 +118,30 @@ policy differently:
 The two backends can therefore legitimately return different answers on the same policy run —
 not because one is wrong, but because they are certifying against different candidate sets.
 
+## Presolve: pruning before the search starts
+
+Before the exact backend expands a single node, a **presolve** pass filters each feature's
+candidate list independently: for every candidate state it computes, holding all other features
+free, the interval of raw scores the ensemble could still reach (and, when plausibility is
+configured, the reachable anomaly-score bracket) and discards the state when even that most
+optimistic bracket cannot meet the target. The pass never changes any answer — a discarded state
+is one no completion could have made feasible — it only shrinks the space branch-and-bound must
+visit, so node counts drop while results stay bit-identical.
+
+Two read-outs land in `solver_stats`:
+
+- `presolve_removed`: how many candidate states the filter discarded across all features.
+- `presolve_certified`: `True` when some feature's domain emptied entirely — the target is
+  provably unreachable and the search returns `Infeasible.proof="certified"` immediately, with
+  zero nodes expanded.
+
+Because each state is tested with all other features free, the filter reaches a fixpoint in one
+pass; it deliberately does not fold inter-feature constraints into the brackets, so a state kept
+by presolve can still be pruned later by the search itself. Presolve runs on every exact solve,
+point or [region](#regions-certified-not-maximal-not-monotone), in both engine implementations,
+and its statistics appear in [certificates](#audit-certificates) like the rest of
+`solver_stats`.
+
 ## Regions: certified, not maximal, not monotone
 
 `explain(..., region=True)` (or `Explainer.recourse_region` directly) widens a verified

@@ -146,7 +146,7 @@ def test_docs_page_snippets_execute(page: pathlib.Path, tmp_path, monkeypatch) -
     try:
         for i, block in enumerate(blocks):
             try:
-                exec(compile(block, str(page), "exec"), namespace)  # noqa: S102
+                exec(compile(block, str(page), "exec"), namespace)
             except Exception as exc:
                 first_line = block.strip().splitlines()[0]
                 raise AssertionError(
