@@ -60,7 +60,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Exact-search performance.** Presolve, a feature-to-trees index, and per-tree bracket
   caching in region growth. Measured before/after (same machine, same seeds, medians):
 
-MEASURED_TABLE_PLACEHOLDER
+  | Scenario (exact backend, warm start, 5 s / 2M-node budgets, 10 seeds, 4-core x86_64) | 0.2.4 median | 0.3.0 median |
+  |---|---|---|
+  | 30 trees / depth 4 / 8 features — every solve proved optimal | 0.292 s | 0.295 s |
+  | 60 trees / depth 5 / 12 features — budget-capped, best-found | 5.014 s | 5.012 s |
+  | 300 trees / depth 6 / 50 features — budget-capped, best-found | 5.208 s | 5.133 s |
+
+  No legacy case regresses (the largest change is +1.0% on the small case, within run
+  noise); on the large budget-capped case the search now expands 308,822 nodes in the same
+  budget where 0.2.4 expanded 205,755. New certification measurements (60 s budget,
+  3 seeds): the 200-tree / depth-5 / 12-feature reference case does **not** certify within
+  60 s on the 4-core benchmark machine; the native-categorical suite (4 numeric levers plus
+  cardinality-3/8/15 categoricals, LightGBM) certifies in 0.022 s median even at 200 trees.
+  Full tables: the docs benchmarks page, generated from the same measured JSON.
 
 ### Invariants
 

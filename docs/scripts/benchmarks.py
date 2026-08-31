@@ -73,11 +73,15 @@ def _certification_rows(results: list[dict], prefix: str) -> str:
         "|---|---|---|---|",
     ]
     for r in rows:
+        median = r["median_time_to_certificate_s"]
+        median_cell = _fmt_s(median) if median == median else "—"
         lines.append(
             f"| {r['tag'].removeprefix(prefix).strip()} "
-            f"| {_fmt_s(r['median_time_to_certificate_s'])} "
+            f"| {median_cell} "
             f"| {r['certified_within_10s']:.0%} | {r['certified_within_60s']:.0%} |"
         )
+    lines.append("")
+    lines.append("A dash: no seed certified within the 60 s budget on this machine.")
     return "\n".join(lines)
 
 
