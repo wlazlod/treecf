@@ -456,11 +456,76 @@ def _grow_box(
     box_hi = x_cf.astype(np.float64).copy()
     is_nan_arr: BoolArray = np.isnan(x_cf)
 
-    def oracle() -> bool:
-        return _box_feasible(
-            ir, if_ir, min_total_path, interval, compiled.linears, x_cf,
-            box_lo, box_hi, is_nan_arr,
-        )
+    # Per-tree brackets are cached between growth attempts: widening one
+    # feature can only change the brackets of trees that split on it, so only
+    # those are re-walked. The ensemble total is still re-summed in full over
+    # every tree in ascending index — the same additions `_ensemble_bracket`
+    # performs — so the accept/reject decisions are identical, just cheaper.
+    model_cache = [
+        _tree_interval_bracket(tree.nodes, 0, box_lo, box_hi, is_nan_arr) for tree in ir.trees
+    ]
+    if_cache = (
+        []
+        if if_ir is None
+        else [
+            _tree_interval_bracket(tree.nodes, 0, box_lo, box_hi, is_nan_arr)
+            for tree in if_ir.trees
+        ]
+    )
+    model_on, if_on = _trees_on_feature(ir, p), (
+        [] if if_ir is None else _trees_on_feature(if_ir, p)
+    )
+
+    def total(
+        base: float, cache: list[tuple[float, float] | None]
+    ) -> tuple[float, float] | None:
+        total_min = base
+        total_max = base
+        for bracket in cache:
+            if bracket is None:
+                return None
+            total_min = total_min + bracket[0]
+            total_max = total_max + bracket[1]
+        return total_min, total_max
+
+    def make_oracle(j: int) -> Callable[[], bool]:
+        def oracle() -> bool:
+            saved = [(t, model_cache[t]) for t in model_on[j]]
+            for t in model_on[j]:
+                model_cache[t] = _tree_interval_bracket(
+                    ir.trees[t].nodes, 0, box_lo, box_hi, is_nan_arr
+                )
+            saved_if: list[tuple[int, tuple[float, float] | None]] = []
+            if if_ir is not None:
+                saved_if = [(t, if_cache[t]) for t in if_on[j]]
+                for t in if_on[j]:
+                    if_cache[t] = _tree_interval_bracket(
+                        if_ir.trees[t].nodes, 0, box_lo, box_hi, is_nan_arr
+                    )
+
+            def retract() -> None:
+                for t, bracket in saved:
+                    model_cache[t] = bracket
+                for t, bracket in saved_if:
+                    if_cache[t] = bracket
+
+            bracket = total(ir.base_score, model_cache)
+            if bracket is None or bracket[0] < interval[0] or bracket[1] > interval[1]:
+                retract()
+                return False
+            if if_ir is not None:
+                if_bracket = total(if_ir.base_score, if_cache)
+                if if_bracket is None or if_bracket[0] < min_total_path:
+                    retract()
+                    return False
+            if not all(
+                _linear_holds(lin, x_cf, box_lo, box_hi) for lin in compiled.linears
+            ):
+                retract()
+                return False
+            return True
+
+        return oracle
 
     open_set = {j for j in range(p) if j not in degenerate}
     while open_set:
@@ -468,10 +533,23 @@ def _grow_box(
         for j in sorted(open_set):
             cells = grids[j]
             lo_bj, hi_bj = float(lo_b[j]), float(hi_b[j])
-            grew_up = _try_grow(j, True, box_lo, box_hi, cells, lo_bj, hi_bj, oracle)
-            grew_down = _try_grow(j, False, box_lo, box_hi, cells, lo_bj, hi_bj, oracle)
+            oracle_j = make_oracle(j)
+            grew_up = _try_grow(j, True, box_lo, box_hi, cells, lo_bj, hi_bj, oracle_j)
+            grew_down = _try_grow(j, False, box_lo, box_hi, cells, lo_bj, hi_bj, oracle_j)
             if grew_up or grew_down:
                 still_open.add(j)
         open_set = still_open
 
     return box_lo, box_hi
+
+
+def _trees_on_feature(ir: EnsembleIR, n_features: int) -> list[list[int]]:
+    """Per feature, the ascending tree indices that split on it."""
+    on_feature: list[list[int]] = [[] for _ in range(n_features)]
+    for t, tree in enumerate(ir.trees):
+        features = sorted(
+            {node.feature for node in tree.nodes if node.feature is not None}
+        )
+        for f in features:
+            on_feature[f].append(t)
+    return on_feature

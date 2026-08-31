@@ -102,6 +102,7 @@ fn tree_interval_bracket(
 /// `[min, max]` raw score the ensemble can reach anywhere in the box, or
 /// `None` if any tree's bracket could not be soundly computed. Summed base +
 /// ascending tree index, the same order `Ensemble::raw_score` adds in.
+#[cfg(test)] // production growth reads the cached per-tree form instead
 fn ensemble_bracket(
     ens: &Ensemble,
     missing_defined: &[bool],
@@ -146,6 +147,7 @@ fn linear_holds(lin: &LinearC, x_cf: &[f64], lo: &[f64], hi: &[f64]) -> bool {
 /// The soundness oracle: `true` only if EVERY point of the box is provably
 /// still in-target, plausible, and Linear-feasible — rejects on any doubt,
 /// including an ensemble bracket that could not be soundly computed at all.
+#[cfg(test)] // the one-shot oracle the cached growth loop is checked against
 #[allow(clippy::too_many_arguments)]
 fn box_feasible(
     ens: &Ensemble,
@@ -176,6 +178,92 @@ fn box_feasible(
         }
     }
     linears.iter().all(|lin| linear_holds(lin, x_cf, lo, hi))
+}
+
+/// Per-tree brackets cached between growth attempts: widening one feature can
+/// only change the brackets of trees that split on it, so only those are
+/// re-walked. The ensemble total is still re-summed in full over every tree
+/// in ascending index — the same additions `ensemble_bracket` performs — so
+/// the accept/reject decisions are identical, just cheaper.
+struct BracketCache {
+    brackets: Vec<Option<(f64, f64)>>,
+    on_feature: Vec<Vec<usize>>,
+}
+
+impl BracketCache {
+    fn new(
+        ens: &Ensemble,
+        missing_defined: &[bool],
+        lo: &[f64],
+        hi: &[f64],
+        is_nan: &[bool],
+    ) -> Self {
+        let brackets = ens
+            .tree_roots
+            .iter()
+            .map(|&root| tree_interval_bracket(ens, missing_defined, root, lo, hi, is_nan))
+            .collect();
+        let n_trees = ens.tree_roots.len();
+        let mut on_feature: Vec<Vec<usize>> = vec![Vec::new(); ens.n_features];
+        for t in 0..n_trees {
+            let start = ens.tree_roots[t] as usize;
+            let end = if t + 1 < n_trees {
+                ens.tree_roots[t + 1] as usize
+            } else {
+                ens.feature.len()
+            };
+            let mut seen: Vec<usize> = ens.feature[start..end]
+                .iter()
+                .filter(|&&f| f >= 0)
+                .map(|&f| f as usize)
+                .collect();
+            seen.sort_unstable();
+            seen.dedup();
+            for f in seen {
+                on_feature[f].push(t);
+            }
+        }
+        Self {
+            brackets,
+            on_feature,
+        }
+    }
+
+    fn update(
+        &mut self,
+        ens: &Ensemble,
+        missing_defined: &[bool],
+        j: usize,
+        lo: &[f64],
+        hi: &[f64],
+        is_nan: &[bool],
+    ) -> Vec<(usize, Option<(f64, f64)>)> {
+        let mut saved = Vec::with_capacity(self.on_feature[j].len());
+        for k in 0..self.on_feature[j].len() {
+            let t = self.on_feature[j][k];
+            saved.push((t, self.brackets[t]));
+            self.brackets[t] =
+                tree_interval_bracket(ens, missing_defined, ens.tree_roots[t], lo, hi, is_nan);
+        }
+        saved
+    }
+
+    fn restore(&mut self, saved: &[(usize, Option<(f64, f64)>)]) {
+        for &(t, bracket) in saved {
+            self.brackets[t] = bracket;
+        }
+    }
+
+    fn total(&self, base: f64) -> Option<(f64, f64)> {
+        let mut total_min = base;
+        let mut total_max = base;
+        for bracket in &self.brackets {
+            let (tmin, tmax) = (*bracket)?;
+            total_min += tmin;
+            total_max += tmax;
+        }
+        Some((total_min, total_max))
+    }
 }
 
 // ------------------------------------------------------------- growth ---
@@ -230,6 +318,8 @@ fn try_grow(
     linears: &[LinearC],
     x_cf: &[f64],
     is_nan: &[bool],
+    model_cache: &mut BracketCache,
+    if_cache: &mut Option<BracketCache>,
 ) -> bool {
     let current = if upper { box_hi[j] } else { box_lo[j] };
     let Some(candidate) = next_edge(cells, current, lo_b, hi_b, upper) else {
@@ -240,20 +330,36 @@ fn try_grow(
     } else {
         box_lo[j] = candidate;
     }
-    let ok = box_feasible(
-        ens,
-        missing_defined,
-        if_pair,
-        min_total_path,
-        interval,
-        linears,
-        x_cf,
-        box_lo,
-        box_hi,
-        is_nan,
-    );
+    let saved = model_cache.update(ens, missing_defined, j, box_lo, box_hi, is_nan);
+    let mut saved_if: Vec<(usize, Option<(f64, f64)>)> = Vec::new();
+    if let (Some((if_ens, if_missing_defined)), Some(cache)) = (if_pair, if_cache.as_mut()) {
+        saved_if = cache.update(if_ens, if_missing_defined, j, box_lo, box_hi, is_nan);
+    }
+    let ok = 'feasible: {
+        let Some((score_min, score_max)) = model_cache.total(ens.base_score) else {
+            break 'feasible false;
+        };
+        if score_min < interval.0 || score_max > interval.1 {
+            break 'feasible false;
+        }
+        if let (Some((if_ens, _)), Some(cache)) = (if_pair, if_cache.as_ref()) {
+            let Some((if_min, _if_max)) = cache.total(if_ens.base_score) else {
+                break 'feasible false;
+            };
+            if if_min < min_total_path {
+                break 'feasible false;
+            }
+        }
+        linears
+            .iter()
+            .all(|lin| linear_holds(lin, x_cf, box_lo, box_hi))
+    };
     if ok {
         return true;
+    }
+    model_cache.restore(&saved);
+    if let Some(cache) = if_cache.as_mut() {
+        cache.restore(&saved_if);
     }
     if upper {
         box_hi[j] = current;
@@ -301,6 +407,10 @@ pub fn recourse_region(
     let mut box_lo = x_cf.to_vec();
     let mut box_hi = x_cf.to_vec();
     let is_nan_arr: Vec<bool> = x_cf.iter().map(|v| v.is_nan()).collect();
+    let mut model_cache = BracketCache::new(ens, missing_defined, &box_lo, &box_hi, &is_nan_arr);
+    let mut if_cache = if_pair.map(|(if_ens, if_missing_defined)| {
+        BracketCache::new(if_ens, if_missing_defined, &box_lo, &box_hi, &is_nan_arr)
+    });
 
     let mut open: Vec<usize> = open_set.to_vec();
     // Every feature costs exactly two attempts, so counting the pair at once
@@ -326,6 +436,8 @@ pub fn recourse_region(
                 &cons.linears,
                 x_cf,
                 &is_nan_arr,
+                &mut model_cache,
+                &mut if_cache,
             );
             let grew_down = try_grow(
                 j,
@@ -343,6 +455,8 @@ pub fn recourse_region(
                 &cons.linears,
                 x_cf,
                 &is_nan_arr,
+                &mut model_cache,
+                &mut if_cache,
             );
             if grew_up || grew_down {
                 still_open.push(j);
