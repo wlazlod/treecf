@@ -49,7 +49,9 @@ jobs:
       fail-fast: false
       matrix:
         library:
-          - "xgboost==3.1.*"
+          # xgboost 3.1's DataFrame detection predates pandas 3.0's module
+          # layout (fixed in 3.2), so that leg pairs the last compatible pandas
+          - "xgboost==3.1.* 'pandas<3'"
           - "xgboost==3.2.*"
           # lightgbm 4.5's sklearn wrapper predates scikit-learn 1.7's API cleanup
           - "lightgbm==4.5.* scikit-learn==1.6.*"
