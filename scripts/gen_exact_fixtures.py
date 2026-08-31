@@ -53,6 +53,24 @@ def _write(payload: dict[str, Any]) -> None:
     payload["golden"] = fixture_utils.golden_block(result)
     out = fixture_utils.FIXTURES_DIR / f"{payload['name']}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
+    if out.exists():
+        # regeneration may change node counters, never results: the answer a
+        # fixture pins must survive every rewrite of it
+        with open(out, encoding="utf-8") as fh:
+            old = json.load(fh)["golden"]
+        new = payload["golden"]
+        for key in ("x_cf", "distance", "proof"):
+            assert old[key] == new[key], (
+                f"{payload['name']}: regeneration changed golden {key}: "
+                f"{old[key]!r} -> {new[key]!r}"
+            )
+        counters = {
+            key: (old[key], new[key])
+            for key in ("nodes_expanded", "nodes_pruned_score", "nodes_pruned_cost")
+            if old.get(key) != new[key]
+        }
+        if counters:
+            print(f"  {payload['name']}: results identical, node counters: {counters}")
     with open(out, "w", encoding="utf-8") as fh:
         json.dump(payload, fh, sort_keys=True, separators=(",", ":"))
     print(

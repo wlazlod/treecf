@@ -254,6 +254,27 @@ def solve_exact(
             snapped={},
             distance=None,
         )
+    assigned = [False] * len(x)
+    values = [0.0] * len(x)
+    assigned_mask = 0
+    model_bounds = _EnsembleBounds(ir, assigned, values)
+    if_bounds = _EnsembleBounds(if_ir, assigned, values) if if_ir is not None else None
+
+    presolve_removed = _presolve_domains(
+        order, domains, model_bounds, if_bounds, min_total_path, lo_t, hi_t,
+        assigned, values,
+    )
+    if any(not domains[j] for j in order):
+        # Every candidate of some feature is provably out of target: nothing
+        # the search could enumerate can be feasible.
+        return ExactResult(
+            x_cf=None,
+            proof="optimal",
+            stats=_stats(0, 0, 0, math.inf, gap, True, False, presolve_removed, True),
+            snapped={},
+            distance=None,
+        )
+
     h_suffix = _h_suffix(order, domains)
 
     level_of = {f: level for level, f in enumerate(order)}
@@ -323,12 +344,7 @@ def solve_exact(
         )
     )
 
-    assigned = [False] * len(x)
-    values = [0.0] * len(x)
-    assigned_mask = 0
     propagation = _Propagation(compiled, domains, assigned, values)
-    model_bounds = _EnsembleBounds(ir, assigned, values)
-    if_bounds = _EnsembleBounds(if_ir, assigned, values) if if_ir is not None else None
 
     incumbent_cost = math.inf
     incumbent_row: FloatArray | None = None
@@ -641,10 +657,56 @@ def solve_exact(
             gap,
             completed,
             warm_start_used,
+            presolve_removed,
         ),
         snapped=snapped,
         distance=None if incumbent_row is None else incumbent_cost,
     )
+
+
+def _presolve_domains(
+    order: list[int],
+    domains: list[list[_State]],
+    model_bounds: _EnsembleBounds,
+    if_bounds: _EnsembleBounds | None,
+    min_total_path: float,
+    lo_t: float,
+    hi_t: float,
+    assigned: list[bool],
+    values: list[float],
+) -> int:
+    """Delete candidate states no completion through them can make feasible.
+
+    For each state, the ensemble bracket with only that one feature assigned
+    (all others free) must intersect the target, and the plausibility bracket
+    must reach its floor. A state's bracket depends on its routing cell alone,
+    and every value a later repair may put on the feature stays inside the
+    chosen state's cell, so a deleted state can appear in no accepted row —
+    hence no removed state can be the optimum, the first-found optimum among
+    the survivors is the same argmin the unfiltered search returns, and the
+    cheapest-surviving-state suffix bound stays admissible. One pass reaches
+    the fixpoint: each state's test reads no other feature's domain.
+    """
+    removed = 0
+    for j in order:
+        survivors: list[_State] = []
+        for state in domains[j]:
+            assigned[j] = True
+            values[j] = state.value
+            model_frame = model_bounds.apply(j, 1 << j)
+            keep = not (model_bounds.score_max < lo_t or model_bounds.score_min > hi_t)
+            if keep and if_bounds is not None:
+                if_frame = if_bounds.apply(j, 1 << j)
+                keep = not if_bounds.score_max < min_total_path
+                if_bounds.restore(if_frame)
+            model_bounds.restore(model_frame)
+            assigned[j] = False
+            if keep:
+                survivors.append(state)
+            else:
+                removed += 1
+        domains[j][:] = survivors
+    return removed
 
 
 def _stats(
@@ -655,6 +717,8 @@ def _stats(
     gap: float,
     completed: bool,
     warm_start_used: bool,
+    presolve_removed: int = 0,
+    presolve_certified: bool = False,
 ) -> dict[str, object]:
     """The exact set of counters ``solve_exact`` reports.
 
@@ -675,4 +739,6 @@ def _stats(
         "gap": gap,
         "completed": completed,
         "warm_start_used": warm_start_used,
+        "presolve_removed": presolve_removed,
+        "presolve_certified": presolve_certified,
     }

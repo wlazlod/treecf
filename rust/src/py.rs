@@ -512,8 +512,9 @@ fn solve_genetic_batch_raw<'py>(
 
 /// Full exact-backend solve — port of `treecf.backends.exact.solve_exact`.
 /// Returns `(x_cf | None, distance | None, proof, stats, snapped)`: `stats` is
-/// the 7-tuple `(nodes_expanded, nodes_pruned_score, nodes_pruned_cost,
-/// lower_bound, gap, completed, warm_start_used)`; `snapped` is the winning
+/// the 9-tuple `(nodes_expanded, nodes_pruned_score, nodes_pruned_cost,
+/// lower_bound, gap, completed, warm_start_used, presolve_removed,
+/// presolve_certified)`; `snapped` is the winning
 /// row's snapped feature indices, in search order — `exact_rust.py` maps them
 /// back to names to rebuild `ExactResult` losslessly. A `PyValueError`
 /// mirrors Python's `ConstraintValidationError` for a multi-feature Linear
@@ -558,7 +559,7 @@ fn solve_exact_raw<'py>(
     Option<Bound<'py, PyArray1<f64>>>,
     Option<f64>,
     &'static str,
-    (u64, u64, u64, f64, f64, bool, bool),
+    (u64, u64, u64, f64, f64, bool, bool, u64, bool),
     Bound<'py, PyArray1<u64>>,
 )> {
     let x_own = x.as_slice()?.to_vec();
@@ -647,6 +648,8 @@ fn solve_exact_raw<'py>(
         stats.gap,
         stats.completed,
         stats.warm_start_used,
+        stats.presolve_removed,
+        stats.presolve_certified,
     );
     let snapped: Vec<u64> = result.snapped.iter().map(|&i| i as u64).collect();
     Ok((

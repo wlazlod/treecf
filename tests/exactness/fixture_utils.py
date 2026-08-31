@@ -112,6 +112,8 @@ class ExactFixture:
     golden_nodes_pruned_score: int
     golden_nodes_pruned_cost: int
     golden_completed: bool
+    golden_presolve_removed: int
+    golden_presolve_certified: bool
 
 
 def build_fixture_payload(
@@ -174,6 +176,8 @@ def golden_block(result: ExactResult) -> dict[str, Any]:
         "nodes_pruned_score": result.stats["nodes_pruned_score"],
         "nodes_pruned_cost": result.stats["nodes_pruned_cost"],
         "completed": result.stats["completed"],
+        "presolve_removed": result.stats["presolve_removed"],
+        "presolve_certified": result.stats["presolve_certified"],
     }
 
 
@@ -234,6 +238,8 @@ def _fixture_from_payload(
         golden_nodes_pruned_score=int(golden.get("nodes_pruned_score", 0)),
         golden_nodes_pruned_cost=int(golden.get("nodes_pruned_cost", 0)),
         golden_completed=bool(golden.get("completed", False)),
+        golden_presolve_removed=int(golden.get("presolve_removed", 0)),
+        golden_presolve_certified=bool(golden.get("presolve_certified", False)),
     )
 
 
@@ -416,6 +422,8 @@ def diff_golden(fixture: ExactFixture, result: ExactResult) -> list[str]:
         ("nodes_pruned_score", fixture.golden_nodes_pruned_score),
         ("nodes_pruned_cost", fixture.golden_nodes_pruned_cost),
         ("completed", fixture.golden_completed),
+        ("presolve_removed", fixture.golden_presolve_removed),
+        ("presolve_certified", fixture.golden_presolve_certified),
     ):
         got = result.stats[key]
         if got != want:

@@ -169,6 +169,8 @@ def solve_exact_rust(
         stats_gap,
         completed,
         warm_start_used,
+        presolve_removed,
+        presolve_certified,
     ) = stats
     return ExactResult(
         x_cf=None if x_cf is None else np.asarray(x_cf, dtype=np.float64),
@@ -181,6 +183,8 @@ def solve_exact_rust(
             "gap": float(stats_gap),
             "completed": bool(completed),
             "warm_start_used": bool(warm_start_used),
+            "presolve_removed": int(presolve_removed),
+            "presolve_certified": bool(presolve_certified),
         },
         snapped={ir.feature_names[int(i)]: True for i in np.asarray(snapped_idx)},
         distance=None if distance is None else float(distance),

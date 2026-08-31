@@ -40,6 +40,8 @@ pub struct ExactStats {
     pub gap: f64,
     pub completed: bool,
     pub warm_start_used: bool,
+    pub presolve_removed: u64,
+    pub presolve_certified: bool,
 }
 
 /// Outcome of an exact-backend search. `snapped` lists the feature indices whose
@@ -634,6 +636,65 @@ fn undo(
     *g = frame.g_before;
 }
 
+/// Delete candidate states no completion through them can make feasible —
+/// the mirror of `_presolve_domains`. For each state, the ensemble bracket
+/// with only that one feature assigned (all others free) must intersect the
+/// target, and the plausibility bracket must reach its floor. A state's
+/// bracket depends on its routing cell alone, and every value a later repair
+/// may put on the feature stays inside the chosen state's cell, so a deleted
+/// state can appear in no accepted row — hence no removed state can be the
+/// optimum, the first-found optimum among the survivors is the same argmin
+/// the unfiltered search returns, and the cheapest-surviving-state suffix
+/// bound stays admissible. One pass reaches the fixpoint: each state's test
+/// reads no other feature's domain.
+#[allow(clippy::too_many_arguments)]
+fn presolve_domains(
+    order: &[usize],
+    domains: &mut [Vec<State>],
+    model_bounds: &mut EnsembleBounds,
+    mut if_bounds: Option<&mut EnsembleBounds>,
+    min_total_path: f64,
+    lo_t: f64,
+    hi_t: f64,
+    assigned: &mut [bool],
+    values: &mut [f64],
+) -> u64 {
+    let mut removed = 0u64;
+    for &j in order {
+        let mut mask = BitSet::new(assigned.len());
+        mask.set(j);
+        let mut survivors: Vec<State> = Vec::with_capacity(domains[j].len());
+        for state in std::mem::take(&mut domains[j]) {
+            assigned[j] = true;
+            values[j] = state.value;
+            let frame = model_bounds.apply(j, &mask, assigned, values);
+            let mut keep = !(model_bounds.score_max < lo_t || model_bounds.score_min > hi_t);
+            if keep {
+                if let Some(if_b) = if_bounds.as_deref_mut() {
+                    let if_frame = if_b.apply(j, &mask, assigned, values);
+                    // negated on purpose: an incomparable bracket keeps the
+                    // state, exactly as Python's `not a < b` does
+                    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+                    {
+                        keep = !(if_b.score_max < min_total_path);
+                    }
+                    if_b.restore(&if_frame);
+                }
+            }
+            model_bounds.restore(&frame);
+            assigned[j] = false;
+            if keep {
+                survivors.push(state);
+            } else {
+                removed += 1;
+            }
+        }
+        domains[j] = survivors;
+    }
+    removed
+}
+
+#[allow(clippy::too_many_arguments)]
 fn stats(
     nodes_expanded: u64,
     nodes_pruned_score: u64,
@@ -642,6 +703,8 @@ fn stats(
     gap: f64,
     completed: bool,
     warm_start_used: bool,
+    presolve_removed: u64,
+    presolve_certified: bool,
 ) -> ExactStats {
     ExactStats {
         nodes_expanded,
@@ -651,6 +714,8 @@ fn stats(
         gap,
         completed,
         warm_start_used,
+        presolve_removed,
+        presolve_certified,
     }
 }
 
@@ -708,7 +773,7 @@ pub fn solve_exact(
         return Ok(SearchOutcome::Done(ExactResult {
             x_cf: Some(x.to_vec()),
             proof: "optimal",
-            stats: stats(0, 0, 0, 0.0, gap, true, false),
+            stats: stats(0, 0, 0, 0.0, gap, true, false, 0, false),
             snapped: Vec::new(),
             distance: Some(0.0),
         }));
@@ -720,7 +785,7 @@ pub fn solve_exact(
     };
     let grids = constraint_cells(cons, &ensembles);
     let blocks = crate::cells::category_blocks_joint(&ensembles);
-    let domains = build_domains(
+    let mut domains = build_domains(
         &grids,
         x,
         cons,
@@ -737,11 +802,50 @@ pub fn solve_exact(
         return Ok(SearchOutcome::Done(ExactResult {
             x_cf: None,
             proof: "optimal",
-            stats: stats(0, 0, 0, f64::INFINITY, gap, true, false),
+            stats: stats(0, 0, 0, f64::INFINITY, gap, true, false, 0, false),
             snapped: Vec::new(),
             distance: None,
         }));
     }
+    let mut assigned = vec![false; x.len()];
+    let mut values = vec![0.0; x.len()];
+    let mut assigned_mask = BitSet::new(ens.n_features);
+    let mut model_bounds = EnsembleBounds::new(ens, &assigned, &values);
+    let mut if_bounds = if_ens.map(|ir| EnsembleBounds::new(ir, &assigned, &values));
+
+    let presolve_removed = presolve_domains(
+        &order,
+        &mut domains,
+        &mut model_bounds,
+        if_bounds.as_mut(),
+        min_total_path,
+        lo_t,
+        hi_t,
+        &mut assigned,
+        &mut values,
+    );
+    if order.iter().any(|&j| domains[j].is_empty()) {
+        // Every candidate of some feature is provably out of target: nothing
+        // the search could enumerate can be feasible.
+        return Ok(SearchOutcome::Done(ExactResult {
+            x_cf: None,
+            proof: "optimal",
+            stats: stats(
+                0,
+                0,
+                0,
+                f64::INFINITY,
+                gap,
+                true,
+                false,
+                presolve_removed,
+                true,
+            ),
+            snapped: Vec::new(),
+            distance: None,
+        }));
+    }
+
     let h_suffix = h_suffix(&order, &domains);
 
     let mut level_of = vec![usize::MAX; x.len()];
@@ -855,12 +959,7 @@ pub fn solve_exact(
         demanded,
     };
 
-    let mut assigned = vec![false; x.len()];
-    let mut values = vec![0.0; x.len()];
-    let mut assigned_mask = BitSet::new(ens.n_features);
     let mut propagation = Propagation::new(cons, &ctx.domains);
-    let mut model_bounds = EnsembleBounds::new(ens, &assigned, &values);
-    let mut if_bounds = if_ens.map(|ir| EnsembleBounds::new(ir, &assigned, &values));
 
     let mut incumbent_cost = f64::INFINITY;
     let mut incumbent_row: Option<Vec<f64>> = None;
@@ -1130,6 +1229,8 @@ pub fn solve_exact(
             gap,
             completed,
             warm_start_used,
+            presolve_removed,
+            false,
         ),
         snapped,
     }))
@@ -1489,13 +1590,15 @@ mod tests {
         assert_eq!(
             result.stats,
             ExactStats {
-                nodes_expanded: 4,
-                nodes_pruned_score: 1,
+                nodes_expanded: 3,
+                nodes_pruned_score: 0,
                 nodes_pruned_cost: 1,
                 lower_bound: 0.75,
                 gap: 0.0,
                 completed: true,
                 warm_start_used: false,
+                presolve_removed: 1,
+                presolve_certified: false,
             }
         );
         assert!(result.snapped.is_empty());
@@ -1572,9 +1675,10 @@ mod tests {
                         vec![0x3ff0000000000000, 0x4008000000000000, 0x0]
                     );
                     assert_eq!(result.distance.unwrap().to_bits(), 0x3fe3333333333333);
-                    assert_eq!(result.stats.nodes_expanded, 6);
-                    assert_eq!(result.stats.nodes_pruned_score, 1);
+                    assert_eq!(result.stats.nodes_expanded, 5);
+                    assert_eq!(result.stats.nodes_pruned_score, 0);
                     assert_eq!(result.stats.nodes_pruned_cost, 2);
+                    assert_eq!(result.stats.presolve_removed, 1);
                     return;
                 }
                 level -= 1;
@@ -1618,8 +1722,9 @@ mod tests {
         assert_eq!(result.distance.unwrap().to_bits(), 0x3ff8000000000000);
         assert_eq!(result.proof, "optimal");
         assert!(result.stats.completed);
-        assert_eq!(result.stats.nodes_expanded, 3);
-        assert_eq!(result.stats.nodes_pruned_score, 1);
+        assert_eq!(result.stats.nodes_expanded, 2);
+        assert_eq!(result.stats.nodes_pruned_score, 0);
+        assert_eq!(result.stats.presolve_removed, 1);
     }
 
     /// A value policy on either side makes the pair unrepairable, so the search
@@ -1653,13 +1758,15 @@ mod tests {
         assert_eq!(
             result.stats,
             ExactStats {
-                nodes_expanded: 3,
-                nodes_pruned_score: 1,
+                nodes_expanded: 2,
+                nodes_pruned_score: 0,
                 nodes_pruned_cost: 1,
                 lower_bound: 0.0,
                 gap: 0.0,
                 completed: false,
                 warm_start_used: false,
+                presolve_removed: 1,
+                presolve_certified: false,
             }
         );
     }
@@ -1690,13 +1797,15 @@ mod tests {
         assert_eq!(
             result.stats,
             ExactStats {
-                nodes_expanded: 7,
-                nodes_pruned_score: 1,
+                nodes_expanded: 6,
+                nodes_pruned_score: 0,
                 nodes_pruned_cost: 3,
                 lower_bound: 3.0,
                 gap: 0.0,
                 completed: true,
                 warm_start_used: false,
+                presolve_removed: 1,
+                presolve_certified: false,
             }
         );
     }
@@ -1723,8 +1832,9 @@ mod tests {
             vec![0x3ff0000000000000, 0x0]
         );
         assert_eq!(result.distance.unwrap().to_bits(), 0x3fe0000000000000);
-        assert_eq!(result.stats.nodes_expanded, 3);
-        assert_eq!(result.stats.nodes_pruned_score, 2);
+        assert_eq!(result.stats.nodes_expanded, 1);
+        assert_eq!(result.stats.nodes_pruned_score, 0);
+        assert_eq!(result.stats.presolve_removed, 2);
         assert!(result.stats.completed);
     }
 
@@ -1755,8 +1865,9 @@ mod tests {
         );
         assert!(result.stats.warm_start_used);
         assert_eq!(result.distance.unwrap().to_bits(), 0x3fe3333333333333);
-        assert_eq!(result.stats.nodes_expanded, 6);
+        assert_eq!(result.stats.nodes_expanded, 5);
         assert_eq!(result.stats.nodes_pruned_cost, 2);
+        assert_eq!(result.stats.presolve_removed, 1);
     }
 
     /// A gap only widens the pruning threshold; the proof stays "optimal" until
@@ -1852,13 +1963,15 @@ mod tests {
         assert_eq!(
             result.stats,
             ExactStats {
-                nodes_expanded: 4,
-                nodes_pruned_score: 2,
+                nodes_expanded: 2,
+                nodes_pruned_score: 0,
                 nodes_pruned_cost: 0,
                 lower_bound: 3.0,
                 gap: 0.0,
                 completed: true,
                 warm_start_used: false,
+                presolve_removed: 2,
+                presolve_certified: false,
             }
         );
     }
@@ -1916,13 +2029,15 @@ mod tests {
         assert_eq!(
             result.stats,
             ExactStats {
-                nodes_expanded: 4,
-                nodes_pruned_score: 2,
+                nodes_expanded: 2,
+                nodes_pruned_score: 0,
                 nodes_pruned_cost: 0,
                 lower_bound: 1.5,
                 gap: 0.0,
                 completed: true,
                 warm_start_used: false,
+                presolve_removed: 2,
+                presolve_certified: false,
             }
         );
     }
@@ -1964,13 +2079,15 @@ mod tests {
         assert_eq!(
             result.stats,
             ExactStats {
-                nodes_expanded: 4,
-                nodes_pruned_score: 1,
+                nodes_expanded: 3,
+                nodes_pruned_score: 0,
                 nodes_pruned_cost: 0,
                 lower_bound: 0.0,
                 gap: 0.0,
                 completed: false,
                 warm_start_used: false,
+                presolve_removed: 1,
+                presolve_certified: false,
             }
         );
     }
@@ -2011,13 +2128,15 @@ mod tests {
         assert_eq!(
             result.stats,
             ExactStats {
-                nodes_expanded: 3,
-                nodes_pruned_score: 1,
+                nodes_expanded: 2,
+                nodes_pruned_score: 0,
                 nodes_pruned_cost: 0,
                 lower_bound: 0.0,
                 gap: 0.0,
                 completed: false,
                 warm_start_used: false,
+                presolve_removed: 1,
+                presolve_certified: false,
             }
         );
     }
@@ -2046,8 +2165,9 @@ mod tests {
         );
         assert_eq!(result.distance.unwrap().to_bits(), 0x3fe8000000000000);
         assert_eq!(result.snapped, vec![0]);
-        assert_eq!(result.stats.nodes_expanded, 2);
-        assert_eq!(result.stats.nodes_pruned_score, 1);
+        assert_eq!(result.stats.nodes_expanded, 1);
+        assert_eq!(result.stats.nodes_pruned_score, 0);
+        assert_eq!(result.stats.presolve_removed, 1);
     }
 
     /// A node budget stops the walk and withdraws the completeness claim.
