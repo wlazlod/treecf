@@ -6,7 +6,8 @@ issue time — it does not cryptographically prove that a search ran or that an
 optimality claim is true; re-running with the recorded seed and budgets
 against a fingerprint-matching model is how a validator checks that.
 
-Certificates are plain ``dict[str, object]`` values (``"schema_version": 1``)
+Certificates are plain ``dict[str, object]`` values (``"schema_version": 2``;
+version 1 files, which carry no categorical fields, still verify)
 that serialize with ``json.dumps(cert, allow_nan=False, sort_keys=True)``:
 non-finite floats are encoded as the strings ``"NaN"``, ``"Infinity"``, and
 ``"-Infinity"`` wherever they can occur. See
@@ -284,6 +285,7 @@ def _verify_plan(
     x_cf: FloatArray,
     interval: tuple[float, float],
     region_intervals: dict[str, tuple[float, float]] | None,
+    region_categories: dict[str, tuple[int, ...]] | None = None,
 ) -> tuple[dict[str, object], list[str]]:
     """Fresh verification of a plan: recomputed score, target membership, the
     compiled constraint check, plausibility when configured, and the region's
@@ -307,15 +309,41 @@ def _verify_plan(
         verification["plausibility_ok"] = plausibility_ok
         if not plausibility_ok:
             failed.append("plausibility_ok")
-    if region_intervals is not None:
+    if region_intervals is not None or region_categories is not None:
         checked: list[dict[str, object]] = []
-        for label, point in _region_points(x_cf, region_intervals, explainer.ir.feature_names):
+        points = _region_points(
+            x_cf, region_intervals or {}, explainer.ir.feature_names
+        )
+        points.extend(
+            _region_category_points(
+                x_cf, region_categories or {}, explainer.ir.feature_names
+            )
+        )
+        for label, point in points:
             ok = explainer._verify(x, point, interval) is None
             checked.append({"point": label, "ok": ok})
             if not ok:
                 failed.append(f"region point {label}")
         verification["region_points"] = checked
     return verification, failed
+
+
+def _region_category_points(
+    x_cf: FloatArray,
+    categories: dict[str, tuple[int, ...]],
+    feature_names: tuple[str, ...],
+) -> list[tuple[str, FloatArray]]:
+    """One sampled point per certified category code, holding every other
+    coordinate at ``x_cf``."""
+    index = {name: j for j, name in enumerate(feature_names)}
+    points: list[tuple[str, FloatArray]] = []
+    for name, codes in categories.items():
+        j = index[name]
+        for code in codes:
+            point = x_cf.copy()
+            point[j] = float(code)
+            points.append((f"{name}={code}", point))
+    return points
 
 
 def _verify_infeasible(
@@ -446,7 +474,7 @@ def build_certificate(
         solve["declared"] = declared
 
     cert: dict[str, object] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "created_utc": datetime.now(UTC).isoformat(timespec="seconds"),
         "treecf_version": __version__,
         "reproducible": reproducible_reason is None,
@@ -473,14 +501,22 @@ def build_certificate(
             "snapped": dict(result.snapped),
         }
         region_intervals = None
+        region_categories = None
         if result.region is not None:
             region_intervals = dict(result.region.feature_intervals)
             plan["region_feature_intervals"] = {
                 name: [_json_float(lo), _json_float(hi)]
                 for name, (lo, hi) in region_intervals.items()
             }
+            if result.region.feature_categories:
+                region_categories = dict(result.region.feature_categories)
+                plan["region_feature_categories"] = {
+                    name: list(codes) for name, codes in region_categories.items()
+                }
         cert["plan"] = plan
-        verification, failed = _verify_plan(explainer, x, result.x_cf, interval, region_intervals)
+        verification, failed = _verify_plan(
+            explainer, x, result.x_cf, interval, region_intervals, region_categories
+        )
         if failed:
             warnings.warn(
                 "certificate verification failed: " + ", ".join(failed)
@@ -530,6 +566,18 @@ def check_certificate(
         mismatches.append("constraints fingerprint does not match this explainer's constraint set")
 
     verification_ok = True
+    schema_version = cert.get("schema_version", 1)
+    if schema_version not in (1, 2):
+        return {
+            "model_match": model_match,
+            "constraints_match": constraints_match,
+            "verification_ok": False,
+            "mismatches": [
+                *mismatches,
+                f"unknown certificate schema_version {schema_version!r} "
+                "(this release verifies versions 1 and 2)",
+            ],
+        }
     try:
         target = cert.get("target")
         if not isinstance(target, dict):
@@ -552,7 +600,14 @@ def check_certificate(
                     str(name): (_from_json_float(pair[0]), _from_json_float(pair[1]))
                     for name, pair in stored_intervals.items()
                 }
-            _, failed = _verify_plan(explainer, x, x_cf, interval, intervals)
+            categories: dict[str, tuple[int, ...]] | None = None
+            stored_categories = plan.get("region_feature_categories")
+            if isinstance(stored_categories, dict):  # version 1 files carry none
+                categories = {
+                    str(name): tuple(int(c) for c in codes)
+                    for name, codes in stored_categories.items()
+                }
+            _, failed = _verify_plan(explainer, x, x_cf, interval, intervals, categories)
             if failed:
                 verification_ok = False
                 mismatches.extend(f"verification failed: {name}" for name in failed)
