@@ -89,12 +89,12 @@ def exp() -> Explainer:
     return Explainer(_sig_ir(), normalizers=np.ones(3))
 
 
-X0 = np.zeros(3)  # raw score -1.0; raising levers pushes the score up
+x0 = np.zeros(3)  # raw score -1.0; raising levers pushes the score up
 
 
 def _feasible(exp: Explainer, cal: StubCalibrator, **kw) -> tuple:
     target = Target.calibrated(cal, op=">=", value=0.5, **kw)
-    res = exp.explain(X0, target, seed=0)
+    res = exp.explain(x0, target, seed=0)
     assert hasattr(res, "x_cf"), res
     return res, target
 
@@ -103,7 +103,7 @@ class TestCertificateProvenance:
     def test_calibrator_block_is_structured(self, exp: Explainer) -> None:
         cal = StubCalibrator(a=1.0, b=0.3)
         res, target = _feasible(exp, cal, buffer_logit=0.1)
-        cert = exp.certificate(X0, res, target)
+        cert = exp.certificate(x0, res, target)
         block = cert["target"]["calibrator"]
         assert block == {
             "embedded": False,
@@ -116,7 +116,7 @@ class TestCertificateProvenance:
     def test_missing_fingerprint_yields_null(self, exp: Explainer) -> None:
         cal = BareCalibrator(a=1.0, b=0.3)
         res, target = _feasible(exp, cal)
-        cert = exp.certificate(X0, res, target)
+        cert = exp.certificate(x0, res, target)
         assert cert["target"]["calibrator"]["fingerprint"] is None
 
     def test_band_certificate_carries_the_block_once(self, exp: Explainer) -> None:
@@ -124,16 +124,16 @@ class TestCertificateProvenance:
         target = Target.bands(
             {"good": (0.0, 0.4), "bad": (0.4, 1.0)}, space="calibrated", calibrator=cal
         )
-        out = exp.explain(X0, target, seed=0)
+        out = exp.explain(x0, target, seed=0)
         band = next(name for name, r in out.items() if hasattr(r, "x_cf"))
-        cert = exp.certificate(X0, out[band], target, band=band)
+        cert = exp.certificate(x0, out[band], target, band=band)
         assert cert["target"]["band"] == band
         assert cert["target"]["calibrator"]["type"] == "StubCalibrator"
 
     def test_check_without_calibrator_matches_0_2_3_shape(self, exp: Explainer) -> None:
         cal = StubCalibrator()
         res, target = _feasible(exp, cal)
-        cert = exp.certificate(X0, res, target)
+        cert = exp.certificate(x0, res, target)
         report = exp.check_certificate(cert)
         assert set(report) == {
             "model_match",
@@ -146,7 +146,7 @@ class TestCertificateProvenance:
     def test_check_with_matching_calibrator_is_clean(self, exp: Explainer) -> None:
         cal = StubCalibrator(a=0.9, b=0.2)
         res, target = _feasible(exp, cal, buffer_logit=0.05)
-        cert = exp.certificate(X0, res, target)
+        cert = exp.certificate(x0, res, target)
         report = exp.check_certificate(cert, calibrator=cal)
         assert report["calibrator_match"] is True
         assert not report["mismatches"]
@@ -154,7 +154,7 @@ class TestCertificateProvenance:
     def test_check_flags_a_different_calibrator(self, exp: Explainer) -> None:
         cal = StubCalibrator(a=0.9, b=0.2)
         res, target = _feasible(exp, cal)
-        cert = exp.certificate(X0, res, target)
+        cert = exp.certificate(x0, res, target)
         other = StubCalibrator(a=0.9, b=0.2, tag="stub-2")  # same math, other identity
         report = exp.check_certificate(cert, calibrator=other)
         assert report["calibrator_match"] is False
@@ -163,7 +163,7 @@ class TestCertificateProvenance:
     def test_check_flags_a_perturbed_stored_interval(self, exp: Explainer) -> None:
         cal = StubCalibrator(a=0.9, b=0.2)
         res, target = _feasible(exp, cal)
-        cert = exp.certificate(X0, res, target)
+        cert = exp.certificate(x0, res, target)
         cert["target"]["raw_interval"][0] = cert["target"]["raw_interval"][0] + 0.01 \
             if math.isfinite(cert["target"]["raw_interval"][0]) else -3.0
         cert["target"]["raw_interval"][1] = 5.0
@@ -176,7 +176,7 @@ class TestCertificateProvenance:
     ) -> None:
         cal = BareCalibrator(a=1.0, b=0.3)
         res, target = _feasible(exp, cal)
-        cert = exp.certificate(X0, res, target)
+        cert = exp.certificate(x0, res, target)
         report = exp.check_certificate(cert, calibrator=cal)
         # fingerprint unavailable on both sides -> noted, but the interval
         # re-inversion still passes, so calibrator_match reflects only real evidence
@@ -228,7 +228,7 @@ class TestCalibratedReadout:
         assert res.score_calibrated >= 0.5 - 1e-12  # inside the closed target
 
     def test_none_for_raw_targets_and_bare_calibrators(self, exp: Explainer) -> None:
-        raw_res = exp.explain(X0, Target.raw(op=">=", value=0.5), seed=0)
+        raw_res = exp.explain(x0, Target.raw(op=">=", value=0.5), seed=0)
         assert raw_res.score_calibrated is None
         bare_res, _ = _feasible(exp, BareCalibrator(a=1.0, b=0.3))
         assert bare_res.score_calibrated is None
@@ -238,7 +238,7 @@ class TestCalibratedReadout:
         target = Target.bands(
             {"good": (0.0, 0.4), "bad": (0.4, 1.0)}, space="calibrated", calibrator=cal
         )
-        out = exp.explain(X0, target, seed=0)
+        out = exp.explain(x0, target, seed=0)
         for res in out.values():
             if hasattr(res, "x_cf"):
                 assert res.score_calibrated is not None
@@ -254,15 +254,15 @@ class TestCalibratedReadout:
     def test_certificate_factual_block_carries_the_readout(self, exp: Explainer) -> None:
         cal = StubCalibrator(a=1.0, b=0.2)
         res, target = _feasible(exp, cal)
-        cert = exp.certificate(X0, res, target)
-        # X0 has raw score -1.0 (base_score, no levers raised)
+        cert = exp.certificate(x0, res, target)
+        # x0 has raw score -1.0 (base_score, no levers raised)
         expected = float(cal.predict_proba(np.array([_sigmoid(-1.0)]))[0])
         assert cert["factual"]["score_calibrated"] == pytest.approx(expected, abs=1e-12)
 
     def test_certificate_factual_readout_none_for_raw_target(self, exp: Explainer) -> None:
         target = Target.raw(op=">=", value=0.5)
-        res = exp.explain(X0, target, seed=0)
-        cert = exp.certificate(X0, res, target)
+        res = exp.explain(x0, target, seed=0)
+        cert = exp.certificate(x0, res, target)
         assert cert["factual"].get("score_calibrated") is None
 
 
@@ -278,5 +278,5 @@ class TestInversionCaching:
         target = Target.bands(
             {"good": (0.0, 0.4), "bad": (0.4, 1.0)}, space="calibrated", calibrator=cal
         )
-        exp.explain(X0, target, seed=0)
+        exp.explain(x0, target, seed=0)
         assert cal.inverse_calls == 2  # one per band

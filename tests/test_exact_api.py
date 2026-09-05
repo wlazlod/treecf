@@ -62,7 +62,7 @@ def exp() -> Explainer:
     return Explainer(_ir(), normalizers=np.ones(3))
 
 
-X0 = np.zeros(3)
+x0 = np.zeros(3)
 
 
 class TestExactOnlyKwargs:
@@ -73,21 +73,21 @@ class TestExactOnlyKwargs:
         self, exp: Explainer, kwargs: dict[str, object]
     ) -> None:
         with pytest.raises(ValueError, match="only valid with backend='exact'"):
-            exp.explain(X0, Target.raw(op=">=", value=0.5), backend="genetic", seed=0, **kwargs)
+            exp.explain(x0, Target.raw(op=">=", value=0.5), backend="genetic", seed=0, **kwargs)
 
     @pytest.mark.parametrize("backend", ["genetic", "python"])
     def test_documented_defaults_with_other_backend_are_accepted(
         self, exp: Explainer, backend: str
     ) -> None:
         result = exp.explain(
-            X0, Target.raw(op=">=", value=0.5), backend=backend, seed=0,
+            x0, Target.raw(op=">=", value=0.5), backend=backend, seed=0,
             warm_start=True, node_budget=2_000_000, gap=0.0,
         )
         assert isinstance(result, Counterfactual | Infeasible)
 
     def test_exact_backend_accepts_non_default_values(self, exp: Explainer) -> None:
         result = exp.explain(
-            X0, Target.raw(op=">=", value=0.5), backend="exact", seed=0,
+            x0, Target.raw(op=">=", value=0.5), backend="exact", seed=0,
             warm_start=False, node_budget=1000, gap=0.05,
         )
         assert isinstance(result, Counterfactual | Infeasible)
@@ -96,26 +96,26 @@ class TestExactOnlyKwargs:
 class TestSearchMode:
     def test_refine_with_other_backend_raises(self, exp: Explainer) -> None:
         with pytest.raises(ValueError, match="only valid with backend='exact'"):
-            exp.explain(X0, Target.raw(op=">=", value=0.5), backend="genetic", search="refine")
+            exp.explain(x0, Target.raw(op=">=", value=0.5), backend="genetic", search="refine")
 
     def test_unknown_mode_raises(self, exp: Explainer) -> None:
         with pytest.raises(ValueError, match="search"):
-            exp.explain(X0, Target.raw(op=">=", value=0.5), backend="exact", search="bogus")
+            exp.explain(x0, Target.raw(op=">=", value=0.5), backend="exact", search="bogus")
 
     def test_classic_is_accepted_explicitly_on_any_backend(self, exp: Explainer) -> None:
         result = exp.explain(
-            X0, Target.raw(op=">=", value=0.5), backend="genetic", seed=0, search="classic"
+            x0, Target.raw(op=">=", value=0.5), backend="genetic", seed=0, search="classic"
         )
         assert isinstance(result, Counterfactual | Infeasible)
 
     def test_refine_runs_and_reports_itself(self, exp: Explainer) -> None:
         result = exp.explain(
-            X0, Target.raw(op=">=", value=0.9), backend="exact", seed=0, search="refine"
+            x0, Target.raw(op=">=", value=0.9), backend="exact", seed=0, search="refine"
         )
         assert isinstance(result, Counterfactual)
         assert result.solver_stats["search"] == "refine"
         assert result.proof == "optimal"
-        classic = exp.explain(X0, Target.raw(op=">=", value=0.9), backend="exact", seed=0)
+        classic = exp.explain(x0, Target.raw(op=">=", value=0.9), backend="exact", seed=0)
         assert isinstance(classic, Counterfactual)
         assert classic.solver_stats["search"] == "classic"
         assert result.distance == pytest.approx(classic.distance, rel=1e-12)
@@ -123,7 +123,7 @@ class TestSearchMode:
     def test_coalitions_and_batch_forward_the_mode(self, exp: Explainer) -> None:
         target = Target.raw(op=">=", value=0.9)
         by_group = exp.explain_coalitions(
-            X0, target, {"first": ["a"], "rest": ["b", "c"]}, backend="exact", seed=0,
+            x0, target, {"first": ["a"], "rest": ["b", "c"]}, backend="exact", seed=0,
             search="refine",
         )
         assert all(r.solver_stats["search"] == "refine" for r in by_group.values())
@@ -135,8 +135,8 @@ class TestSearchMode:
 
     def test_certificate_records_the_declared_mode(self, exp: Explainer) -> None:
         target = Target.raw(op=">=", value=0.9)
-        result = exp.explain(X0, target, backend="exact", seed=0, search="refine")
-        cert = exp.certificate(X0, result, target, search="refine")
+        result = exp.explain(x0, target, backend="exact", seed=0, search="refine")
+        cert = exp.certificate(x0, result, target, search="refine")
         solve = cert["solve"]
         assert isinstance(solve, dict)
         assert solve["declared"]["search"] == "refine"
@@ -146,12 +146,12 @@ class TestSearchMode:
 class TestWarmStart:
     def test_node_budget_one_returns_the_warm_start_row_unchanged(self, exp: Explainer) -> None:
         target = Target.raw(op=">=", value=1.5)  # needs at least two levers
-        genetic = exp.explain(X0, target, backend="genetic", seed=0)
+        genetic = exp.explain(x0, target, backend="genetic", seed=0)
         assert isinstance(genetic, Counterfactual)
 
         with pytest.warns(TreecfWarning, match="exhausted"):
             exact = exp.explain(
-                X0, target, backend="exact", seed=0,
+                x0, target, backend="exact", seed=0,
                 warm_start=True, node_budget=1, time_budget_s=5.0,
             )
         assert isinstance(exact, Counterfactual)
@@ -164,7 +164,7 @@ class TestWarmStart:
         target = Target.raw(op=">=", value=1.5)
         with pytest.warns(TreecfWarning, match="exhausted"):
             result = exp.explain(
-                X0, target, backend="exact", seed=0,
+                x0, target, backend="exact", seed=0,
                 warm_start=False, node_budget=1, time_budget_s=5.0,
             )
         assert isinstance(result, Infeasible)
@@ -173,8 +173,8 @@ class TestWarmStart:
 
 class TestFactualAlreadyInTarget:
     def test_immediate_optimal_with_zero_nodes(self, exp: Explainer) -> None:
-        target = Target.raw(op="<=", value=0.5)  # raw_score(X0) == 0.0 already satisfies
-        result = exp.explain(X0, target, backend="exact", seed=0)
+        target = Target.raw(op="<=", value=0.5)  # raw_score(x0) == 0.0 already satisfies
+        result = exp.explain(x0, target, backend="exact", seed=0)
         assert isinstance(result, Counterfactual)
         assert result.proof == "optimal"
         assert result.distance == 0.0
@@ -185,7 +185,7 @@ class TestFactualAlreadyInTarget:
 class TestBands:
     def test_mixes_counterfactual_and_certified_infeasible(self, exp: Explainer) -> None:
         target = Target.bands({"reachable": (0.9, 1.0), "unreachable": (3.0, 10.0)}, space="raw")
-        result = exp.explain(X0, target, backend="exact", seed=0)
+        result = exp.explain(x0, target, backend="exact", seed=0)
         assert isinstance(result, dict)
         assert isinstance(result["reachable"], Counterfactual)
         assert isinstance(result["unreachable"], Infeasible)
@@ -204,7 +204,7 @@ def test_exact_backend_with_plausibility_smoke() -> None:
     plaus = Plausibility(if_ir=if_ir, max_anomaly_score=0.99)  # loose bound: always plausible
     exp = Explainer(_ir(), normalizers=np.ones(3), plausibility=plaus)
     target = Target.raw(op=">=", value=0.5)
-    result = exp.explain(X0, target, backend="exact", seed=0, time_budget_s=10.0)
+    result = exp.explain(x0, target, backend="exact", seed=0, time_budget_s=10.0)
     assert isinstance(result, Counterfactual | Infeasible)
     if isinstance(result, Counterfactual):
         assert plaus.anomaly_score(result.x_cf) <= plaus.max_anomaly_score + 1e-9
@@ -243,7 +243,7 @@ def test_exact_backend_grid_value_policy() -> None:
 def test_explain_coalitions_backend_exact(exp: Explainer) -> None:
     target = Target.raw(op=">=", value=0.9)  # unreachable via "a" or "b" alone
     result = exp.explain_coalitions(
-        X0, target, {"first": ["a"], "rest": ["b", "c"]}, backend="exact", seed=0
+        x0, target, {"first": ["a"], "rest": ["b", "c"]}, backend="exact", seed=0
     )
     assert isinstance(result["first"], Counterfactual)
     assert set(result["first"].changes) <= {"a"}
@@ -281,7 +281,7 @@ class TestValidationErrorsPropagate:
         )
         target = Target.raw(op=">=", value=0.5)
         with pytest.raises(ConstraintValidationError, match="genetic"):
-            exp.explain(X0, target, backend="exact", seed=0)
+            exp.explain(x0, target, backend="exact", seed=0)
 
 
 class TestProofTaxonomy:
@@ -304,7 +304,7 @@ class TestProofTaxonomy:
         counterfactual_proofs = {"heuristic", "optimal", "optimal_within_gap"}
         infeasible_proofs = {"search_exhausted", "certified"}
         target = Target.raw(op=">=", value=target_value)
-        result = exp.explain(X0, target, backend=backend, seed=0)
+        result = exp.explain(x0, target, backend=backend, seed=0)
         if isinstance(result, Counterfactual):
             assert result.proof in counterfactual_proofs
         else:

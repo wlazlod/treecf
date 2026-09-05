@@ -53,7 +53,7 @@ def exp() -> Explainer:
     return Explainer(_ir(), normalizers=np.ones(3))
 
 
-X0 = np.zeros(3)
+x0 = np.zeros(3)
 TARGET = Target.raw(op=">=", value=0.9)  # needs "a" alone; b, c never matter for the score
 
 
@@ -151,17 +151,17 @@ class TestRecourseRegionMethod:
     def test_rejects_unverified_counterfactual(self, exp: Explainer) -> None:
         unverified = np.zeros(3)  # score 0.0 does not reach the >= 0.9 target
         with pytest.raises(TreecfError, match="unverified"):
-            exp.recourse_region(X0, unverified, TARGET)
+            exp.recourse_region(x0, unverified, TARGET)
 
     def test_rejects_bands_target(self, exp: Explainer) -> None:
         bands = Target.bands({"grade": (0.0, 1.0)}, space="raw")
         with pytest.raises(TreecfError, match="bands"):
-            exp.recourse_region(X0, X0, bands)
+            exp.recourse_region(x0, x0, bands)
 
     def test_matches_region_true_convenience_flag(self, exp: Explainer) -> None:
-        result = exp.explain(X0, TARGET, backend="genetic", seed=0)
+        result = exp.explain(x0, TARGET, backend="genetic", seed=0)
         assert isinstance(result, Counterfactual)
-        region = exp.recourse_region(X0, result.x_cf, TARGET)
+        region = exp.recourse_region(x0, result.x_cf, TARGET)
         assert region.contains(result.x_cf)
         assert region.feature_intervals["a"][0] == 1.0
 
@@ -199,36 +199,36 @@ class TestMaximalModeApi:
     post-hoc method, and the batch path."""
 
     def test_explain_region_mode_maximal_reports_flags(self, exp: Explainer) -> None:
-        result = exp.explain(X0, TARGET, seed=0, region=True, region_mode="maximal")
+        result = exp.explain(x0, TARGET, seed=0, region=True, region_mode="maximal")
         assert isinstance(result, Counterfactual) and result.region is not None
         assert set(result.region.maximal) == set(result.region.feature_intervals)
         assert result.region.witnesses is None  # explain never keeps witnesses
 
     def test_region_mode_without_region_raises(self, exp: Explainer) -> None:
         with pytest.raises(ValueError, match="region=True"):
-            exp.explain(X0, TARGET, seed=0, region_mode="maximal")
+            exp.explain(x0, TARGET, seed=0, region_mode="maximal")
         with pytest.raises(ValueError, match="region=True"):
-            exp.explain(X0, TARGET, seed=0, region_budget=10)
+            exp.explain(x0, TARGET, seed=0, region_budget=10)
 
     def test_defaults_are_accepted_without_region(self, exp: Explainer) -> None:
-        result = exp.explain(X0, TARGET, seed=0, region_mode="fast", region_budget=100_000)
+        result = exp.explain(x0, TARGET, seed=0, region_mode="fast", region_budget=100_000)
         assert isinstance(result, Counterfactual)
 
     def test_unknown_mode_and_bad_budget_are_rejected(self, exp: Explainer) -> None:
         with pytest.raises(TreecfError, match="mode"):
-            exp.explain(X0, TARGET, seed=0, region=True, region_mode="sloppy")
+            exp.explain(x0, TARGET, seed=0, region=True, region_mode="sloppy")
         with pytest.raises(ValueError, match="budget"):
-            exp.explain(X0, TARGET, seed=0, region=True, region_budget=0)
+            exp.explain(x0, TARGET, seed=0, region=True, region_budget=0)
 
     def test_recourse_region_keeps_witnesses_on_request(self, exp: Explainer) -> None:
-        result = exp.explain(X0, TARGET, seed=0)
+        result = exp.explain(x0, TARGET, seed=0)
         assert isinstance(result, Counterfactual)
         region = exp.recourse_region(
-            X0, result.x_cf, TARGET, mode="maximal", budget=500, keep_witnesses=True
+            x0, result.x_cf, TARGET, mode="maximal", budget=500, keep_witnesses=True
         )
         assert region.witnesses is not None
         assert set(region.maximal) == set(region.feature_intervals)
-        plain = exp.recourse_region(X0, result.x_cf, TARGET, mode="maximal")
+        plain = exp.recourse_region(x0, result.x_cf, TARGET, mode="maximal")
         assert plain.witnesses is None
         assert plain.maximal == region.maximal
 
@@ -245,7 +245,7 @@ class TestMaximalModeApi:
 
     def test_coalitions_forward_the_mode(self, exp: Explainer) -> None:
         by_group = exp.explain_coalitions(
-            X0, TARGET, {"first": ["a"], "rest": ["b", "c"]}, seed=0, region=True,
+            x0, TARGET, {"first": ["a"], "rest": ["b", "c"]}, seed=0, region=True,
             region_mode="maximal",
         )
         for result in by_group.values():
@@ -258,7 +258,7 @@ class TestRegionTrueEndToEnd:
     def test_produces_a_region_containing_its_own_counterfactual(
         self, exp: Explainer, backend: str
     ) -> None:
-        result = exp.explain(X0, TARGET, backend=backend, seed=0, region=True)
+        result = exp.explain(x0, TARGET, backend=backend, seed=0, region=True)
         assert isinstance(result, Counterfactual)
         assert isinstance(result.region, RecourseRegion)
         assert result.region.contains(result.x_cf)
@@ -268,13 +268,13 @@ class TestRegionTrueEndToEnd:
         assert "c" in result.region.feature_intervals
 
     def test_region_false_by_default(self, exp: Explainer) -> None:
-        result = exp.explain(X0, TARGET, backend="genetic", seed=0)
+        result = exp.explain(x0, TARGET, backend="genetic", seed=0)
         assert isinstance(result, Counterfactual)
         assert result.region is None
 
     def test_bands_target_regions_use_their_own_band_interval(self, exp: Explainer) -> None:
         bands = Target.bands({"reachable": (0.9, 1.0), "unreachable": (3.0, 10.0)}, space="raw")
-        result = exp.explain(X0, bands, backend="exact", seed=0, region=True)
+        result = exp.explain(x0, bands, backend="exact", seed=0, region=True)
         assert isinstance(result, dict)
         reachable = result["reachable"]
         assert isinstance(reachable, Counterfactual)
@@ -292,7 +292,7 @@ class TestRegionTrueEndToEnd:
 class TestDegenerateFeaturesArePinned:
     def test_frozen_feature_is_excluded(self) -> None:
         exp = Explainer(_ir(), normalizers=np.ones(3), constraints=[Freeze("c")])
-        result = exp.explain(X0, TARGET, backend="exact", seed=0, region=True)
+        result = exp.explain(x0, TARGET, backend="exact", seed=0, region=True)
         assert isinstance(result, Counterfactual)
         assert result.region is not None
         assert "c" not in result.region.feature_intervals

@@ -30,7 +30,7 @@ def _ir() -> EnsembleIR:
     )
 
 
-X0 = np.zeros(3)
+x0 = np.zeros(3)
 TARGET = Target.raw(op=">=", value=0.5)
 INTERVAL = TARGET.raw_interval(Link.IDENTITY)
 
@@ -44,7 +44,7 @@ def test_residual_micro_change_is_pruned(exp: Explainer) -> None:
     # feature a crosses its threshold (necessary); b moves 0.3 without crossing
     # anything — pure cost, zero score effect: the classic GA residue
     candidate = np.array([2.0, 0.3, 0.0])
-    result = exp._finalize_candidate(X0, candidate, INTERVAL, stats={})
+    result = exp._finalize_candidate(x0, candidate, INTERVAL, stats={})
     assert isinstance(result, Counterfactual)
     assert set(result.changes) == {"a"}
     assert result.n_changed == 1
@@ -54,7 +54,7 @@ def test_necessary_changes_survive_pruning(exp: Explainer) -> None:
     # the target >= 1.5 needs BOTH a (1.0) and b (0.8): neither may be pruned
     interval = Target.raw(op=">=", value=1.5).raw_interval(Link.IDENTITY)
     candidate = np.array([2.0, 2.0, 0.0])
-    result = exp._finalize_candidate(X0, candidate, interval, stats={})
+    result = exp._finalize_candidate(x0, candidate, interval, stats={})
     assert isinstance(result, Counterfactual)
     assert set(result.changes) == {"a", "b"}
 
@@ -63,12 +63,12 @@ def test_returned_plans_are_minimal_across_seeds(exp: Explainer) -> None:
     """Every change in a returned plan is necessary: reverting it alone breaks
     verification."""
     for seed in range(10):
-        result = exp.explain(X0, TARGET, seed=seed)
+        result = exp.explain(x0, TARGET, seed=seed)
         assert isinstance(result, Counterfactual)
         index = {name: j for j, name in enumerate(exp.ir.feature_names)}
         for name in result.changes:
             trial = result.x_cf.copy()
-            trial[index[name]] = X0[index[name]]
-            assert exp._verify(X0, trial, INTERVAL) is not None, (
+            trial[index[name]] = x0[index[name]]
+            assert exp._verify(x0, trial, INTERVAL) is not None, (
                 f"seed {seed}: change {name!r} was unnecessary"
             )

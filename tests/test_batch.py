@@ -172,24 +172,24 @@ class TestLeverBlocking:
 
 class TestExactBatchOptIn:
     def test_no_flag_raises_with_estimate(self, exp: Explainer) -> None:
-        X5 = np.zeros((5, 3))
+        X_5 = np.zeros((5, 3))
         with pytest.raises(ValueError, match=r"5 rows x 1 plans x 10s") as excinfo:
-            exp.explain_batch(X5, TARGET, backend="exact", seed=0)
+            exp.explain_batch(X_5, TARGET, backend="exact", seed=0)
         assert "hours" in str(excinfo.value)
 
     def test_no_flag_estimate_multiplies_plans_by_n_per_example(self, exp: Explainer) -> None:
-        X3 = np.zeros((3, 3))
+        X_3 = np.zeros((3, 3))
         with pytest.raises(ValueError, match=r"3 rows x 4 plans x 10s"):
             exp.explain_batch(
-                X3, TARGET, backend="exact", seed=0,
+                X_3, TARGET, backend="exact", seed=0,
                 diversity="lever-blocking", n_per_example=4,
             )
 
     def test_no_flag_estimate_uses_coalition_count_as_plans(self, exp: Explainer) -> None:
-        X2 = np.zeros((2, 3))
+        X_2 = np.zeros((2, 3))
         with pytest.raises(ValueError, match=r"2 rows x 3 plans x 10s"):
             exp.explain_batch(
-                X2, TARGET, backend="exact", seed=0, diversity="coalitions",
+                X_2, TARGET, backend="exact", seed=0, diversity="coalitions",
                 coalitions={"c1": ["a"], "c2": ["b", "c"]}, include_full=True,
             )
 
@@ -258,8 +258,8 @@ class TestExactBatchOptIn:
         monkeypatch.setattr(Explainer, "_explain_genetic", spy_explain_genetic)
         monkeypatch.setattr(Explainer, "_solve_batch", fake_solve_batch)
 
-        X2 = np.zeros((2, 3))
-        batch = exp.explain_batch(X2, TARGET, backend="exact", seed=0, allow_exact_batch=True)
+        X_2 = np.zeros((2, 3))
+        batch = exp.explain_batch(X_2, TARGET, backend="exact", seed=0, allow_exact_batch=True)
         assert explain_genetic_calls == 0
         assert all(r.feasible for r in batch)  # the (generous default budget) exact
         # search still finds a counterfactual on its own, without the warm start

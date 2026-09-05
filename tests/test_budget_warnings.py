@@ -50,7 +50,7 @@ def exp() -> Explainer:
     return Explainer(_ir(), normalizers=np.ones(3))
 
 
-X0 = np.zeros(3)
+x0 = np.zeros(3)
 
 
 class TestGapParenthetical:
@@ -86,7 +86,7 @@ class TestExhaustionBodies:
         target = Target.raw(op=">=", value=1.5)  # needs at least two levers
         with pytest.warns(TreecfWarning, match="exhausted") as record:
             result = exp.explain(
-                X0, target, backend="exact", seed=0,
+                x0, target, backend="exact", seed=0,
                 warm_start=True, node_budget=1, time_budget_s=5.0, search=search,
             )
         assert isinstance(result, Counterfactual)
@@ -101,7 +101,7 @@ class TestExhaustionBodies:
         target = Target.raw(op=">=", value=1.5)
         with pytest.warns(TreecfWarning, match="exhausted") as record:
             result = exp.explain(
-                X0, target, backend="exact", seed=0,
+                x0, target, backend="exact", seed=0,
                 warm_start=False, node_budget=1, time_budget_s=5.0, search=search,
             )
         assert isinstance(result, Infeasible)
@@ -126,7 +126,7 @@ class TestWithdrawalBody:
         target = Target.raw(op=">=", value=0.5)
         with pytest.warns(TreecfWarning) as record:
             result = withdrawing.explain(
-                X0, target, backend="exact", seed=0,
+                x0, target, backend="exact", seed=0,
                 warm_start=False, node_budget=2_000_000, time_budget_s=10.0, search=search,
             )
         assert isinstance(result, Counterfactual)
@@ -217,7 +217,7 @@ class TestSeedClause:
         target = Target.raw(op=">=", value=1.5)
         with pytest.warns(TreecfWarning, match="exhausted") as record:
             result = exp.explain(
-                X0, target, backend="exact", seed=None,
+                x0, target, backend="exact", seed=None,
                 warm_start=True, node_budget=1, time_budget_s=5.0,
             )
         assert isinstance(result, Counterfactual)
@@ -228,7 +228,7 @@ class TestSeedClause:
         target = Target.raw(op=">=", value=1.5)
         with pytest.warns(TreecfWarning, match="exhausted") as record:
             result = exp.explain(
-                X0, target, backend="exact", seed=0,
+                x0, target, backend="exact", seed=0,
                 warm_start=True, node_budget=1, time_budget_s=5.0,
             )
         assert isinstance(result, Counterfactual)
@@ -246,7 +246,7 @@ class TestNeverWarns:
         self, exp: Explainer, recwarn: pytest.WarningsRecorder, search: str
     ) -> None:
         target = Target.raw(op=">=", value=0.5)
-        result = exp.explain(X0, target, backend="exact", seed=0, search=search)
+        result = exp.explain(x0, target, backend="exact", seed=0, search=search)
         assert isinstance(result, Counterfactual)
         assert result.solver_stats["completed"] is True
         assert not any(issubclass(w.category, TreecfWarning) for w in recwarn.list)
@@ -256,7 +256,7 @@ class TestNeverWarns:
         self, exp: Explainer, recwarn: pytest.WarningsRecorder, search: str
     ) -> None:
         target = Target.raw(op=">=", value=10.0)  # unreachable: max raw score is 2.4
-        result = exp.explain(X0, target, backend="exact", seed=0, search=search)
+        result = exp.explain(x0, target, backend="exact", seed=0, search=search)
         assert isinstance(result, Infeasible)
         assert result.proof == "certified"
         assert not any(issubclass(w.category, TreecfWarning) for w in recwarn.list)
@@ -265,7 +265,7 @@ class TestNeverWarns:
         self, exp: Explainer, recwarn: pytest.WarningsRecorder
     ) -> None:
         target = Target.raw(op=">=", value=0.5)
-        result = exp.explain(X0, target, backend="genetic", seed=0)
+        result = exp.explain(x0, target, backend="genetic", seed=0)
         assert isinstance(result, Counterfactual | Infeasible)
         assert not any(issubclass(w.category, TreecfWarning) for w in recwarn.list)
 
@@ -278,7 +278,7 @@ class TestAggregateWarnings:
         target = Target.bands({"lo": (0.5, 0.7), "hi": (1.3, 1.5)}, space="raw")
         with pytest.warns(TreecfWarning) as record:
             result = exp.explain(
-                X0, target, backend="exact", seed=0,
+                x0, target, backend="exact", seed=0,
                 warm_start=False, node_budget=1, time_budget_s=5.0,
             )
         assert isinstance(result, dict)
@@ -289,7 +289,7 @@ class TestAggregateWarnings:
         target = Target.raw(op=">=", value=0.5)
         with pytest.warns(TreecfWarning) as record:
             result = exp.explain_coalitions(
-                X0, target, {"c1": ["a"], "c2": ["b", "c"]}, backend="exact", seed=0,
+                x0, target, {"c1": ["a"], "c2": ["b", "c"]}, backend="exact", seed=0,
                 warm_start=False, node_budget=1, time_budget_s=5.0,
             )
         assert set(result) == {"c1", "c2"}
