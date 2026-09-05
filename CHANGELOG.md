@@ -22,7 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bound forces it, accepting whole boxes at their true minimum cost; it proves the same optimum
   and the same certified infeasibility as the classic engine (the returned row may be a
   different argmin of the same cost). `solver_stats` gains `search`, `coarse_accepts`, and
-  `refinements`; the Python and Rust engines agree byte for byte on a new fixture set. The
+  `refinements`; the Python and Rust engines agree byte for byte on a new fixture set. On the
+  measured [benchmark matrix](https://wlazlod.github.io/treecf/benchmarks/comparison/) it
+  certifies 13 of the 18 model-scale cells within 60 s where the classic engine certifies 6,
+  adding 50 trees at depth 3 with 20 features, every 12-feature cell at depth 5, 200 trees at
+  depth 3 with 12 features, and the depth-5 8-feature cells at 100 and 200 trees; the
+  remaining 20-feature cells stay out of reach for both engines within that budget. The
   default `search="classic"` is unchanged.
 - **Maximal recourse regions.** `explain(..., region=True, region_mode="maximal",
   region_budget=...)` and `Explainer.recourse_region(..., mode="maximal", budget=,
