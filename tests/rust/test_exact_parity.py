@@ -68,7 +68,7 @@ def diff_exact_results(
     # (lower_bound, gap) go through _bits(), same as distance -- plain `==`
     # would let a 0.0/-0.0 mismatch slip through unnoticed
     for key in ("nodes_expanded", "nodes_pruned_score", "nodes_pruned_cost", "completed",
-                "warm_start_used"):
+                "warm_start_used", "search", "coarse_accepts", "refinements"):
         if rust_result.stats[key] != python_result.stats[key]:
             problems.append(
                 f"stats.{key}: python={python_result.stats[key]!r} rust={rust_result.stats[key]!r}"
@@ -77,6 +77,13 @@ def diff_exact_results(
         rs_bits, py_bits = _bits(rust_result.stats[key]), _bits(python_result.stats[key])
         if rs_bits != py_bits:
             problems.append(f"stats.{key} bits: python={py_bits!r} rust={rs_bits!r}")
+    # the trace compares sample by sample: node counts by equality, both
+    # floats by their bits, so the two engines must have sampled at the same
+    # moments and computed the same bounds
+    py_trace = [(n, _bits(c), _bits(b)) for n, c, b in python_result.stats["trace"]]
+    rs_trace = [(n, _bits(c), _bits(b)) for n, c, b in rust_result.stats["trace"]]
+    if py_trace != rs_trace:
+        problems.append(f"stats.trace: python={py_trace!r} rust={rs_trace!r}")
     return problems
 
 

@@ -10,6 +10,7 @@ does, byte for byte on every fixture.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -130,7 +131,7 @@ def solve_exact_rust(
     )
 
     try:
-        x_cf, distance, proof, stats, snapped_idx = core.solve_exact_raw(
+        x_cf, distance, proof, stats, snapped_idx, trace_arrays = core.solve_exact_raw(
             cache["ensemble"],
             cache["constraints"],
             np.ascontiguousarray(x, dtype=np.float64),
@@ -171,7 +172,15 @@ def solve_exact_rust(
         warm_start_used,
         presolve_removed,
         presolve_certified,
+        search_out,
+        coarse_accepts,
+        refinements,
     ) = stats
+    trace_nodes, trace_incumbent, trace_bound = trace_arrays
+    trace = [
+        (int(n), None if math.isnan(c) else float(c), float(b))
+        for n, c, b in zip(trace_nodes, trace_incumbent, trace_bound, strict=True)
+    ]
     return ExactResult(
         x_cf=None if x_cf is None else np.asarray(x_cf, dtype=np.float64),
         proof=proof,
@@ -185,6 +194,10 @@ def solve_exact_rust(
             "warm_start_used": bool(warm_start_used),
             "presolve_removed": int(presolve_removed),
             "presolve_certified": bool(presolve_certified),
+            "search": str(search_out),
+            "coarse_accepts": int(coarse_accepts),
+            "refinements": int(refinements),
+            "trace": trace,
         },
         snapped={ir.feature_names[int(i)]: True for i in np.asarray(snapped_idx)},
         distance=None if distance is None else float(distance),

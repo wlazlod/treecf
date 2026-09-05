@@ -72,7 +72,7 @@ from __future__ import annotations
 
 import math
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -98,6 +98,7 @@ from treecf.backends._exact_orderpairs import (
     _intersect_cell,
 )
 from treecf.backends._exact_propagation import _Propagation, _PropFrame
+from treecf.backends._exact_trace import TraceSample, _Trace
 from treecf.constraints.compile import CompiledConstraints
 from treecf.ir.evaluate import raw_score
 from treecf.ir.model import EnsembleIR
@@ -246,7 +247,7 @@ def solve_exact(
         return ExactResult(
             x_cf=x.copy(),
             proof="optimal",
-            stats=_stats(0, 0, 0, 0.0, gap, True, False),
+            stats=_stats(0, 0, 0, 0.0, gap, True, False, trace=[(0, 0.0, 0.0)]),
             snapped={},
             distance=0.0,
         )
@@ -265,7 +266,7 @@ def solve_exact(
         return ExactResult(
             x_cf=None,
             proof="optimal",
-            stats=_stats(0, 0, 0, math.inf, gap, True, False),
+            stats=_stats(0, 0, 0, math.inf, gap, True, False, trace=[(0, None, math.inf)]),
             snapped={},
             distance=None,
         )
@@ -285,7 +286,10 @@ def solve_exact(
         return ExactResult(
             x_cf=None,
             proof="optimal",
-            stats=_stats(0, 0, 0, math.inf, gap, True, False, presolve_removed, True),
+            stats=_stats(
+                0, 0, 0, math.inf, gap, True, False, presolve_removed, True,
+                trace=[(0, None, math.inf)],
+            ),
             snapped={},
             distance=None,
         )
@@ -388,6 +392,33 @@ def solve_exact(
     g_stack = [0.0]  # cost committed before the level of the same index
     g = 0.0
     next_state = 0
+    trace = _Trace()
+
+    def frontier_bound() -> float:
+        """Cheapest cost any completion still ahead of the search could reach:
+        at every level, the next untried state (states are cost-sorted, so
+        it is the cheapest one left there) plus the cheapest remainder."""
+        bound = math.inf
+        for level, chosen in enumerate(stack):
+            states_at = domains[order[level]]
+            if chosen + 1 < len(states_at):
+                bound = min(
+                    bound, g_stack[level] + states_at[chosen + 1].cost + h_suffix[level + 1]
+                )
+        k = len(stack)
+        if k < len(order) and next_state < len(domains[order[k]]):
+            bound = min(bound, g_stack[k] + domains[order[k]][next_state].cost + h_suffix[k + 1])
+        return bound
+
+    def sample(is_incumbent: bool) -> None:
+        """One trace sample: the sound lower bound as the search knows it now."""
+        bound = frontier_bound()
+        if gap > 0.0:
+            bound = min(bound, incumbent_cost / (1.0 + gap))
+        set_aside_view = 0.0 if dropped_floor == -math.inf else dropped_floor
+        bound = min(bound, set_aside_view, incumbent_cost)
+        cost = None if incumbent_row is None else incumbent_cost
+        trace.record(nodes_expanded, cost, bound, is_incumbent=is_incumbent)
 
     def undo(frame: _Frame) -> None:
         nonlocal g, assigned_mask
@@ -566,6 +597,8 @@ def solve_exact(
             break
 
         nodes_expanded += 1
+        if nodes_expanded & (nodes_expanded - 1) == 0:
+            sample(False)
         state = states[next_state]
         j = order[k]
         prop_frame, conflict = propagation.apply(j, state.value)
@@ -625,6 +658,7 @@ def solve_exact(
                         domains[order[level]][chosen] for level, chosen in enumerate(stack)
                     ]
                     incumbent_states.append(state)
+                    sample(True)
             undo(frame)
             next_state += 1
             continue
@@ -650,6 +684,12 @@ def solve_exact(
         set_aside_view = 0.0 if dropped_floor == -math.inf else dropped_floor
         lower_bound = min(open_view, incumbent_cost, set_aside_view)
         proof = "heuristic"
+    trace.record(
+        nodes_expanded,
+        None if incumbent_row is None else incumbent_cost,
+        lower_bound,
+        is_incumbent=False,
+    )
 
     snapped: dict[str, bool] = {}
     for level, chosen_state in enumerate(incumbent_states or []):
@@ -673,6 +713,7 @@ def solve_exact(
             completed,
             warm_start_used,
             presolve_removed,
+            trace=trace.samples(),
         ),
         snapped=snapped,
         distance=None if incumbent_row is None else incumbent_cost,
@@ -734,6 +775,11 @@ def _stats(
     warm_start_used: bool,
     presolve_removed: int = 0,
     presolve_certified: bool = False,
+    *,
+    search: str = "classic",
+    coarse_accepts: int = 0,
+    refinements: int = 0,
+    trace: Sequence[TraceSample] = (),
 ) -> dict[str, object]:
     """The exact set of counters ``solve_exact`` reports.
 
@@ -745,6 +791,11 @@ def _stats(
     group, or an order pair whose two features can no longer be ordered. A
     mirror of this search has to file those feasibility cuts the same way,
     since the counter set itself is fixed.
+
+    ``search`` names the engine that ran; ``coarse_accepts`` and
+    ``refinements`` count the range-level acceptances and the range splits of
+    a coarse-to-fine search, and stay zero for the classic one. ``trace`` is
+    the bounded certification trace (``_exact_trace``).
     """
     return {
         "nodes_expanded": nodes_expanded,
@@ -756,4 +807,8 @@ def _stats(
         "warm_start_used": warm_start_used,
         "presolve_removed": presolve_removed,
         "presolve_certified": presolve_certified,
+        "search": search,
+        "coarse_accepts": coarse_accepts,
+        "refinements": refinements,
+        "trace": list(trace),
     }

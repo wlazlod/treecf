@@ -8,7 +8,7 @@ use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 
 use crate::constraints::{Constraints, LinearC};
-use crate::exact::{ExactParams, ValuePolicy};
+use crate::exact::{ExactParams, SearchMode, ValuePolicy};
 use crate::ga::GaParams;
 use crate::interrupt::SearchOutcome;
 use crate::ir::{Ensemble, Link};
@@ -511,12 +511,14 @@ fn solve_genetic_batch_raw<'py>(
 }
 
 /// Full exact-backend solve — port of `treecf.backends.exact.solve_exact`.
-/// Returns `(x_cf | None, distance | None, proof, stats, snapped)`: `stats` is
-/// the 9-tuple `(nodes_expanded, nodes_pruned_score, nodes_pruned_cost,
-/// lower_bound, gap, completed, warm_start_used, presolve_removed,
-/// presolve_certified)`; `snapped` is the winning
-/// row's snapped feature indices, in search order — `exact_rust.py` maps them
-/// back to names to rebuild `ExactResult` losslessly. A `PyValueError`
+/// Returns `(x_cf | None, distance | None, proof, stats, snapped, trace)`:
+/// `stats` is the 12-tuple `(nodes_expanded, nodes_pruned_score,
+/// nodes_pruned_cost, lower_bound, gap, completed, warm_start_used,
+/// presolve_removed, presolve_certified, search, coarse_accepts,
+/// refinements)`; `snapped` is the winning row's snapped feature indices, in
+/// search order — `exact_rust.py` maps them back to names to rebuild
+/// `ExactResult` losslessly; `trace` is three parallel arrays (node counts,
+/// incumbent costs with NaN standing for "no row yet", lower bounds). A `PyValueError`
 /// mirrors Python's `ConstraintValidationError` for a multi-feature Linear
 /// outside the canonical order-pair shape (from `solve_exact`'s own
 /// `validate`); `exact_rust.py` re-raises that type rather than comparing
@@ -534,7 +536,7 @@ fn solve_genetic_batch_raw<'py>(
                     policy_code, policy_step, policy_anchor,
                     if_ensemble=None, min_total_path=None,
                     node_budget=2_000_000, gap=0.0, time_budget_s=10.0,
-                    incumbent_cost=None, incumbent_row=None))]
+                    incumbent_cost=None, incumbent_row=None, search="classic"))]
 fn solve_exact_raw<'py>(
     py: Python<'py>,
     ensemble: &RustEnsemble,
@@ -555,13 +557,43 @@ fn solve_exact_raw<'py>(
     time_budget_s: f64,
     incumbent_cost: Option<f64>,
     incumbent_row: Option<PyReadonlyArray1<f64>>,
+    search: &str,
 ) -> PyResult<(
     Option<Bound<'py, PyArray1<f64>>>,
     Option<f64>,
     &'static str,
-    (u64, u64, u64, f64, f64, bool, bool, u64, bool),
+    (
+        u64,
+        u64,
+        u64,
+        f64,
+        f64,
+        bool,
+        bool,
+        u64,
+        bool,
+        &'static str,
+        u64,
+        u64,
+    ),
     Bound<'py, PyArray1<u64>>,
+    (
+        Bound<'py, PyArray1<u64>>,
+        Bound<'py, PyArray1<f64>>,
+        Bound<'py, PyArray1<f64>>,
+    ),
 )> {
+    let search_mode = match search {
+        "classic" => SearchMode::Classic,
+        "refine" => SearchMode::Refine,
+        // an unrecognized mode is a marshaling bug: the Python side validates
+        // the public argument before it ever reaches this boundary
+        other => {
+            return Err(PyRuntimeError::new_err(format!(
+                "unknown search mode {other:?}"
+            )))
+        }
+    };
     let x_own = x.as_slice()?.to_vec();
     let sigma_own = sigma.as_slice()?.to_vec();
     let weights_own = weights.as_slice()?.to_vec();
@@ -598,6 +630,7 @@ fn solve_exact_raw<'py>(
         node_budget,
         gap,
         time_budget_s,
+        search: search_mode,
     };
     let mut pending: Option<PyErr> = None;
     let outcome = py
@@ -650,14 +683,29 @@ fn solve_exact_raw<'py>(
         stats.warm_start_used,
         stats.presolve_removed,
         stats.presolve_certified,
+        stats.search.name(),
+        stats.coarse_accepts,
+        stats.refinements,
     );
     let snapped: Vec<u64> = result.snapped.iter().map(|&i| i as u64).collect();
+    let trace_nodes: Vec<u64> = result.trace.iter().map(|s| s.nodes).collect();
+    let trace_incumbent: Vec<f64> = result
+        .trace
+        .iter()
+        .map(|s| s.incumbent.unwrap_or(f64::NAN))
+        .collect();
+    let trace_bound: Vec<f64> = result.trace.iter().map(|s| s.bound).collect();
     Ok((
         result.x_cf.map(|v| v.into_pyarray(py)),
         result.distance,
         result.proof,
         stats_tuple,
         snapped.into_pyarray(py),
+        (
+            trace_nodes.into_pyarray(py),
+            trace_incumbent.into_pyarray(py),
+            trace_bound.into_pyarray(py),
+        ),
     ))
 }
 

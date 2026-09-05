@@ -354,10 +354,7 @@ class BatchResult:
                     # records without these fields default to None
                     calibrator_fingerprint=raw.get("calibrator_fingerprint"),
                     score_calibrated=raw.get("score_calibrated"),
-                    solver_stats={
-                        key: decode_floats(value)
-                        for key, value in raw.get("solver_stats", {}).items()
-                    },
+                    solver_stats=_decode_stats(raw.get("solver_stats", {})),
                 )
             )
         essential_ids = [decode_floats(k) for k in data.get("essential_lever_ids", [])]
@@ -671,6 +668,23 @@ def _exact_stats(stats: dict[str, object]) -> dict[str, object]:
     diagnostics (recognized by their ``completed`` key). Genetic/python engine
     stats are not mirrored — those engines report no per-row diagnostics."""
     return stats if "completed" in stats else {}
+
+
+def _decode_stats(raw: dict[str, Any]) -> dict[str, object]:
+    """Solver stats back from a batch file. The certification trace is a list
+    of ``(nodes, incumbent, bound)`` samples whose incumbent is ``None`` while
+    no row had been found — a genuine ``None``, not a missing float, so it is
+    restored as-is rather than through the NaN-as-null float convention."""
+    out: dict[str, object] = {}
+    for key, value in raw.items():
+        if key == "trace":
+            out[key] = [
+                (int(nodes), None if cost is None else float(cost), decode_floats(bound))
+                for nodes, cost, bound in value
+            ]
+        else:
+            out[key] = decode_floats(value)
+    return out
 
 
 def _record_from(

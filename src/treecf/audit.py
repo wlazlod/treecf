@@ -254,17 +254,19 @@ def _backend_of(stats: dict[str, object]) -> str:
 def _json_stats(stats: dict[str, object]) -> dict[str, object]:
     """A JSON-safe copy of solver stats (numpy scalars unwrapped, floats
     encoded per the non-finite rule, anything exotic stringified)."""
-    out: dict[str, object] = {}
-    for key, value in stats.items():
-        if isinstance(value, np.generic):
-            value = value.item()
-        if isinstance(value, bool | int | str):
-            out[key] = value
-        elif isinstance(value, float):
-            out[key] = _json_float(value)
-        else:
-            out[key] = repr(value)
-    return out
+    return {key: _json_stat_value(value) for key, value in stats.items()}
+
+
+def _json_stat_value(value: object) -> object:
+    if isinstance(value, np.generic):
+        value = value.item()
+    if value is None or isinstance(value, bool | int | str):
+        return value
+    if isinstance(value, float):
+        return _json_float(value)
+    if isinstance(value, list | tuple):
+        return [_json_stat_value(item) for item in value]
+    return repr(value)
 
 
 def _region_points(

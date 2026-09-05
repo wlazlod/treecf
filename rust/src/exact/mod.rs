@@ -75,10 +75,12 @@ pub(crate) mod propagation;
 pub(crate) mod search;
 #[cfg(test)]
 pub(crate) mod test_support;
+pub(crate) mod trace;
 
 pub use crate::interrupt::SearchOutcome;
 pub use domains::constraint_cells;
-pub use search::{solve_exact, ExactParams, ExactResult, ExactStats};
+pub use search::{solve_exact, ExactParams, ExactResult, ExactStats, SearchMode};
+pub use trace::TraceSample;
 
 /// Per-feature snapping rule for values that move. Mirrors `treecf.api.ValuePolicy`
 /// minus the callable case (rejected before marshaling) and minus `"raw"` (`None`).

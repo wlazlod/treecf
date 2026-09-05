@@ -14,6 +14,7 @@ use crate::exact::domains::{
 };
 use crate::exact::orderpairs::{achievable_bounds, boundary_candidates, intersect_cell};
 use crate::exact::propagation::{PropFrame, Propagation};
+use crate::exact::trace::{Trace, TraceSample};
 use crate::exact::ValuePolicy;
 use crate::interrupt::{InterruptProbe, SearchOutcome};
 use crate::ir::Ensemble;
@@ -27,10 +28,30 @@ const LINEAR_SLACK: f64 = 1e-9;
 /// enough that nobody reaches for the keyboard.
 const SIGNAL_CHECK_INTERVAL: u64 = 1 << 18;
 
-/// The exact set of counters `solve_exact` reports — the seven keys of Python's
-/// `_stats`. `nodes_pruned_score` counts branches the ensemble can no longer
-/// bring into the target (the plausibility bound counts here too); every other
-/// cut, cost and feasibility alike, counts under `nodes_pruned_cost`.
+/// Which engine ran: the classic cell-by-cell search, or the coarse-to-fine
+/// search over cell ranges.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SearchMode {
+    Classic,
+    Refine,
+}
+
+impl SearchMode {
+    pub fn name(self) -> &'static str {
+        match self {
+            SearchMode::Classic => "classic",
+            SearchMode::Refine => "refine",
+        }
+    }
+}
+
+/// The exact set of counters `solve_exact` reports — the keys of Python's
+/// `_stats` minus the trace, which travels on `ExactResult`. `nodes_pruned_score`
+/// counts branches the ensemble can no longer bring into the target (the
+/// plausibility bound counts here too); every other cut, cost and feasibility
+/// alike, counts under `nodes_pruned_cost`. `coarse_accepts` and `refinements`
+/// are the range-level acceptances and range splits of the coarse-to-fine
+/// search; the classic search reports zero for both.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ExactStats {
     pub nodes_expanded: u64,
@@ -42,6 +63,9 @@ pub struct ExactStats {
     pub warm_start_used: bool,
     pub presolve_removed: u64,
     pub presolve_certified: bool,
+    pub search: SearchMode,
+    pub coarse_accepts: u64,
+    pub refinements: u64,
 }
 
 /// Outcome of an exact-backend search. `snapped` lists the feature indices whose
@@ -54,14 +78,16 @@ pub struct ExactResult {
     pub stats: ExactStats,
     pub snapped: Vec<usize>,
     pub distance: Option<f64>,
+    pub trace: Vec<TraceSample>,
 }
 
-/// Budgets and the optimality gap.
+/// Budgets, the optimality gap, and which engine to run.
 #[derive(Clone, Copy, Debug)]
 pub struct ExactParams {
     pub node_budget: u64,
     pub gap: f64,
     pub time_budget_s: f64,
+    pub search: SearchMode,
 }
 
 impl Default for ExactParams {
@@ -70,6 +96,7 @@ impl Default for ExactParams {
             node_budget: 2_000_000,
             gap: 0.0,
             time_budget_s: 10.0,
+            search: SearchMode::Classic,
         }
     }
 }
@@ -705,6 +732,7 @@ fn stats(
     warm_start_used: bool,
     presolve_removed: u64,
     presolve_certified: bool,
+    search: SearchMode,
 ) -> ExactStats {
     ExactStats {
         nodes_expanded,
@@ -716,7 +744,20 @@ fn stats(
         warm_start_used,
         presolve_removed,
         presolve_certified,
+        search,
+        coarse_accepts: 0,
+        refinements: 0,
     }
+}
+
+/// The single sample an early exit records: `bound` is `0.0` when the factual
+/// itself was accepted and `+inf` when nothing can be feasible.
+fn single_sample(incumbent: Option<f64>, bound: f64) -> Vec<TraceSample> {
+    vec![TraceSample {
+        nodes: 0,
+        incumbent,
+        bound,
+    }]
 }
 
 /// Search the cell grid depth-first for the cheapest counterfactual — port of
@@ -773,9 +814,10 @@ pub fn solve_exact(
         return Ok(SearchOutcome::Done(ExactResult {
             x_cf: Some(x.to_vec()),
             proof: "optimal",
-            stats: stats(0, 0, 0, 0.0, gap, true, false, 0, false),
+            stats: stats(0, 0, 0, 0.0, gap, true, false, 0, false, params.search),
             snapped: Vec::new(),
             distance: Some(0.0),
+            trace: single_sample(Some(0.0), 0.0),
         }));
     }
 
@@ -802,9 +844,21 @@ pub fn solve_exact(
         return Ok(SearchOutcome::Done(ExactResult {
             x_cf: None,
             proof: "optimal",
-            stats: stats(0, 0, 0, f64::INFINITY, gap, true, false, 0, false),
+            stats: stats(
+                0,
+                0,
+                0,
+                f64::INFINITY,
+                gap,
+                true,
+                false,
+                0,
+                false,
+                params.search,
+            ),
             snapped: Vec::new(),
             distance: None,
+            trace: single_sample(None, f64::INFINITY),
         }));
     }
     let mut assigned = vec![false; x.len()];
@@ -840,9 +894,11 @@ pub fn solve_exact(
                 false,
                 presolve_removed,
                 true,
+                params.search,
             ),
             snapped: Vec::new(),
             distance: None,
+            trace: single_sample(None, f64::INFINITY),
         }));
     }
 
@@ -993,6 +1049,44 @@ pub fn solve_exact(
     let mut g_stack: Vec<f64> = vec![0.0]; // cost committed before the level of the same index
     let mut g = 0.0;
     let mut next_state: usize = 0;
+    let mut trace = Trace::new();
+
+    // Cheapest cost any completion still ahead of the search could reach: at
+    // every level, the next untried state (states are cost-sorted, so it is the
+    // cheapest one left there) plus the cheapest remainder.
+    let frontier_bound = |stack: &[usize], next_state: usize, g_stack: &[f64]| -> f64 {
+        let mut bound = f64::INFINITY;
+        for (level, &chosen) in stack.iter().enumerate() {
+            let states_at = &ctx.domains[ctx.order[level]];
+            if chosen + 1 < states_at.len() {
+                bound = py_min(
+                    bound,
+                    g_stack[level] + states_at[chosen + 1].cost + h_suffix[level + 1],
+                );
+            }
+        }
+        let k = stack.len();
+        if k < ctx.order.len() && next_state < ctx.domains[ctx.order[k]].len() {
+            bound = py_min(
+                bound,
+                g_stack[k] + ctx.domains[ctx.order[k]][next_state].cost + h_suffix[k + 1],
+            );
+        }
+        bound
+    };
+    // One trace sample: the sound lower bound as the search knows it now.
+    let sample_bound = |frontier: f64, incumbent_cost: f64, dropped_floor: f64| -> f64 {
+        let mut bound = frontier;
+        if gap > 0.0 {
+            bound = py_min(bound, incumbent_cost / (1.0 + gap));
+        }
+        let set_aside_view = if dropped_floor == f64::NEG_INFINITY {
+            0.0
+        } else {
+            dropped_floor
+        };
+        py_min(py_min(bound, set_aside_view), incumbent_cost)
+    };
 
     while !ctx.order.is_empty() {
         let k = stack.len();
@@ -1029,6 +1123,19 @@ pub fn solve_exact(
         }
 
         nodes_expanded += 1;
+        if nodes_expanded & (nodes_expanded - 1) == 0 {
+            let bound = sample_bound(
+                frontier_bound(&stack, next_state, &g_stack),
+                incumbent_cost,
+                dropped_floor,
+            );
+            trace.record(
+                nodes_expanded,
+                incumbent_row.as_ref().map(|_| incumbent_cost),
+                bound,
+                false,
+            );
+        }
         let j = ctx.order[k];
         let state = ctx.domains[j][next_state];
         let (prop_frame, conflict) = propagation.apply(j, state.value, &assigned, &values);
@@ -1147,6 +1254,12 @@ pub fn solve_exact(
                         .collect();
                     winning.push(state);
                     incumbent_states = Some(winning);
+                    let bound = sample_bound(
+                        frontier_bound(&stack, next_state, &g_stack),
+                        incumbent_cost,
+                        dropped_floor,
+                    );
+                    trace.record(nodes_expanded, Some(incumbent_cost), bound, true);
                 }
             }
             undo(
@@ -1201,6 +1314,12 @@ pub fn solve_exact(
             "heuristic",
         )
     };
+    trace.record(
+        nodes_expanded,
+        incumbent_row.as_ref().map(|_| incumbent_cost),
+        lower_bound,
+        false,
+    );
 
     let mut snapped: Vec<usize> = Vec::new();
     for (level, chosen_state) in incumbent_states.iter().flatten().enumerate() {
@@ -1231,8 +1350,10 @@ pub fn solve_exact(
             warm_start_used,
             presolve_removed,
             false,
+            params.search,
         ),
         snapped,
+        trace: trace.into_samples(),
     }))
 }
 
@@ -1599,6 +1720,9 @@ mod tests {
                 warm_start_used: false,
                 presolve_removed: 1,
                 presolve_certified: false,
+                search: SearchMode::Classic,
+                coarse_accepts: 0,
+                refinements: 0,
             }
         );
         assert!(result.snapped.is_empty());
@@ -1767,6 +1891,9 @@ mod tests {
                 warm_start_used: false,
                 presolve_removed: 1,
                 presolve_certified: false,
+                search: SearchMode::Classic,
+                coarse_accepts: 0,
+                refinements: 0,
             }
         );
     }
@@ -1806,6 +1933,9 @@ mod tests {
                 warm_start_used: false,
                 presolve_removed: 1,
                 presolve_certified: false,
+                search: SearchMode::Classic,
+                coarse_accepts: 0,
+                refinements: 0,
             }
         );
     }
@@ -1972,6 +2102,9 @@ mod tests {
                 warm_start_used: false,
                 presolve_removed: 2,
                 presolve_certified: false,
+                search: SearchMode::Classic,
+                coarse_accepts: 0,
+                refinements: 0,
             }
         );
     }
@@ -2038,6 +2171,9 @@ mod tests {
                 warm_start_used: false,
                 presolve_removed: 2,
                 presolve_certified: false,
+                search: SearchMode::Classic,
+                coarse_accepts: 0,
+                refinements: 0,
             }
         );
     }
@@ -2088,6 +2224,9 @@ mod tests {
                 warm_start_used: false,
                 presolve_removed: 1,
                 presolve_certified: false,
+                search: SearchMode::Classic,
+                coarse_accepts: 0,
+                refinements: 0,
             }
         );
     }
@@ -2137,6 +2276,9 @@ mod tests {
                 warm_start_used: false,
                 presolve_removed: 1,
                 presolve_certified: false,
+                search: SearchMode::Classic,
+                coarse_accepts: 0,
+                refinements: 0,
             }
         );
     }
