@@ -465,6 +465,8 @@ def explain_batch(
     gap: float | None = None,
     search: str | None = None,
     region: bool = False,
+    region_mode: str = "fast",
+    region_budget: int = 100_000,
     allow_exact_batch: bool = False,
 ) -> BatchResult:
     """See ``Explainer.explain_batch``.
@@ -525,7 +527,7 @@ def explain_batch(
     importable, exactly as a single ``explain(..., region=True)`` call would
     run it) -- there is no batched/parallel region path.
     """
-    from treecf.api import _degraded_summary, _resolve_exact_kwargs
+    from treecf.api import _degraded_summary, _resolve_exact_kwargs, _resolve_region_kwargs
 
     if target.bands_spec is not None:
         raise TreecfError("Target.bands is not supported in explain_batch; loop bands explicitly")
@@ -541,6 +543,7 @@ def explain_batch(
     resolved_warm_start, _, _, _ = _resolve_exact_kwargs(
         backend, warm_start, node_budget, gap, search
     )
+    region_mode, region_budget = _resolve_region_kwargs(region, region_mode, region_budget)
     X = np.asarray(X, dtype=np.float64)
     validate_feature_matrix(explainer.ir, X, where="factual")
     if backend == "exact" and not allow_exact_batch:
@@ -598,7 +601,8 @@ def explain_batch(
         records = _rows_by_coalitions(
             explainer, X, target, row_ids, coalitions, include_full,
             backend, time_budget_s, sparsity_weight, seed=seed,
-            warm_start=warm_start, node_budget=node_budget, gap=gap, search=search, region=region,
+            warm_start=warm_start, node_budget=node_budget, gap=gap, search=search,
+            region=region, region_mode=region_mode, region_budget=region_budget,
             row_degraded=row_degraded,
         )
     elif diversity == "seeds" and backend in ("genetic", "genetic-rust"):
@@ -608,6 +612,7 @@ def explain_batch(
         records = _rows_by_seed_waves(
             explainer, X, target, row_ids, n_per_example,
             time_budget_s, sparsity_weight, seed=seed, region=region,
+            region_mode=region_mode, region_budget=region_budget,
         )
     else:
         primaries: list[Counterfactual | Infeasible] | None = None
@@ -653,6 +658,7 @@ def explain_batch(
                     master_seed=seed * 1_000_003 + i * 1_009,
                     warm_start=False if backend == "exact" else warm_start,
                     node_budget=node_budget, gap=gap, search=search, region=region,
+                    region_mode=region_mode, region_budget=region_budget,
                     degraded=row_degraded[i],
                     incumbent=None if row_incumbents is None else row_incumbents[i],
                 )
@@ -662,7 +668,8 @@ def explain_batch(
                     backend, time_budget_s, sparsity_weight, seed=seed,
                     primary=None if primaries is None else primaries[i],
                     warm_start=warm_start, node_budget=node_budget, gap=gap, search=search,
-                    region=region, degraded=row_degraded[i],
+                    region=region, region_mode=region_mode, region_budget=region_budget,
+                    degraded=row_degraded[i],
                 )
                 essential[row_id] = row_essential
             records.extend(row_records)
@@ -777,6 +784,8 @@ def _rows_by_seed_waves(
     sparsity_weight: float,
     seed: int,
     region: bool = False,
+    region_mode: str = "fast",
+    region_budget: int = 100_000,
 ) -> list[BatchRecord]:
     """Wave-parallel `_row_by_seeds` over all rows (Rust backend only).
 
@@ -826,7 +835,13 @@ def _rows_by_seed_waves(
         records.extend(
             _record_from(
                 row_id, k, cf, seed=cf_seed,
-                region=explainer._region_for(X[i], cf.x_cf, interval) if region else None,
+                region=(
+                    explainer._region_for(
+                        X[i], cf.x_cf, interval, mode=region_mode, budget=region_budget
+                    )
+                    if region
+                    else None
+                ),
             )
             for k, (cf, cf_seed) in enumerate(ranked)
         )
@@ -988,6 +1003,8 @@ def _rows_by_coalitions(
     gap: float | None = None,
     search: str | None = None,
     region: bool = False,
+    region_mode: str = "fast",
+    region_budget: int = 100_000,
     row_degraded: list[list[_Degradation]] | None = None,
 ) -> list[BatchRecord]:
     """One record per named coalition per row (plus the optional baseline).
@@ -1052,7 +1069,13 @@ def _rows_by_coalitions(
         feasible.sort(key=lambda pair: pair[1].distance)
         k = 0
         for name, cf in feasible:
-            reg = solvers[name]._region_for(X[i], cf.x_cf, interval) if region else None
+            reg = (
+                solvers[name]._region_for(
+                    X[i], cf.x_cf, interval, mode=region_mode, budget=region_budget
+                )
+                if region
+                else None
+            )
             records.append(_record_from(row_id, k, cf, coalition=name, region=reg))
             k += 1
         for name in solvers:
@@ -1078,6 +1101,8 @@ def _row_by_seeds(
     gap: float | None = None,
     search: str | None = None,
     region: bool = False,
+    region_mode: str = "fast",
+    region_budget: int = 100_000,
     degraded: list[_Degradation] | None = None,
     incumbent: tuple[float, FloatArray] | None = None,
 ) -> list[BatchRecord]:
@@ -1113,7 +1138,13 @@ def _row_by_seeds(
     return [
         _record_from(
             row_id, k, cf, seed=cf_seed,
-            region=explainer._region_for(x, cf.x_cf, interval) if interval is not None else None,
+            region=(
+                explainer._region_for(
+                    x, cf.x_cf, interval, mode=region_mode, budget=region_budget
+                )
+                if interval is not None
+                else None
+            ),
         )
         for k, (cf, cf_seed) in enumerate(ranked)
     ]
@@ -1135,6 +1166,8 @@ def _row_by_lever_blocking(
     gap: float | None = None,
     search: str | None = None,
     region: bool = False,
+    region_mode: str = "fast",
+    region_budget: int = 100_000,
     degraded: list[_Degradation] | None = None,
 ) -> tuple[list[BatchRecord], list[str]]:
     from treecf.api import Counterfactual
@@ -1153,7 +1186,9 @@ def _row_by_lever_blocking(
 
     interval = target.raw_interval(explainer.ir.link) if region else None
     primary_region = (
-        explainer._region_for(x, primary.x_cf, interval) if interval is not None else None
+        explainer._region_for(x, primary.x_cf, interval, mode=region_mode, budget=region_budget)
+        if interval is not None
+        else None
     )
     records = [_record_from(row_id, 0, primary, region=primary_region)]
     seen = {frozenset(primary.changes)}
@@ -1181,7 +1216,9 @@ def _row_by_lever_blocking(
             if key not in seen:
                 seen.add(key)
                 alt_region = (
-                    clone._region_for(x, alternative.x_cf, interval)
+                    clone._region_for(
+                        x, alternative.x_cf, interval, mode=region_mode, budget=region_budget
+                    )
                     if interval is not None
                     else None
                 )

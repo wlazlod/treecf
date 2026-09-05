@@ -194,6 +194,65 @@ class TestRecourseRegionMethod:
 # --------------------------------------------------------------------------
 
 
+class TestMaximalModeApi:
+    """The public surface of the maximal mode: the explain flags, the
+    post-hoc method, and the batch path."""
+
+    def test_explain_region_mode_maximal_reports_flags(self, exp: Explainer) -> None:
+        result = exp.explain(X0, TARGET, seed=0, region=True, region_mode="maximal")
+        assert isinstance(result, Counterfactual) and result.region is not None
+        assert set(result.region.maximal) == set(result.region.feature_intervals)
+        assert result.region.witnesses is None  # explain never keeps witnesses
+
+    def test_region_mode_without_region_raises(self, exp: Explainer) -> None:
+        with pytest.raises(ValueError, match="region=True"):
+            exp.explain(X0, TARGET, seed=0, region_mode="maximal")
+        with pytest.raises(ValueError, match="region=True"):
+            exp.explain(X0, TARGET, seed=0, region_budget=10)
+
+    def test_defaults_are_accepted_without_region(self, exp: Explainer) -> None:
+        result = exp.explain(X0, TARGET, seed=0, region_mode="fast", region_budget=100_000)
+        assert isinstance(result, Counterfactual)
+
+    def test_unknown_mode_and_bad_budget_are_rejected(self, exp: Explainer) -> None:
+        with pytest.raises(TreecfError, match="mode"):
+            exp.explain(X0, TARGET, seed=0, region=True, region_mode="sloppy")
+        with pytest.raises(ValueError, match="budget"):
+            exp.explain(X0, TARGET, seed=0, region=True, region_budget=0)
+
+    def test_recourse_region_keeps_witnesses_on_request(self, exp: Explainer) -> None:
+        result = exp.explain(X0, TARGET, seed=0)
+        assert isinstance(result, Counterfactual)
+        region = exp.recourse_region(
+            X0, result.x_cf, TARGET, mode="maximal", budget=500, keep_witnesses=True
+        )
+        assert region.witnesses is not None
+        assert set(region.maximal) == set(region.feature_intervals)
+        plain = exp.recourse_region(X0, result.x_cf, TARGET, mode="maximal")
+        assert plain.witnesses is None
+        assert plain.maximal == region.maximal
+
+    def test_batch_records_carry_flags_but_never_witnesses(self, exp: Explainer) -> None:
+        X = np.zeros((2, 3))
+        batch = exp.explain_batch(X, TARGET, seed=0, region=True, region_mode="maximal")
+        regions = [r.region for r in batch if r.region is not None]
+        assert regions
+        for region in regions:
+            assert set(region.maximal) == set(region.feature_intervals)
+            assert region.witnesses is None
+        with pytest.raises(ValueError, match="region=True"):
+            exp.explain_batch(X, TARGET, seed=0, region_mode="maximal")
+
+    def test_coalitions_forward_the_mode(self, exp: Explainer) -> None:
+        by_group = exp.explain_coalitions(
+            X0, TARGET, {"first": ["a"], "rest": ["b", "c"]}, seed=0, region=True,
+            region_mode="maximal",
+        )
+        for result in by_group.values():
+            if isinstance(result, Counterfactual) and result.region is not None:
+                assert set(result.region.maximal) == set(result.region.feature_intervals)
+
+
 class TestRegionTrueEndToEnd:
     @pytest.mark.parametrize("backend", ["genetic", "exact"])
     def test_produces_a_region_containing_its_own_counterfactual(

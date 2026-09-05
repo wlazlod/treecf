@@ -257,6 +257,27 @@ def _resolve_exact_kwargs(
     return resolved_warm_start, resolved_node_budget, resolved_gap, resolved_search
 
 
+_DEFAULT_REGION_MODE = "fast"
+_DEFAULT_REGION_BUDGET = 100_000
+_REGION_MODES = ("fast", "maximal")
+
+
+def _resolve_region_kwargs(region: bool, region_mode: str, region_budget: int) -> tuple[str, int]:
+    """Validate the region kwargs the way ``_resolve_exact_kwargs`` validates
+    the exact-only ones: an unknown mode raises ``TreecfError``, a budget
+    below one raises ``ValueError``, and a non-default value without
+    ``region=True`` raises ``ValueError``."""
+    if region_mode not in _REGION_MODES:
+        raise TreecfError(f"unknown region mode {region_mode!r}; use 'fast' or 'maximal'")
+    if region_budget < 1:
+        raise ValueError(f"region_budget must be at least 1, got {region_budget!r}")
+    if not region and (
+        region_mode != _DEFAULT_REGION_MODE or region_budget != _DEFAULT_REGION_BUDGET
+    ):
+        raise ValueError("region_mode and region_budget are only valid with region=True")
+    return region_mode, region_budget
+
+
 @dataclass(frozen=True)
 class _Degradation:
     """One exact-backend result with ``stats["completed"] is False``, collected
@@ -493,6 +514,8 @@ class Explainer:
         gap: float | None = None,
         search: str | None = None,
         region: bool = False,
+        region_mode: str = "fast",
+        region_budget: int = 100_000,
     ) -> Counterfactual | Infeasible | dict[str, object]:
         """Search for a counterfactual (or one per band for ``Target.bands``).
 
@@ -561,7 +584,11 @@ class Explainer:
         certified ``RecourseRegion`` (``cf.region``) —
         works with any backend, genetic included. Costs one oracle call per
         attempted per-feature, per-direction expansion; see
-        ``Explainer.recourse_region``.
+        ``Explainer.recourse_region``. ``region_mode="maximal"`` settles
+        every side the fast growth stops with a budgeted search
+        (``region_budget`` nodes per side) and records what it proved in
+        ``RecourseRegion.maximal``; both arguments are only valid with
+        ``region=True``.
 
         Returns
         -------
@@ -592,7 +619,7 @@ class Explainer:
         return self._explain(
             x, target, backend, time_budget_s, sparsity_weight, seed, warn_factual=True,
             warm_start=warm_start, node_budget=node_budget, gap=gap, search=search,
-            region=region,
+            region=region, region_mode=region_mode, region_budget=region_budget,
         )
 
     def _explain(
@@ -610,6 +637,8 @@ class Explainer:
         gap: float | None = None,
         search: str | None = None,
         region: bool = False,
+        region_mode: str = "fast",
+        region_budget: int = 100_000,
         degraded: list[_Degradation] | None = None,
         incumbent: tuple[float, FloatArray] | None = None,
     ) -> Counterfactual | Infeasible | dict[str, object]:
@@ -640,6 +669,9 @@ class Explainer:
         resolved_warm_start, resolved_node_budget, resolved_gap, resolved_search = (
             _resolve_exact_kwargs(backend, warm_start, node_budget, gap, search)
         )
+        resolved_mode, resolved_budget = _resolve_region_kwargs(
+            region, region_mode, region_budget
+        )
         rust = backend in ("genetic", "genetic-rust")
 
         if target.bands_spec is not None:
@@ -659,7 +691,12 @@ class Explainer:
                     )
                 )
                 if region and isinstance(outcome, Counterfactual):
-                    outcome = replace(outcome, region=self._region_for(x, outcome.x_cf, interval))
+                    outcome = replace(
+                        outcome,
+                        region=self._region_for(
+                            x, outcome.x_cf, interval, mode=resolved_mode, budget=resolved_budget
+                        ),
+                    )
                 if isinstance(outcome, Counterfactual) and target.space == "calibrated":
                     outcome = replace(
                         outcome, score_calibrated=_calibrated_readout(target, outcome.score_raw)
@@ -684,7 +721,12 @@ class Explainer:
             )
         )
         if region and isinstance(result, Counterfactual):
-            result = replace(result, region=self._region_for(x, result.x_cf, interval))
+            result = replace(
+                result,
+                region=self._region_for(
+                    x, result.x_cf, interval, mode=resolved_mode, budget=resolved_budget
+                ),
+            )
         if isinstance(result, Counterfactual) and target.space == "calibrated":
             result = replace(
                 result, score_calibrated=_calibrated_readout(target, result.score_raw)
@@ -709,6 +751,8 @@ class Explainer:
         gap: float | None = None,
         search: str | None = None,
         region: bool = False,
+        region_mode: str = "fast",
+        region_budget: int = 100_000,
         allow_exact_batch: bool = False,
     ) -> Any:
         """Mass-produce counterfactuals for a dataset; see ``treecf.batch``.
@@ -787,7 +831,8 @@ class Explainer:
             sparsity_weight=sparsity_weight, seed=seed,
             coalitions=coalitions, include_full=include_full,
             warm_start=warm_start, node_budget=node_budget, gap=gap, search=search,
-            region=region, allow_exact_batch=allow_exact_batch,
+            region=region, region_mode=region_mode, region_budget=region_budget,
+            allow_exact_batch=allow_exact_batch,
         )
 
     def explain_coalitions(
@@ -805,6 +850,8 @@ class Explainer:
         gap: float | None = None,
         search: str | None = None,
         region: bool = False,
+        region_mode: str = "fast",
+        region_budget: int = 100_000,
     ) -> dict[str, Counterfactual | Infeasible]:
         """One counterfactual per named feature coalition (opt-in mode).
 
@@ -854,13 +901,15 @@ class Explainer:
             results[_ALL_LEVERS] = self._explain_one(
                 x, target, backend, time_budget_s, sparsity_weight, seed,
                 warm_start=warm_start, node_budget=node_budget, gap=gap, search=search,
-                region=region, degraded=degraded,
+                region=region, region_mode=region_mode, region_budget=region_budget,
+                degraded=degraded,
             )
         for name, clone in self._coalition_explainers(normalized).items():
             results[name] = clone._explain_one(
                 x, target, backend, time_budget_s, sparsity_weight, seed,
                 warm_start=warm_start, node_budget=node_budget, gap=gap, search=search,
-                region=region, degraded=degraded,
+                region=region, region_mode=region_mode, region_budget=region_budget,
+                degraded=degraded,
             )
         message = _degraded_summary(degraded, len(degraded), len(results), "coalitions")
         if message is not None:
@@ -881,6 +930,8 @@ class Explainer:
         gap: float | None = None,
         search: str | None = None,
         region: bool = False,
+        region_mode: str = "fast",
+        region_budget: int = 100_000,
         degraded: list[_Degradation] | None = None,
         incumbent: tuple[float, FloatArray] | None = None,
     ) -> Counterfactual | Infeasible:
@@ -889,7 +940,8 @@ class Explainer:
             x, target, backend, time_budget_s, sparsity_weight, seed,
             warn_factual=warn_factual,
             warm_start=warm_start, node_budget=node_budget, gap=gap, search=search,
-            region=region, degraded=degraded, incumbent=incumbent,
+            region=region, region_mode=region_mode, region_budget=region_budget,
+            degraded=degraded, incumbent=incumbent,
         )
         assert not isinstance(result, dict)  # bands are rejected by the callers
         return result
@@ -1316,7 +1368,14 @@ class Explainer:
         return self.plausibility.if_ir, self.plausibility.min_total_path
 
     def recourse_region(
-        self, x: FloatArray, x_cf: FloatArray, target: Target
+        self,
+        x: FloatArray,
+        x_cf: FloatArray,
+        target: Target,
+        *,
+        mode: str = "fast",
+        budget: int = 100_000,
+        keep_witnesses: bool = False,
     ) -> RecourseRegion:
         """Certify a per-feature box around an already-verified counterfactual.
 
@@ -1329,10 +1388,27 @@ class Explainer:
         widen. Works for a counterfactual from any backend. Costs one oracle
         call — a full interval-tree walk of every ensemble tree — per
         attempted per-feature, per-direction expansion; see
-        ``RecourseRegion``. The returned region is certified
-        but neither maximal nor monotone in ``target``: a strictly narrower
-        target can still grow a strictly wider region on some feature. See
+        ``RecourseRegion``. The returned region is certified but not monotone
+        in ``target``: a strictly narrower target can still grow a strictly
+        wider region on some feature. See
         [Certification](../concepts/certification.md#regions-certified-not-maximal-not-monotone).
+
+        ``mode="fast"`` (the default) stops a side as soon as the conservative
+        interval bound fails, so the region is sound but not necessarily
+        maximal. ``mode="maximal"`` settles every such side with a budgeted
+        search for a violating point in the next routing cell: the side
+        extends when the search proves the slab empty, is marked proved in
+        ``RecourseRegion.maximal`` when a witness is found, and is left
+        unproven when the search spends its ``budget`` (search nodes per
+        side). A proved side is maximal in a precise, local sense: the region
+        cannot be extended into the next cell on that side without leaving
+        the target or breaking a constraint, given every other coordinate
+        ranges over the box as certified — a different box that also shrinks
+        another feature is not excluded, and the maximal region need not
+        contain the fast one. ``keep_witnesses=True`` keeps the violating
+        points in ``RecourseRegion.witnesses``. The maximal mode can cost up
+        to ``budget`` search nodes per side per feature, each a partial
+        ensemble walk.
 
         Returns
         -------
@@ -1342,9 +1418,11 @@ class Explainer:
         ------
         TreecfError
             If ``target`` is a ``Target.bands`` ladder (pass the
-            single band's own interval instead), or if ``x_cf`` fails the
+            single band's own interval instead), if ``x_cf`` fails the
             float-space re-check against ``x``/``target`` — the message
-            names the specific check that failed.
+            names the specific check that failed — or if ``mode`` is unknown.
+        ValueError
+            If ``budget`` is below one.
         """
         x = np.asarray(x, dtype=np.float64)
         x_cf = np.asarray(x_cf, dtype=np.float64)
@@ -1369,7 +1447,9 @@ class Explainer:
             raise TreecfError(
                 f"cannot certify a region for an unverified counterfactual: {verification}"
             )
-        return self._region_for(x, x_cf, interval)
+        return self._region_for(
+            x, x_cf, interval, mode=mode, budget=budget, keep_witnesses=keep_witnesses
+        )
 
     def certificate(
         self,
@@ -1502,7 +1582,14 @@ class Explainer:
         return check_certificate(self, cert, calibrator=calibrator)
 
     def _region_for(
-        self, x: FloatArray, x_cf: FloatArray, interval: tuple[float, float]
+        self,
+        x: FloatArray,
+        x_cf: FloatArray,
+        interval: tuple[float, float],
+        *,
+        mode: str = "fast",
+        budget: int = 100_000,
+        keep_witnesses: bool = False,
     ) -> RecourseRegion:
         """Build the region for an already-verified ``x_cf`` (no re-verification)."""
         from treecf.regions import _recourse_region
@@ -1513,7 +1600,7 @@ class Explainer:
             if_ir, min_total_path = plaus
         return _recourse_region(
             self.ir, x, x_cf, interval, self.compiled, if_ir, min_total_path,
-            cache=self._rust_cache,
+            cache=self._rust_cache, mode=mode, budget=budget, keep_witnesses=keep_witnesses,
         )
 
     def _apply_value_policies(

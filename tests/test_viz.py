@@ -1129,6 +1129,39 @@ class TestPlotRegion:
         model_caps = [ln for ln in ax.lines if ln.get_label() == "_cap_model"]
         assert constraint_caps and model_caps
 
+    def test_proved_sides_get_a_square_cap_and_drop_the_caveat(self) -> None:
+        from dataclasses import replace
+
+        from treecf.viz import plot_region
+
+        exp, x, x_cf, region = self._setup()
+        proved = replace(
+            region,
+            maximal={name: (True, True) for name in region.feature_intervals},
+        )
+        ax = plot_region(exp, x, (proved, x_cf))
+        labels = [t.get_text() for t in ax.get_legend().get_texts()]
+        assert "stopped at a proved boundary" in labels
+        assert "certified, not necessarily maximal" not in labels
+        proved_caps = [ln for ln in ax.lines if ln.get_label() == "_cap_proved"]
+        model_caps = [ln for ln in ax.lines if ln.get_label() == "_cap_model"]
+        assert proved_caps and not model_caps
+        assert all(ln.get_marker() == "s" for ln in proved_caps)
+
+    def test_one_unproven_side_keeps_the_caveat(self) -> None:
+        from dataclasses import replace
+
+        from treecf.viz import plot_region
+
+        exp, x, x_cf, region = self._setup()
+        names = list(region.feature_intervals)
+        flags = {name: (True, True) for name in names}
+        flags[names[0]] = (False, True)
+        partly = replace(region, maximal=flags)
+        ax = plot_region(exp, x, (partly, x_cf))
+        labels = [t.get_text() for t in ax.get_legend().get_texts()]
+        assert "certified, not necessarily maximal" in labels
+
     def test_raw_units_produce_one_axis_per_feature(self) -> None:
         from treecf.viz import plot_region
 
