@@ -8,6 +8,7 @@ pub mod exact;
 pub mod ga;
 pub mod interrupt;
 pub mod ir;
+pub mod region_slab;
 pub mod regions;
 
 #[cfg(feature = "python")]

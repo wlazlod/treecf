@@ -6,12 +6,14 @@ use numpy::{
 };
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 
 use crate::constraints::{Constraints, LinearC};
 use crate::exact::{ExactParams, SearchMode, ValuePolicy};
 use crate::ga::GaParams;
 use crate::interrupt::SearchOutcome;
 use crate::ir::{Ensemble, Link};
+use crate::regions::RegionMode;
 
 /// Per-feature value-policy flat encoding: `0=raw` (`None`), `1=integer`,
 /// `2=grid` (reads `step`/`anchor`) — the marshaled form of
@@ -804,10 +806,15 @@ fn debug_domains_raw<'py>(
 }
 
 /// Certified recourse-region growth — port of `treecf.regions._recourse_region`.
-/// Returns `(lo, hi)` per-feature arrays (degenerate coordinates equal
-/// `x_cf` there); `regions_rust.py` builds the `RecourseRegion` dataclass
-/// from them (`feature_intervals`/`certified` are presentation, not search
-/// state, so they stay on the Python side).
+/// Returns a dict of arrays: `lo`/`hi` per feature (degenerate coordinates
+/// equal `x_cf` there), the grown category sets as a CSR pair, and the
+/// maximal mode's findings (`maximal_lo`/`maximal_hi` per feature,
+/// `maximal_cat` per open categorical feature, the `used_*` node counts,
+/// and the witnesses as parallel `witness_features`/`witness_sides`/
+/// `witness_points` arrays); `regions_rust.py` builds the `RecourseRegion`
+/// dataclass from them (`feature_intervals`/`certified` are presentation,
+/// not search state, so they stay on the Python side). `maximal`/`budget`
+/// select the growth mode.
 ///
 /// `missing_defined`/`if_missing_defined` carry the `node.missing_left is
 /// not None` bit that `RustEnsemble`'s own flat `missing_left: bool`
@@ -825,7 +832,7 @@ fn debug_domains_raw<'py>(
                     lo_b, hi_b, open_set,
                     if_ensemble=None, if_missing_defined=None, min_total_path=None,
                     cat_open=None, cat_feat_offsets=None, cat_block_offsets=None,
-                    cat_members=None))]
+                    cat_members=None, maximal=false, budget=100_000))]
 fn compute_region_raw<'py>(
     py: Python<'py>,
     ensemble: &RustEnsemble,
@@ -844,12 +851,14 @@ fn compute_region_raw<'py>(
     cat_feat_offsets: Option<PyReadonlyArray1<u32>>,
     cat_block_offsets: Option<PyReadonlyArray1<u32>>,
     cat_members: Option<PyReadonlyArray1<u32>>,
-) -> PyResult<(
-    Bound<'py, PyArray1<f64>>,
-    Bound<'py, PyArray1<f64>>,
-    Bound<'py, PyArray1<u32>>,
-    Bound<'py, PyArray1<u32>>,
-)> {
+    maximal: bool,
+    budget: u64,
+) -> PyResult<Bound<'py, PyDict>> {
+    let mode = if maximal {
+        RegionMode::Maximal { budget }
+    } else {
+        RegionMode::Fast
+    };
     let x_cf_own = x_cf.as_slice()?.to_vec();
     let lo_b_own = lo_b.as_slice()?.to_vec();
     let hi_b_own = hi_b.as_slice()?.to_vec();
@@ -917,6 +926,7 @@ fn compute_region_raw<'py>(
             min_total_path.unwrap_or(0.0),
             &cat_open_own,
             &cat_blocks_own,
+            mode,
             &mut probe,
         )
     });
@@ -940,12 +950,31 @@ fn compute_region_raw<'py>(
         grown_members.extend_from_slice(members);
         grown_offsets.push(grown_members.len() as u32);
     }
-    Ok((
-        result.lo.into_pyarray(py),
-        result.hi.into_pyarray(py),
-        grown_offsets.into_pyarray(py),
-        grown_members.into_pyarray(py),
-    ))
+    let flags = |v: &[bool]| -> Vec<u8> { v.iter().map(|&b| u8::from(b)).collect() };
+    let n_w = result.witnesses.len();
+    let mut witness_features: Vec<u32> = Vec::with_capacity(n_w);
+    let mut witness_sides: Vec<u8> = Vec::with_capacity(n_w);
+    let mut witness_points: Vec<f64> = Vec::with_capacity(n_w * x_cf_own.len());
+    for (j, side, point) in &result.witnesses {
+        witness_features.push(*j);
+        witness_sides.push(*side);
+        witness_points.extend_from_slice(point);
+    }
+    let out = PyDict::new(py);
+    out.set_item("lo", result.lo.into_pyarray(py))?;
+    out.set_item("hi", result.hi.into_pyarray(py))?;
+    out.set_item("grown_offsets", grown_offsets.into_pyarray(py))?;
+    out.set_item("grown_members", grown_members.into_pyarray(py))?;
+    out.set_item("maximal_lo", flags(&result.maximal_lo).into_pyarray(py))?;
+    out.set_item("maximal_hi", flags(&result.maximal_hi).into_pyarray(py))?;
+    out.set_item("maximal_cat", flags(&result.maximal_cat).into_pyarray(py))?;
+    out.set_item("used_lo", result.used_lo.into_pyarray(py))?;
+    out.set_item("used_hi", result.used_hi.into_pyarray(py))?;
+    out.set_item("used_cat", result.used_cat.into_pyarray(py))?;
+    out.set_item("witness_features", witness_features.into_pyarray(py))?;
+    out.set_item("witness_sides", witness_sides.into_pyarray(py))?;
+    out.set_item("witness_points", witness_points.into_pyarray(py))?;
+    Ok(out)
 }
 
 #[pymodule]

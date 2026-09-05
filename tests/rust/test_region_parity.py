@@ -23,6 +23,8 @@ pytestmark = pytest.mark.rust
 _treecf_core = pytest.importorskip("treecf._treecf_core")
 
 REGION_FIXTURES = fixture_utils.region_fixture_paths()
+REGION_MAXIMAL_FIXTURES = fixture_utils.region_maximal_fixture_paths()
+ALL_REGION_FIXTURES = REGION_FIXTURES + REGION_MAXIMAL_FIXTURES
 
 FloatPair = tuple[np.ndarray, np.ndarray]
 
@@ -42,18 +44,23 @@ def _rust_grow(fixture: fixture_utils.RegionFixture):
     return compute_region_rust(
         fixture.ir, fixture.x_cf, fixture.interval, fixture.compiled, lo_b, hi_b,
         degenerate, fixture.if_ir, min_total_path, cat_candidates,
+        mode=fixture.mode, budget=fixture.budget,
     )
 
 
 def _rust_lo_hi(fixture: fixture_utils.RegionFixture) -> FloatPair:
-    lo, hi, _cat_sets = _rust_grow(fixture)
+    lo, hi, _cat_sets, _extras = _rust_grow(fixture)
     return lo, hi
 
 
-@pytest.mark.parametrize("path", REGION_FIXTURES, ids=[p.stem for p in REGION_FIXTURES])
+@pytest.mark.parametrize(
+    "path",
+    ALL_REGION_FIXTURES,
+    ids=[f"{p.parent.name}/{p.stem}" for p in ALL_REGION_FIXTURES],
+)
 def test_rust_matches_python_and_golden_bitwise(path) -> None:
     fixture = fixture_utils.load_region_fixture(path)
-    py_lo, py_hi, py_sets = fixture_utils.run_region_fixture(fixture)
+    py_lo, py_hi, py_sets, py_extras = fixture_utils.run_region_fixture(fixture)
     rs_lo, rs_hi = _rust_lo_hi(fixture)
 
     # rust vs python
@@ -62,10 +69,20 @@ def test_rust_matches_python_and_golden_bitwise(path) -> None:
 
     # rust vs the committed golden (same comparator test_exact_golden.py's
     # region checks use for python vs golden, so all three agree transitively)
-    _rs_lo2, _rs_hi2, rs_sets = _rust_grow(fixture)
+    _rs_lo2, _rs_hi2, rs_sets, rs_extras = _rust_grow(fixture)
     assert {k: set(v) for k, v in py_sets.items()} == rs_sets
-    problems = fixture_utils.diff_region_golden(fixture, rs_lo, rs_hi, rs_sets)
+    problems = fixture_utils.diff_region_golden(fixture, rs_lo, rs_hi, rs_sets, rs_extras)
     assert not problems, f"{fixture.name} (rust vs golden):\n" + "\n".join(problems)
+    # the maximal mode's findings, rust vs python, in full
+    assert rs_extras.maximal_lo == py_extras.maximal_lo
+    assert rs_extras.maximal_hi == py_extras.maximal_hi
+    assert rs_extras.maximal_cat == py_extras.maximal_cat
+    assert rs_extras.used_lo == py_extras.used_lo
+    assert rs_extras.used_hi == py_extras.used_hi
+    assert rs_extras.used_cat == py_extras.used_cat
+    assert [(j, s, encode_floats(pt)) for j, s, pt in rs_extras.witnesses] == [
+        (j, s, encode_floats(pt)) for j, s, pt in py_extras.witnesses
+    ]
 
 
 @pytest.mark.parametrize("path", REGION_FIXTURES, ids=[p.stem for p in REGION_FIXTURES])

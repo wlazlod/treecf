@@ -9,7 +9,7 @@ Bit-parity with the Python reference is established by
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import numpy.typing as npt
@@ -18,6 +18,9 @@ from treecf._errors import MissingExtraError
 from treecf.backends.genetic_rust import build_rust_constraints, build_rust_ensemble
 from treecf.constraints.compile import CompiledConstraints
 from treecf.ir.model import EnsembleIR
+
+if TYPE_CHECKING:
+    from treecf.regions import _GrowthExtras
 
 FloatArray = npt.NDArray[np.float64]
 
@@ -78,10 +81,16 @@ def compute_region_rust(
     min_total_path: float,
     cat_candidates: dict[int, list[tuple[int, ...]]] | None = None,
     cache: dict[str, Any] | None = None,
-) -> tuple[FloatArray, FloatArray, dict[int, set[int]]]:
+    *,
+    mode: str = "fast",
+    budget: int = 100_000,
+) -> tuple[FloatArray, FloatArray, dict[int, set[int]], _GrowthExtras]:
     """Drop-in for ``treecf.regions._grow_box``; ``cache`` (e.g. the
     ``Explainer``'s ``_rust_cache``) avoids re-marshaling the ensembles and
-    constraints on every call, exactly as ``solve_exact_rust``'s does."""
+    constraints on every call, exactly as ``solve_exact_rust``'s does.
+    ``mode``/``budget`` select the growth mode as ``_grow_box`` does."""
+    from treecf.regions import _GrowthExtras
+
     core = _core()
     cache = cache if cache is not None else {}
     if "ensemble" not in cache:
@@ -114,7 +123,7 @@ def compute_region_rust(
             cat_members.extend(members)
             cat_block_offsets.append(len(cat_members))
         cat_feat_offsets.append(len(cat_block_offsets) - 1)
-    lo, hi, grown_offsets, grown_members = core.compute_region_raw(
+    raw = core.compute_region_raw(
         cache["ensemble"],
         cache["missing_defined"],
         cache["constraints"],
@@ -131,15 +140,39 @@ def compute_region_rust(
         cat_feat_offsets=np.asarray(cat_feat_offsets, dtype=np.uint32),
         cat_block_offsets=np.asarray(cat_block_offsets, dtype=np.uint32),
         cat_members=np.asarray(cat_members, dtype=np.uint32),
+        maximal=mode == "maximal",
+        budget=int(budget),
     )
-    grown_offsets = np.asarray(grown_offsets, dtype=np.uint32)
-    grown_members = np.asarray(grown_members, dtype=np.uint32)
+    grown_offsets = np.asarray(raw["grown_offsets"], dtype=np.uint32)
+    grown_members = np.asarray(raw["grown_members"], dtype=np.uint32)
     grown_sets = {
         j: {int(c) for c in grown_members[grown_offsets[k] : grown_offsets[k + 1]]}
         for k, j in enumerate(cat_open)
     }
+    extras = _GrowthExtras(
+        maximal_lo=[bool(v) for v in np.asarray(raw["maximal_lo"])],
+        maximal_hi=[bool(v) for v in np.asarray(raw["maximal_hi"])],
+        maximal_cat={
+            j: bool(v) for j, v in zip(cat_open, np.asarray(raw["maximal_cat"]), strict=True)
+        },
+        witnesses=[],
+        used_lo=[int(v) for v in np.asarray(raw["used_lo"])],
+        used_hi=[int(v) for v in np.asarray(raw["used_hi"])],
+        used_cat={
+            j: int(v) for j, v in zip(cat_open, np.asarray(raw["used_cat"]), strict=True)
+        },
+    )
+    points = np.asarray(raw["witness_points"], dtype=np.float64).reshape(-1, p)
+    for j, side, point in zip(
+        np.asarray(raw["witness_features"]), np.asarray(raw["witness_sides"]), points,
+        strict=True,
+    ):
+        extras.witnesses.append((int(j), int(side), np.array(point, dtype=np.float64)))
+    if mode != "maximal":
+        extras = _GrowthExtras.empty(p)
     return (
-        np.asarray(lo, dtype=np.float64),
-        np.asarray(hi, dtype=np.float64),
+        np.asarray(raw["lo"], dtype=np.float64),
+        np.asarray(raw["hi"], dtype=np.float64),
         grown_sets,
+        extras,
     )

@@ -542,11 +542,10 @@ def _recourse_region(
     degenerate = degenerate | frozenset(ir.categorical)
     cat_candidates = _categorical_candidates(ir, if_ir, compiled, frozen, x_cf)
 
-    extras = _GrowthExtras.empty(len(x_cf))
-    if _rust_available() and mode == "fast":
-        box_lo, box_hi, grown_sets = compute_region_rust(
+    if _rust_available():
+        box_lo, box_hi, grown_sets, extras = compute_region_rust(
             ir, x_cf, interval, compiled, lo_b, hi_b, degenerate, if_ir, min_total_path,
-            cat_candidates, cache=cache,
+            cat_candidates, cache=cache, mode=mode, budget=budget,
         )
     else:
         box_lo, box_hi, grown_sets, extras = _grow_box(
@@ -781,8 +780,9 @@ def _grow_box(
         j: [False] * len(blocks) for j, blocks in cat_candidates.items()
     }
     cat_unproven: dict[int, bool] = dict.fromkeys(cat_candidates, False)
-    for j in cat_candidates:
-        extras.used_cat[j] = 0
+    if maximal_mode:
+        for j in cat_candidates:
+            extras.used_cat[j] = 0
 
     def failing_corner() -> FloatArray | None:
         """The worst corner of the first Linear the box breaks: a point in

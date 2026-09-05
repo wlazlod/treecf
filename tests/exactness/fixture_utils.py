@@ -35,6 +35,7 @@ from ..parity.harness import build_constraints
 FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "exact"
 REFINE_FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "exact-refine"
 REGION_FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "regions"
+REGION_MAXIMAL_FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "regions-maximal"
 
 FloatArray = npt.NDArray[np.float64]
 
@@ -313,6 +314,13 @@ class RegionFixture:
     golden_lo: FloatArray
     golden_hi: FloatArray
     golden_cat_sets: dict[int, tuple[int, ...]]
+    mode: str = "fast"
+    budget: int = 100_000
+    golden_maximal: dict[int, tuple[bool, bool]] | None = None
+    golden_maximal_cat: dict[int, bool] | None = None
+    golden_used: dict[int, tuple[int, int]] | None = None
+    golden_used_cat: dict[int, int] | None = None
+    golden_witnesses: list[tuple[int, int, FloatArray]] | None = None
 
 
 def build_region_fixture_payload(
@@ -325,9 +333,13 @@ def build_region_fixture_payload(
     *,
     if_ir: EnsembleIR | None = None,
     min_total_path: float | None = None,
+    mode: str = "fast",
+    budget: int = 100_000,
 ) -> dict[str, Any]:
-    """Inputs -> the region fixture dict, minus the ``golden`` block."""
-    return {
+    """Inputs -> the region fixture dict, minus the ``golden`` block. The
+    growth mode and budget are written only when they are not the fast
+    defaults, so the fast fixture files keep their byte layout."""
+    payload: dict[str, Any] = {
         "name": name,
         "ensemble": encode_ensemble(ir),
         "if_ensemble": encode_ensemble(if_ir) if if_ir is not None else None,
@@ -337,19 +349,47 @@ def build_region_fixture_payload(
         "interval": encode_floats(list(interval)),
         "constraints": constraint_descriptors,
     }
+    if mode != "fast":
+        payload["mode"] = mode
+        payload["budget"] = budget
+    return payload
 
 
 def region_golden_block(
-    lo: FloatArray, hi: FloatArray, cat_sets: dict[int, set[int]] | None = None
+    lo: FloatArray,
+    hi: FloatArray,
+    cat_sets: dict[int, set[int]] | None = None,
+    extras: Any = None,
 ) -> dict[str, Any]:
+    """The golden block; ``extras`` (a ``_GrowthExtras``) adds the maximal
+    mode's flags, node counts and witnesses, which pin that mode's search
+    order the way node counters pin the exact backend's."""
     block: dict[str, Any] = {"lo": encode_floats(lo), "hi": encode_floats(hi)}
     if cat_sets:
         block["cat_sets"] = {str(j): sorted(members) for j, members in sorted(cat_sets.items())}
+    if extras is not None:
+        p = len(lo)
+        block["maximal"] = {
+            str(j): [bool(extras.maximal_lo[j]), bool(extras.maximal_hi[j])] for j in range(p)
+        }
+        block["maximal_cat"] = {str(j): bool(v) for j, v in sorted(extras.maximal_cat.items())}
+        block["used"] = {
+            str(j): [int(extras.used_lo[j]), int(extras.used_hi[j])] for j in range(p)
+        }
+        block["used_cat"] = {str(j): int(v) for j, v in sorted(extras.used_cat.items())}
+        block["witnesses"] = [
+            [int(j), int(side), encode_floats(np.asarray(point, dtype=np.float64))]
+            for j, side, point in extras.witnesses
+        ]
     return block
 
 
 def region_fixture_paths() -> list[Path]:
     return sorted(REGION_FIXTURES_DIR.glob("*.json"))
+
+
+def region_maximal_fixture_paths() -> list[Path]:
+    return sorted(REGION_MAXIMAL_FIXTURES_DIR.glob("*.json"))
 
 
 def load_region_fixture(path: Path) -> RegionFixture:
@@ -388,12 +428,42 @@ def _region_fixture_from_payload(
             int(j): tuple(int(c) for c in members)
             for j, members in (golden.get("cat_sets") or {}).items()
         },
+        mode=str(payload.get("mode", "fast")),
+        budget=int(payload.get("budget", 100_000)),
+        golden_maximal=(
+            None
+            if "maximal" not in golden
+            else {int(j): (bool(a), bool(b)) for j, (a, b) in golden["maximal"].items()}
+        ),
+        golden_maximal_cat=(
+            None
+            if "maximal_cat" not in golden
+            else {int(j): bool(v) for j, v in golden["maximal_cat"].items()}
+        ),
+        golden_used=(
+            None
+            if "used" not in golden
+            else {int(j): (int(a), int(b)) for j, (a, b) in golden["used"].items()}
+        ),
+        golden_used_cat=(
+            None
+            if "used_cat" not in golden
+            else {int(j): int(v) for j, v in golden["used_cat"].items()}
+        ),
+        golden_witnesses=(
+            None
+            if "witnesses" not in golden
+            else [
+                (int(j), int(side), np.asarray(decode_floats(point), dtype=np.float64))
+                for j, side, point in golden["witnesses"]
+            ]
+        ),
     )
 
 
 def solve_region_payload(
     payload: Mapping[str, Any],
-) -> tuple[FloatArray, FloatArray, dict[int, set[int]]]:
+) -> tuple[FloatArray, FloatArray, dict[int, set[int]], Any]:
     """Run the pure-Python region growth over a payload dict built by
     ``build_region_fixture_payload`` (no ``golden`` block needed)."""
     fixture = _region_fixture_from_payload(payload, golden=None)
@@ -417,9 +487,10 @@ def region_degenerate_and_bounds(
 
 def run_region_fixture(
     fixture: RegionFixture,
-) -> tuple[FloatArray, FloatArray, dict[int, set[int]]]:
+) -> tuple[FloatArray, FloatArray, dict[int, set[int]], Any]:
     """Run the pure-Python growth loop (bypasses the rust-first dispatch in
-    ``treecf.regions._recourse_region``) over a loaded fixture."""
+    ``treecf.regions._recourse_region``) over a loaded fixture; the fourth
+    element is the ``_GrowthExtras`` the maximal mode fills in."""
     import math as math_mod
 
     from treecf.regions import _categorical_candidates, _grow_box
@@ -435,11 +506,11 @@ def run_region_fixture(
         cat_candidates = {}
     del math_mod
     min_total_path = fixture.min_total_path if fixture.min_total_path is not None else 0.0
-    lo, hi, cat_sets, _extras = _grow_box(
+    return _grow_box(
         fixture.ir, fixture.x_cf, fixture.interval, fixture.compiled,
         fixture.if_ir, min_total_path, degenerate, lo_b, hi_b, cat_candidates,
+        mode=fixture.mode, budget=fixture.budget,
     )
-    return lo, hi, cat_sets
 
 
 def diff_region_golden(
@@ -447,6 +518,7 @@ def diff_region_golden(
     lo: FloatArray,
     hi: FloatArray,
     cat_sets: dict[int, set[int]] | None = None,
+    extras: Any = None,
 ) -> list[str]:
     """Byte-exact comparison, ``float`` bits via ``encode_floats``. Empty = match."""
     problems: list[str] = []
@@ -459,6 +531,25 @@ def diff_region_golden(
     got_sets = {j: tuple(sorted(members)) for j, members in sorted((cat_sets or {}).items())}
     if got_sets != fixture.golden_cat_sets:
         problems.append(f"cat_sets: golden={fixture.golden_cat_sets!r} got={got_sets!r}")
+    if fixture.golden_maximal is not None and extras is not None:
+        got_maximal = {
+            j: (bool(extras.maximal_lo[j]), bool(extras.maximal_hi[j])) for j in range(len(lo))
+        }
+        if got_maximal != fixture.golden_maximal:
+            problems.append(f"maximal: golden={fixture.golden_maximal!r} got={got_maximal!r}")
+        got_cat = {j: bool(v) for j, v in sorted(extras.maximal_cat.items())}
+        if got_cat != fixture.golden_maximal_cat:
+            problems.append(f"maximal_cat: golden={fixture.golden_maximal_cat!r} got={got_cat!r}")
+        got_used = {j: (int(extras.used_lo[j]), int(extras.used_hi[j])) for j in range(len(lo))}
+        if got_used != fixture.golden_used:
+            problems.append(f"used: golden={fixture.golden_used!r} got={got_used!r}")
+        got_used_cat = {j: int(v) for j, v in sorted(extras.used_cat.items())}
+        if got_used_cat != fixture.golden_used_cat:
+            problems.append(f"used_cat: golden={fixture.golden_used_cat!r} got={got_used_cat!r}")
+        got_w = [(int(j), int(s), encode_floats(np.asarray(pt))) for j, s, pt in extras.witnesses]
+        want_w = [(j, s, encode_floats(pt)) for j, s, pt in (fixture.golden_witnesses or [])]
+        if got_w != want_w:
+            problems.append(f"witnesses: golden={want_w!r} got={got_w!r}")
     return problems
 
 

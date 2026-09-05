@@ -475,14 +475,23 @@ REFINE_SCENARIO_BUILDERS = (
 # --------------------------------------------------------------------------
 
 
-def _write_region(payload: dict[str, Any]) -> None:
-    lo, hi, cat_sets = fixture_utils.solve_region_payload(payload)
-    payload["golden"] = fixture_utils.region_golden_block(lo, hi, cat_sets)
-    out = fixture_utils.REGION_FIXTURES_DIR / f"{payload['name']}.json"
+def _write_region(
+    payload: dict[str, Any], out_dir: Path = fixture_utils.REGION_FIXTURES_DIR
+) -> None:
+    lo, hi, cat_sets, extras = fixture_utils.solve_region_payload(payload)
+    maximal = payload.get("mode") == "maximal"
+    payload["golden"] = fixture_utils.region_golden_block(
+        lo, hi, cat_sets, extras if maximal else None
+    )
+    out = out_dir / f"{payload['name']}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     with open(out, "w", encoding="utf-8") as fh:
         json.dump(payload, fh, sort_keys=True, separators=(",", ":"))
-    print(f"  {payload['name']}: lo={lo}, hi={hi}")
+    flags = ""
+    if maximal:
+        sides = [(extras.maximal_lo[j], extras.maximal_hi[j]) for j in range(len(lo))]
+        flags = f", maximal={sides}"
+    print(f"  {payload['name']}: lo={lo}, hi={hi}{flags}")
 
 
 def _scenario_region_01_genetic_widened() -> dict[str, Any]:
@@ -571,6 +580,136 @@ REGION_SCENARIO_BUILDERS = (
 )
 
 
+# --------------------------------------------------------------------------
+# Maximal-mode region fixtures: every stopped side settled by the emptiness
+# search, pinning its flags, witnesses and node counts. Written under
+# tests/fixtures/regions-maximal/.
+# --------------------------------------------------------------------------
+
+
+def _xor_ir() -> EnsembleIR:
+    """Score 0 on the diagonal cells (a<1, b<1) and (a>=1, b>=1), 1 off it:
+    the conservative bracket of any box spanning both cells straddles the
+    target, so only the search can tell a sound extension from a violation."""
+    tree3 = Tree(
+        nodes=(
+            Node(0, 0, 1.0, SplitOp.LT, True, 1, 2, None),
+            _leaf(1, 0.0),
+            Node(2, 1, 1.0, SplitOp.LT, True, 3, 4, None),
+            _leaf(3, 0.0),
+            _leaf(4, -2.0),
+        )
+    )
+    return EnsembleIR(
+        trees=(_stump(0, 1.0, 0.0, 1.0), _stump(1, 1.0, 0.0, 1.0), tree3),
+        base_score=0.0, link=Link.IDENTITY, n_features=2,
+        feature_names=("a", "b"), meta={},
+    )
+
+
+def _scenario_maximal_01_xor_coupling() -> dict[str, Any]:
+    """Both features extend to infinity once the search proves the slabs
+    empty; the fast mode would have stopped the second feature."""
+    return fixture_utils.build_region_fixture_payload(
+        "maximal-01-xor-coupling", _xor_ir(), np.zeros(2), np.zeros(2), (-0.5, 1.5), [],
+        mode="maximal",
+    )
+
+
+def _scenario_maximal_02_target_witness() -> dict[str, Any]:
+    """A narrower target: each upper side is proved by a witness point."""
+    return fixture_utils.build_region_fixture_payload(
+        "maximal-02-target-witness", _xor_ir(), np.zeros(2), np.zeros(2), (-0.5, 0.5), [],
+        mode="maximal",
+    )
+
+
+def _scenario_maximal_03_plausibility_witness() -> dict[str, Any]:
+    """The plausibility-constrained region: sides the isolation-forest bound
+    stops are settled by the search, some with witnesses below the floor."""
+    ir, if_ir, min_total_path = _plausibility_ir()
+    x = np.array([0.0, 0.0, 0.0])
+    interval = (5.0, float("inf"))
+    compiled = compile_constraints([], ir.feature_names)
+    result = solve_exact(
+        ir, x, interval, compiled, np.ones(3), np.ones(3), 0.0,
+        plausibility=(if_ir, min_total_path),
+    )
+    assert result.x_cf is not None
+    return fixture_utils.build_region_fixture_payload(
+        "maximal-03-plausibility-witness", ir, x, result.x_cf, interval, [],
+        if_ir=if_ir, min_total_path=min_total_path, mode="maximal",
+    )
+
+
+def _scenario_maximal_04_order_pair_corner() -> dict[str, Any]:
+    """An order pair: the side it stops is proved by its worst corner, with
+    no search spent at all."""
+    ir = _order_pair_ir()
+    x = np.array([0.0, 0.0])
+    constraints = [
+        {"type": "Linear", "coefficients": {"x0": 1.0, "x1": -1.0}, "op": "<=", "rhs": 0.0}
+    ]
+    interval = (5.0, float("inf"))
+    compiled = compile_constraints(build_constraints(constraints), ir.feature_names)
+    result = solve_exact(ir, x, interval, compiled, np.ones(2), np.ones(2), 0.0)
+    assert result.x_cf is not None
+    return fixture_utils.build_region_fixture_payload(
+        "maximal-04-order-pair-corner", ir, x, result.x_cf, interval, constraints,
+        mode="maximal",
+    )
+
+
+def _scenario_maximal_05_categorical_block_witness() -> dict[str, Any]:
+    """A mixed categorical model: excluded blocks are proved by witnesses,
+    numeric sides settled alongside."""
+    rng = np.random.default_rng(4030)
+    ir = make_random_mixed_ir(rng, n_features=4, n_trees=5, depth=3, categorical={1: 5, 3: 7})
+    x = np.array([0.5, 2.0, -0.3, 4.0])
+    constraints = [{"type": "AllowedCategories", "feature": "x1", "allowed": [0, 1, 2, 4]}]
+    score = raw_score(ir, x)
+    interval = (score - 0.4, score + 0.4)
+    return fixture_utils.build_region_fixture_payload(
+        "maximal-05-categorical-block-witness", ir, x, x, interval, constraints,
+        mode="maximal",
+    )
+
+
+def _scenario_maximal_06_budget_exhausted() -> dict[str, Any]:
+    """The coupling model with a budget of two nodes per side: the search
+    that needs three gives up and leaves that side unproven."""
+    return fixture_utils.build_region_fixture_payload(
+        "maximal-06-budget-exhausted", _xor_ir(), np.zeros(2), np.zeros(2), (-0.5, 1.5), [],
+        mode="maximal", budget=2,
+    )
+
+
+def _scenario_maximal_07_random() -> dict[str, Any]:
+    """A random ensemble under a modest budget: the broad pin on the search
+    order — every node count and witness must match across languages."""
+    rng = np.random.default_rng(9090)
+    ir = make_random_ir(rng, n_features=4, n_trees=6, depth=3)
+    x = rng.normal(scale=2.0, size=4)
+    interval = (raw_score(ir, x) + 0.2, float("inf"))
+    compiled = compile_constraints([], ir.feature_names)
+    result = solve_exact(ir, x, interval, compiled, np.ones(4), np.ones(4), 0.0)
+    assert result.x_cf is not None
+    return fixture_utils.build_region_fixture_payload(
+        "maximal-07-random", ir, x, result.x_cf, interval, [], mode="maximal", budget=500,
+    )
+
+
+REGION_MAXIMAL_SCENARIO_BUILDERS = (
+    _scenario_maximal_01_xor_coupling,
+    _scenario_maximal_02_target_witness,
+    _scenario_maximal_03_plausibility_witness,
+    _scenario_maximal_04_order_pair_corner,
+    _scenario_maximal_05_categorical_block_witness,
+    _scenario_maximal_06_budget_exhausted,
+    _scenario_maximal_07_random,
+)
+
+
 def main() -> None:
     fixture_utils.FIXTURES_DIR.mkdir(parents=True, exist_ok=True)
     for build in SCENARIO_BUILDERS:
@@ -581,6 +720,9 @@ def main() -> None:
     fixture_utils.REGION_FIXTURES_DIR.mkdir(parents=True, exist_ok=True)
     for build in REGION_SCENARIO_BUILDERS:
         _write_region(build())
+    fixture_utils.REGION_MAXIMAL_FIXTURES_DIR.mkdir(parents=True, exist_ok=True)
+    for build in REGION_MAXIMAL_SCENARIO_BUILDERS:
+        _write_region(build(), fixture_utils.REGION_MAXIMAL_FIXTURES_DIR)
 
 
 if __name__ == "__main__":

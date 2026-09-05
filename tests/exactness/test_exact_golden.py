@@ -166,13 +166,58 @@ def test_region_growth_matches_golden_fixture(path: Path) -> None:
     vs-golden three ways at once, the same split ``test_exact_golden.py`` /
     ``test_exact_parity.py`` keep for the exact backend."""
     fixture = fixture_utils.load_region_fixture(path)
-    lo, hi, cat_sets = fixture_utils.run_region_fixture(fixture)
+    lo, hi, cat_sets, extras = fixture_utils.run_region_fixture(fixture)
     problems = fixture_utils.diff_region_golden(fixture, lo, hi, cat_sets)
     assert not problems, f"{fixture.name}:\n" + "\n".join(problems)
+    # the fast mode claims nothing about maximality
+    assert not any(extras.maximal_lo) and not any(extras.maximal_hi)
+    assert extras.witnesses == []
 
 
 def test_region_fixture_set_matches_expected_scenarios() -> None:
     assert {p.stem for p in REGION_FIXTURES} == EXPECTED_REGION_FIXTURE_IDS
+
+
+REGION_MAXIMAL_FIXTURES = fixture_utils.region_maximal_fixture_paths()
+
+EXPECTED_REGION_MAXIMAL_FIXTURE_IDS = frozenset(
+    {
+        "maximal-01-xor-coupling",
+        "maximal-02-target-witness",
+        "maximal-03-plausibility-witness",
+        "maximal-04-order-pair-corner",
+        "maximal-05-categorical-block-witness",
+        "maximal-06-budget-exhausted",
+        "maximal-07-random",
+    }
+)
+
+
+@pytest.mark.parametrize(
+    "path", REGION_MAXIMAL_FIXTURES, ids=[p.stem for p in REGION_MAXIMAL_FIXTURES]
+)
+def test_maximal_region_growth_matches_golden_fixture(path: Path) -> None:
+    fixture = fixture_utils.load_region_fixture(path)
+    assert fixture.mode == "maximal"
+    lo, hi, cat_sets, extras = fixture_utils.run_region_fixture(fixture)
+    problems = fixture_utils.diff_region_golden(fixture, lo, hi, cat_sets, extras)
+    assert not problems, f"{fixture.name}:\n" + "\n".join(problems)
+
+
+def test_maximal_region_fixture_set_matches_expected_scenarios() -> None:
+    assert {p.stem for p in REGION_MAXIMAL_FIXTURES} == EXPECTED_REGION_MAXIMAL_FIXTURE_IDS
+
+
+def test_maximal_region_fixture_generation_is_deterministic() -> None:
+    for build in gen_exact_fixtures.REGION_MAXIMAL_SCENARIO_BUILDERS:
+        first = build()
+        second = build()
+        assert first == second, f"{first.get('name', build.__name__)}: not deterministic"
+
+
+def test_maximal_region_scenario_builders_cover_the_expected_fixture_ids() -> None:
+    names = {build()["name"] for build in gen_exact_fixtures.REGION_MAXIMAL_SCENARIO_BUILDERS}
+    assert names == EXPECTED_REGION_MAXIMAL_FIXTURE_IDS
 
 
 def test_region_fixture_generation_is_deterministic() -> None:
