@@ -42,7 +42,7 @@ jobs:
         if: matrix.python-version == '3.12'
         run: >-
           uv run pytest -m slow tests/test_docs_snippets.py tests/test_docs_structure.py
-          tests/ir/test_parser_fuzz.py
+          tests/ir/test_parser_fuzz.py tests/ir/test_catboost_hash_property.py
 
   conformance:
     name: conformance ${{ matrix.library }}
