@@ -52,6 +52,33 @@ version, and `check_certificate` verifies such a file exactly as it would
 without the addition. Only removing a key, or changing what an existing key
 means, bumps `schema_version`.
 
+## Added in 0.3.1
+
+New public symbols in this release, as one running list:
+
+- `explain(..., search="refine")` / `explain_batch` / `explain_coalitions`:
+  the coarse-to-fine exact search; `"classic"` stays the default and is
+  unchanged. `Explainer.certificate(..., search=)` records the choice under
+  `declared`.
+- `explain(..., region_mode="maximal", region_budget=)` and
+  `Explainer.recourse_region(mode=, budget=, keep_witnesses=)`: budgeted
+  proof that a region side cannot grow, with witness points on request.
+- `RecourseRegion.maximal` / `.maximal_categories` / `.witnesses`: per-side
+  proof flags, per-feature category flags, and the witnesses that closed
+  each side (`None` unless kept); certificates store the flags under
+  `plan.region_maximal` and `plan.region_maximal_categories` without a
+  schema bump.
+- `Explainer.search_profile(x, target=None)`: per-feature domain sizes and
+  the total search-space size before an exact solve; the budget-exhaustion
+  warning quotes that size.
+- `solver_stats["search"]`, `["coarse_accepts"]`, `["refinements"]`,
+  `["trace"]` on every exact result: the search mode, its counters, and the
+  sampled incumbent/bound trace; certificates carry them as JSON lists.
+- `treecf.audit.portfolio_report`: a batch-level audit report as JSON, a
+  self-contained HTML page, or markdown with figures beside it.
+- `treecf.viz.plot_certification_trace`: the incumbent and the proven lower
+  bound against nodes expanded, ending at the named outcome.
+
 ## Added in 0.3.0
 
 New public symbols in this release, as one running list (extend this list
