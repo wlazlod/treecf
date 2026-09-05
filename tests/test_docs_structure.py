@@ -71,6 +71,7 @@ PLOT_FUNCTIONS = [
     "plot_waterfall",
     "plot_effort",
     "plot_region",
+    "plot_certification_trace",
     "plot_batch_levers",
     "plot_batch_matrix",
     "plot_batch_summary",

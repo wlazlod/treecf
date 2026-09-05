@@ -1232,3 +1232,90 @@ class TestPlotRegion:
         ax = plot_region(exp, x, (region, x_cf), max_features=1)
         assert len(ax.get_yticklabels()) == 1
         assert any("(+1 more)" in t.get_text() for t in ax.texts)
+
+
+class TestPlotCertificationTrace:
+    """The exact search's trace as a picture: incumbent and lower bound over
+    nodes, the gap shaded, the outcome named at the end."""
+
+    @staticmethod
+    def _levers() -> tuple[object, np.ndarray]:
+        from treecf import Explainer
+        from treecf.ir.model import EnsembleIR, Link, Node, SplitOp, Tree
+
+        def leaf(i: int, v: float) -> Node:
+            return Node(i, None, None, None, None, None, None, v)
+
+        def stump(f: int, t: float, rv: float) -> Tree:
+            return Tree((Node(0, f, t, SplitOp.LT, True, 1, 2, None), leaf(1, 0.0), leaf(2, rv)))
+
+        ir = EnsembleIR(
+            (stump(0, 1.0, 1.0), stump(1, 1.0, 0.8), stump(2, 1.0, 0.6)),
+            0.0, Link.IDENTITY, 3, ("a", "b", "c"), {},
+        )
+        return Explainer(ir, normalizers=np.ones(3)), np.zeros(3)
+
+    def test_genetic_result_has_no_trace(self) -> None:
+        from treecf import Target, TreecfError
+        from treecf.viz import plot_certification_trace
+
+        exp, x = self._levers()
+        result = exp.explain(x, Target.raw(op=">=", value=0.5), seed=0)
+        with pytest.raises(TreecfError, match="trace"):
+            plot_certification_trace(result)
+
+    def test_exact_result_draws_both_curves_and_names_the_outcome(self) -> None:
+        from treecf import Target
+        from treecf.viz import plot_certification_trace
+
+        exp, x = self._levers()
+        result = exp.explain(x, Target.raw(op=">=", value=1.5), backend="exact", seed=0)
+        ax = plot_certification_trace(result)
+        assert ax.get_xscale() == "log"
+        labels = [ln.get_label() for ln in ax.lines]
+        assert "incumbent" in labels and "lower bound" in labels
+        assert ax.collections  # the shaded gap
+        texts = [t.get_text() for t in ax.texts]
+        assert any("optimal" in t for t in texts)
+
+    def test_unproven_outcome_is_named(self) -> None:
+        from treecf import Target, TreecfWarning
+        from treecf.viz import plot_certification_trace
+
+        exp, x = self._levers()
+        with pytest.warns(TreecfWarning):
+            result = exp.explain(
+                x, Target.raw(op=">=", value=1.5), backend="exact", seed=0,
+                warm_start=True, node_budget=1, time_budget_s=5.0,
+            )
+        ax = plot_certification_trace(result)
+        texts = [t.get_text() for t in ax.texts]
+        assert any("stopped early" in t for t in texts)
+
+    def test_infeasible_and_batch_records_are_accepted(self) -> None:
+        from treecf import Infeasible, Target
+        from treecf.viz import plot_certification_trace
+
+        exp, x = self._levers()
+        result = exp.explain(x, Target.raw(op=">=", value=10.0), backend="exact", seed=0)
+        assert isinstance(result, Infeasible)
+        ax = plot_certification_trace(result)
+        assert any("certified" in t.get_text() for t in ax.texts)
+
+        batch = exp.explain_batch(
+            np.zeros((1, 3)), Target.raw(op=">=", value=0.5), backend="exact", seed=0,
+            allow_exact_batch=True,
+        )
+        ax = plot_certification_trace(batch.records[0])
+        assert ax.lines
+
+    def test_axis_is_reused_when_given(self) -> None:
+        import matplotlib.pyplot as plt
+
+        from treecf import Target
+        from treecf.viz import plot_certification_trace
+
+        exp, x = self._levers()
+        result = exp.explain(x, Target.raw(op=">=", value=0.5), backend="exact", seed=0)
+        _, ax = plt.subplots()
+        assert plot_certification_trace(result, ax=ax) is ax

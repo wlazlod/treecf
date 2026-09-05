@@ -11,6 +11,7 @@ from treecf.api import Counterfactual, Infeasible
 
 __all__ = [
     "plot_alternatives",
+    "plot_certification_trace",
     "plot_changes",
     "plot_counterfactuals",
     "plot_effort",
@@ -1100,6 +1101,108 @@ def plot_region(
         )
     _region_legend(ax, show_caveat)
     return ax
+
+
+def plot_certification_trace(result: Any, *, ax: Any = None) -> Any:
+    """How an exact search's proof formed: incumbent and lower bound over nodes.
+
+    Reads ``solver_stats["trace"]`` — the samples the exact backend takes at
+    every incumbent update and every power-of-two node count — and draws the
+    incumbent cost (what has been found) and the lower bound (what can still
+    be ruled out) against the nodes expanded on a log axis, with the gap
+    between them shaded. The terminal marker names the outcome: ``optimal``,
+    ``within gap``, ``certified infeasible``, or ``stopped early`` for a
+    search that ran out of budget or withdrew its claim (the solve-time
+    warning says which).
+
+    Parameters
+    ----------
+    result
+        A ``Counterfactual``, ``Infeasible``, or ``BatchRecord`` produced
+        by ``backend="exact"``.
+    ax
+        Axes to draw on; a new figure is created when omitted.
+
+    Returns
+    -------
+    The matplotlib ``Axes`` drawn on.
+
+    Raises
+    ------
+    MissingExtraError
+        If matplotlib is not installed.
+    TreecfError
+        If ``result`` carries no trace (a genetic or python-backend result).
+    """
+    plt = _import_pyplot()
+
+    stats = getattr(result, "solver_stats", None)
+    trace = stats.get("trace") if isinstance(stats, dict) else None
+    if not trace:
+        raise TreecfError(
+            "result carries no certification trace; only backend='exact' records one"
+        )
+    assert isinstance(stats, dict)  # narrowed by the trace check above
+    nodes = [max(int(n), 1) for n, _, _ in trace]  # a log axis cannot show node 0
+    incumbents = [None if c is None else float(c) for _, c, _ in trace]
+    bounds = [float(b) for _, _, b in trace]
+
+    if ax is None:
+        _, ax = plt.subplots(figsize=(6, 3.2))
+    known_bound = [(n, b) for n, b in zip(nodes, bounds, strict=True) if math.isfinite(b)]
+    if known_bound:
+        ax.plot(
+            [n for n, _ in known_bound], [b for _, b in known_bound],
+            drawstyle="steps-post", color="C3", linewidth=1.5, label="lower bound",
+        )
+    known_inc = [(n, c) for n, c in zip(nodes, incumbents, strict=True) if c is not None]
+    if known_inc:
+        ax.plot(
+            [n for n, _ in known_inc], [c for _, c in known_inc],
+            drawstyle="steps-post", color="C0", linewidth=1.5, label="incumbent",
+        )
+    both = [
+        (n, c, b)
+        for n, c, b in zip(nodes, incumbents, bounds, strict=True)
+        if c is not None and math.isfinite(b)
+    ]
+    if both:
+        ax.fill_between(
+            [n for n, _, _ in both], [b for _, _, b in both], [c for _, c, _ in both],
+            step="post", color="C0", alpha=0.15, linewidth=0, label="_gap",
+        )
+    ax.set_xscale("log")
+    ax.set_xlabel("nodes expanded")
+    ax.set_ylabel("cost")
+    ax.set_title("certification trace")
+
+    outcome = _trace_outcome(result, stats)
+    last_n = nodes[-1]
+    last_y = incumbents[-1] if incumbents[-1] is not None else (
+        bounds[-1] if math.isfinite(bounds[-1]) else 0.0
+    )
+    ax.plot([last_n], [last_y], marker="o", color="0.2", markersize=5, zorder=5,
+            label="_terminal")
+    ax.annotate(
+        outcome, xy=(last_n, last_y), xytext=(-6, 8), textcoords="offset points",
+        ha="right", fontsize=8, color="0.2",
+    )
+    if known_bound or known_inc:
+        ax.legend(fontsize=7, frameon=False, loc="best")
+    return ax
+
+
+def _trace_outcome(result: Any, stats: dict[str, Any]) -> str:
+    """The claim a result makes, as the trace's terminal label."""
+    proof = str(getattr(result, "proof", ""))
+    feasible = getattr(result, "feasible", getattr(result, "x_cf", None) is not None)
+    if proof == "optimal_within_gap":
+        return "within gap"
+    if proof == "optimal":
+        return "optimal"
+    if proof == "certified" or (not feasible and stats.get("completed") is True):
+        return "certified infeasible"
+    return "stopped early"
 
 
 _CAP_MODEL = "stopped by the model"

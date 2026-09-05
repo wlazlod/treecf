@@ -11,6 +11,7 @@ Run from anywhere: ``uv run python docs/scripts/generate_figures.py``
 from __future__ import annotations
 
 import pathlib
+import warnings
 
 import matplotlib
 
@@ -18,9 +19,10 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from treecf import Explainer, Range, Target
+from treecf import Explainer, Range, Target, TreecfWarning
 from treecf.viz import (
     plot_alternatives,
+    plot_certification_trace,
     plot_changes,
     plot_counterfactuals,
     plot_effort,
@@ -118,6 +120,19 @@ def main() -> None:
     )
     certified = exp_rng.explain(x, target=target, backend="exact", region=True, seed=0)
     _save("plot_region", _fig_of(plot_region(exp_rng, x, certified)))
+    # the same region grown in the maximal mode: proved sides get the square cap
+    maximal = exp_rng.explain(
+        x, target=target, backend="exact", region=True, region_mode="maximal", seed=0
+    )
+    _save("plot_region_maximal", _fig_of(plot_region(exp_rng, x, maximal)))
+
+    # a budget-limited exact solve leaves a visible gap between incumbent and bound
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", TreecfWarning)
+        cut = exp.explain(
+            x, target=target, backend="exact", seed=0, node_budget=50_000, warm_start=False
+        )
+    _save("plot_certification_trace", _fig_of(plot_certification_trace(cut)))
 
     batch = exp.explain_batch(X_bg[:20], target=target, seed=0)
     _save("plot_batch_summary", _fig_of(plot_batch_summary(batch)))
