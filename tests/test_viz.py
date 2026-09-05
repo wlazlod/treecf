@@ -1348,3 +1348,102 @@ class TestPlotCertificationTrace:
         result = exp.explain(x, Target.raw(op=">=", value=0.5), backend="exact", seed=0)
         _, ax = plt.subplots()
         assert plot_certification_trace(result, ax=ax) is ax
+
+
+class TestPlotRecourseMenu:
+    """The lever-set matrix: one row per entry, filled cells for changed levers,
+    a proof glyph per row."""
+
+    @staticmethod
+    def _setup(**kwargs):
+        from treecf import Explainer
+        from treecf.ir.model import EnsembleIR, Link, Node, SplitOp, Tree
+
+        def stump(feature: int, right_value: float) -> Tree:
+            return Tree(
+                nodes=(
+                    Node(0, feature, 1.0, SplitOp.LT, True, 1, 2, None),
+                    Node(1, None, None, None, None, None, None, 0.0),
+                    Node(2, None, None, None, None, None, None, right_value),
+                )
+            )
+
+        ir = EnsembleIR(
+            trees=(stump(0, 1.0), stump(1, 0.8), stump(2, 0.6)),
+            base_score=0.0, link=Link.IDENTITY, n_features=3,
+            feature_names=("a", "b", "c"), meta={},
+        )
+        exp = Explainer(ir, normalizers=np.ones(3))
+        x = np.zeros(3)
+        target = Target.raw(op=">=", value=1.5)  # a+b or a+c; every single lever fails
+        options = {"max_levers": 2, "mode": "all", "backend": "exact", "seed": 0}
+        options.update(kwargs)
+        return exp, x, target, exp.recourse_menu(x, target, **options)
+
+    def test_rows_cells_and_glyphs(self) -> None:
+        from treecf.viz import plot_recourse_menu
+
+        _exp, _x, _target, menu = self._setup()
+        ax = plot_recourse_menu(menu)
+        assert [t.get_text().split()[0] for t in ax.get_yticklabels()] == list(menu)
+        filled = [p for p in ax.patches if p.get_label() == "_cell_filled"]
+        expected = sum(
+            len(e.changes) for e in menu.values() if isinstance(e, Counterfactual)
+        )
+        assert len(filled) == expected == 4
+        optimal = [ln for ln in ax.lines if ln.get_label() == "_glyph_optimal"]
+        certified = [ln for ln in ax.lines if ln.get_label() == "_glyph_certified"]
+        assert len(optimal) == 2 and len(certified) == 4
+        labels = [t.get_text() for t in ax.get_legend().get_texts()]
+        assert "optimal" in labels and "certified infeasible" in labels
+        assert "heuristic" not in labels  # only the kinds present are listed
+
+    def test_order_by_size_and_row_cap(self) -> None:
+        from treecf.viz import plot_recourse_menu
+
+        _exp, _x, _target, menu = self._setup()
+        ax = plot_recourse_menu(menu, order="size", max_rows=3)
+        keys = [t.get_text().split()[0] for t in ax.get_yticklabels()]
+        assert keys == ["a", "b", "c"]
+        assert "3 of 6" in ax.get_title()
+
+    def test_unresolved_sets_get_question_marks(self) -> None:
+        from treecf import TreecfWarning
+        from treecf.viz import plot_recourse_menu
+
+        with pytest.warns(TreecfWarning):
+            _exp, _x, _target, menu = self._setup(total_budget_s=0.0)
+        ax = plot_recourse_menu(menu)
+        assert len(ax.get_yticklabels()) == 6
+        unresolved = [ln for ln in ax.lines if ln.get_label() == "_glyph_unresolved"]
+        assert len(unresolved) == 6
+        assert not [p for p in ax.patches if p.get_label() == "_cell_filled"]
+
+    def test_explainer_scales_cells(self) -> None:
+        from treecf.viz import plot_recourse_menu
+
+        exp, _x, _target, menu = self._setup()
+        ax = plot_recourse_menu(menu, explainer=exp)
+        filled = [p for p in ax.patches if p.get_label() == "_cell_filled"]
+        assert len(filled) == 4
+
+    def test_diverse_set_renders_through_its_menu(self) -> None:
+        from treecf.viz import plot_recourse_menu
+
+        exp, x, target, _menu = self._setup()
+        diverse = exp.explain_diverse(x, target, k=3, backend="exact", seed=0)
+        ax = plot_recourse_menu(diverse)
+        assert len(ax.get_yticklabels()) == len(diverse.menu)
+        by_coalition = exp.explain_diverse(
+            x, target, k=3, diversity="coalitions",
+            coalitions={"first": ["a"], "rest": ["b", "c"]}, backend="exact", seed=0,
+        )
+        with pytest.raises(TreecfError, match="menu"):
+            plot_recourse_menu(by_coalition)
+
+    def test_recourse_map_accepts_a_menu(self) -> None:
+        from treecf.viz import plot_recourse_map
+
+        exp, x, target, menu = self._setup()
+        ax = plot_recourse_map(exp, x, menu, target=target)
+        assert ax is not None

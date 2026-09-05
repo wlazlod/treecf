@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, Literal
 
 from treecf._errors import MissingExtraError, TreecfError
 from treecf.api import Counterfactual, Infeasible
@@ -17,6 +17,7 @@ __all__ = [
     "plot_effort",
     "plot_ladder",
     "plot_recourse_map",
+    "plot_recourse_menu",
     "plot_region",
     "plot_tradeoff",
     "plot_waterfall",
@@ -940,6 +941,198 @@ def _format_plan(
     j_suffix = f"(J={plan.distance:.3g})"
     lines[-1] = f"{lines[-1]} {j_suffix}" if lines[-1] else j_suffix
     return "\n".join(lines)
+
+
+_FillStyle = Literal["full", "left", "right", "bottom", "top", "none"]
+_MENU_GLYPHS: dict[str, tuple[str, _FillStyle, str]] = {
+    # kind -> (marker, fillstyle, legend label)
+    "optimal": ("s", "full", "optimal"),
+    "optimal_within_gap": ("s", "left", "optimal within gap"),
+    "heuristic": ("s", "none", "heuristic"),
+    "certified": ("x", "full", "certified infeasible"),
+    "search_exhausted": (".", "full", "search exhausted"),
+    "unresolved": ("$?$", "full", "unresolved"),
+}
+
+
+def _menu_glyph_kind(entry: Any) -> str:
+    """Which glyph an entry gets: its proof, or ``"unresolved"`` for ``None``."""
+    if entry is None:
+        return "unresolved"
+    if isinstance(entry, Counterfactual):
+        return entry.proof if entry.proof in _MENU_GLYPHS else "heuristic"
+    return "certified" if entry.proof == "certified" else "search_exhausted"
+
+
+def plot_recourse_menu(
+    menu: Any,
+    *,
+    ax: Any = None,
+    order: str = "cost",
+    max_rows: int = 25,
+    annotate: bool = True,
+    explainer: Any = None,
+) -> Any:
+    """Lever-set by feature matrix of a recourse menu.
+
+    One row per menu entry — in the menu's own order (minimal frontier
+    first) when ``order="cost"``, by set size then key when
+    ``order="size"`` — followed by the unresolved sets, and one column per
+    candidate lever. A filled cell marks a feature the plan changed, shaded
+    by the size of the change: ``|Δ|/σ`` when ``explainer`` is given
+    (categorical levers hatched), otherwise ``|Δ|`` relative to the largest
+    change of that lever across the menu. The row label carries the plan
+    cost, and a glyph before it the proof: filled square ``optimal``, half
+    square ``optimal_within_gap``, open square ``heuristic``, cross
+    certified infeasible, dot ``search_exhausted``, question mark
+    unresolved. A ``DiverseSet`` built from a menu renders through it.
+
+    Parameters
+    ----------
+    menu
+        A ``RecourseMenu``, or a ``DiverseSet`` whose ``menu`` is set.
+    ax
+        Existing axes to draw on; a new figure is created if omitted.
+    order
+        ``"cost"`` (the menu's order) or ``"size"``.
+    max_rows
+        Rows drawn before the rest is cut; the title says how many of the
+        total are shown.
+    annotate
+        Write each changed feature's new value in its cell.
+    explainer
+        The explainer the menu came from, for sigma-scaled shading and
+        categorical hatching; optional.
+
+    Returns
+    -------
+    The axes the matrix was drawn on.
+
+    Raises
+    ------
+    MissingExtraError
+        If matplotlib is not installed.
+    TreecfError
+        If a ``DiverseSet`` without a menu is given, or the menu has no
+        levers.
+    ValueError
+        If ``order`` is unknown.
+    """
+    from matplotlib.patches import Rectangle
+
+    from treecf._menu import DiverseSet
+
+    plt = _import_pyplot()
+    if isinstance(menu, DiverseSet):
+        if menu.menu is None:
+            raise TreecfError(
+                "this DiverseSet carries no menu (coalition criterion); draw its plans "
+                "with plot_alternatives instead"
+            )
+        menu = menu.menu
+    if order not in ("cost", "size"):
+        raise ValueError(f"order must be 'cost' or 'size', got {order!r}")
+    levers = list(menu.levers)
+    if not levers:
+        raise TreecfError("the menu has no candidate levers to draw")
+
+    rows: list[tuple[str, Any]] = [*menu.items(), *((key, None) for key in menu.unresolved)]
+    if order == "size":
+        rows.sort(key=lambda row: (len(row[0].split("+")), row[0]))
+    total = len(rows)
+    rows = rows[:max_rows]
+
+    categorical = set()
+    sigma: dict[str, float] = {}
+    if explainer is not None:
+        categorical = {explainer.ir.feature_names[j] for j in explainer.ir.categorical}
+        sigma = dict(
+            zip(explainer.ir.feature_names, [float(s) for s in explainer.sigma], strict=True)
+        )
+
+    def magnitude(name: str, before: float, after: float) -> float:
+        if name in categorical:
+            return 1.0
+        if math.isnan(before) or math.isnan(after):
+            return 1.0
+        delta = abs(after - before)
+        return delta / sigma[name] if sigma else delta
+
+    scale: dict[str, float] = dict.fromkeys(levers, 0.0)
+    for _key, entry in rows:
+        if isinstance(entry, Counterfactual):
+            for name, (before, after) in entry.changes.items():
+                if name in scale:
+                    scale[name] = max(scale[name], magnitude(name, before, after))
+    if sigma:
+        top = max(scale.values(), default=1.0) or 1.0
+        scale = dict.fromkeys(levers, top)
+
+    if ax is None:
+        _, ax = plt.subplots(figsize=(0.6 * len(levers) + 3.0, 0.38 * len(rows) + 1.6))
+    cmap = plt.get_cmap("Blues")
+    labels: list[str] = []
+    present: list[str] = []
+    for i, (key, entry) in enumerate(rows):
+        members = set(key.split("+"))
+        changes = entry.changes if isinstance(entry, Counterfactual) else {}
+        for j, name in enumerate(levers):
+            if name in changes:
+                before, after = changes[name]
+                share = magnitude(name, before, after) / (scale[name] or 1.0)
+                ax.add_patch(Rectangle(
+                    (j - 0.5, i - 0.5), 1.0, 1.0,
+                    facecolor=cmap(0.35 + 0.6 * min(share, 1.0)),
+                    edgecolor="white", hatch="//" if name in categorical else None,
+                    label="_cell_filled",
+                ))
+                if annotate:
+                    text = "NaN" if math.isnan(after) else f"{after:.3g}"
+                    ax.text(j, i, text, ha="center", va="center", fontsize=7,
+                            color="white" if share > 0.55 else "0.15")
+            else:
+                ax.add_patch(Rectangle(
+                    (j - 0.5, i - 0.5), 1.0, 1.0,
+                    facecolor="0.97" if name in members else "white",
+                    edgecolor="0.85", label="_cell_empty",
+                ))
+        kind = _menu_glyph_kind(entry)
+        marker, fillstyle, _ = _MENU_GLYPHS[kind]
+        ax.plot([-0.9], [i], marker=marker, fillstyle=fillstyle, color="0.2",
+                markersize=7 if marker != "$?$" else 9, linestyle="none",
+                label=f"_glyph_{kind}")
+        if kind not in present:
+            present.append(kind)
+        if isinstance(entry, Counterfactual):
+            labels.append(f"{key}  J={entry.distance:.3g}")
+        else:
+            labels.append(key)
+
+    ax.set_xlim(-1.4, len(levers) - 0.5)
+    ax.set_ylim(len(rows) - 0.5, -0.5)
+    ax.set_xticks(range(len(levers)))
+    ax.set_xticklabels(levers, rotation=30, ha="right")
+    ax.set_yticks(range(len(rows)))
+    ax.set_yticklabels(labels, fontsize=8)
+    ax.tick_params(length=0)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    title = f"recourse menu — {total} lever set(s)"
+    if len(rows) < total:
+        title += f" (showing {len(rows)} of {total})"
+    ax.set_title(title)
+    from matplotlib.lines import Line2D
+
+    handles: list[Any] = [
+        Line2D([], [], marker=_MENU_GLYPHS[kind][0], fillstyle=_MENU_GLYPHS[kind][1],
+               color="0.2", linestyle="none", markersize=7, label=_MENU_GLYPHS[kind][2])
+        for kind in present
+    ]
+    handles.append(Rectangle((0, 0), 1, 1, facecolor=cmap(0.7), edgecolor="white",
+                             label="changed lever (shade: size of change)"))
+    ax.legend(handles=handles, loc="upper left", bbox_to_anchor=(1.01, 1.0),
+              fontsize=7, frameon=False)
+    return ax
 
 
 def plot_region(

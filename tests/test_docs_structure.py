@@ -72,6 +72,7 @@ PLOT_FUNCTIONS = [
     "plot_alternatives",
     "plot_tradeoff",
     "plot_recourse_map",
+    "plot_recourse_menu",
     "plot_waterfall",
     "plot_effort",
     "plot_region",

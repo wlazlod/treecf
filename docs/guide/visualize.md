@@ -124,6 +124,34 @@ of the feasible plans; the plot draws both panels. A group's low median cost
 means nothing without its feasibility rate alongside — the table keeps them
 together deliberately.
 
+## A recourse menu
+
+`plot_recourse_menu` draws every lever set a `recourse_menu` solved as one
+row of a matrix: a filled cell where the plan changed that lever (shaded by
+the size of the change), the plan cost on the row label, and a glyph for
+the proof the row carries — a filled square for an optimal plan, a cross for
+a set certified unable to reach the target:
+
+```python
+# exp, x, target: the docs explainer, one rejected applicant, the target
+from treecf.viz import plot_recourse_map, plot_recourse_menu
+
+menu = exp.recourse_menu(x, target=target, max_levers=2, backend="exact", seed=0)
+plot_recourse_menu(menu, explainer=exp)
+plot_recourse_map(exp, x, menu, target=target)   # the same menu, as a recourse map
+```
+
+![Lever-set by feature matrix: two feasible rows with filled cells and their costs, and nine rows marked with a cross as certified infeasible](img/plot_recourse_menu.png)
+
+A menu is a mapping in the same shape `explain_coalitions` returns, so the
+recourse map takes it unchanged — every feasible set becomes one point and
+every certified-infeasible set one grey cross:
+
+![The same menu on the recourse map: two plans as points against the target band, the certified-infeasible sets listed as grey crosses](img/plot_recourse_menu_map.png)
+
+Where the menu comes from, and what `complete` certifies:
+[Run the search](explain.md#recourse-menus-and-diverse-plans).
+
 ## Comparing multiple counterfactuals
 
 `plot_counterfactuals` overlays any list of plans for one factual:

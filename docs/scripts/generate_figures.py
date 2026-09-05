@@ -31,6 +31,7 @@ from treecf.viz import (
     plot_effort,
     plot_ladder,
     plot_recourse_map,
+    plot_recourse_menu,
     plot_region,
     plot_tradeoff,
     plot_waterfall,
@@ -107,6 +108,15 @@ def main() -> None:
     _save(
         "plot_recourse_map_schematic",
         _fig_of(plot_recourse_map(exp, x, plans, target=target, schematic=True)),
+    )
+
+    # the recourse menu, and the same menu on the recourse map: the two views
+    # of one enumeration must agree
+    menu = exp.recourse_menu(x, target=target, max_levers=2, backend="exact", seed=0)
+    _save("plot_recourse_menu", _fig_of(plot_recourse_menu(menu, explainer=exp)))
+    _save(
+        "plot_recourse_menu_map",
+        _fig_of(plot_recourse_map(exp, x, menu, target=target)),
     )
 
     ladder = exp.explain(
