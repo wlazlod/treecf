@@ -11,6 +11,8 @@ Run from anywhere: ``uv run python docs/scripts/generate_figures.py``
 from __future__ import annotations
 
 import pathlib
+import shutil
+import tempfile
 import warnings
 
 import matplotlib
@@ -20,6 +22,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from treecf import Explainer, Range, Target, TreecfWarning
+from treecf.audit import portfolio_report
 from treecf.viz import (
     plot_alternatives,
     plot_certification_trace,
@@ -43,6 +46,7 @@ from treecf.viz_batch import (
 REPO = pathlib.Path(__file__).resolve().parents[2]
 MODEL = REPO / "tests" / "fixtures" / "docs_model.json"
 OUT = REPO / "docs" / "guide" / "img"
+SAMPLES = REPO / "docs" / "guide" / "samples"
 OCCUPATIONS = ("student", "clerk", "manager", "retired")
 
 
@@ -145,6 +149,25 @@ def main() -> None:
         "plot_recourse_burden",
         _fig_of(plot_recourse_burden(batch, groups, min_group_size=3)),
     )
+
+    # the sample portfolio report: one self-contained HTML page under
+    # docs/guide/samples/, and its dominant-levers chart as the page's figure
+    SAMPLES.mkdir(parents=True, exist_ok=True)
+    portfolio_report(
+        batch, groups, explainer=exp, path=SAMPLES / "portfolio_report.html",
+        title="Sample portfolio report", min_group_size=3,
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        md_path = pathlib.Path(tmp) / "report.md"
+        portfolio_report(
+            batch, groups, explainer=exp, path=md_path, format="markdown", min_group_size=3
+        )
+        shutil.copy(
+            md_path.parent / "report_figures" / "dominant_levers.png",
+            OUT / "portfolio_report.png",
+        )
+        print(f"wrote {(OUT / 'portfolio_report.png').relative_to(REPO)}")
+    print(f"wrote {(SAMPLES / 'portfolio_report.html').relative_to(REPO)}")
 
 
 if __name__ == "__main__":

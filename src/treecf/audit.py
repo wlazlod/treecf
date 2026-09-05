@@ -27,6 +27,7 @@ import numpy as np
 import numpy.typing as npt
 
 from treecf._errors import TreecfError, TreecfWarning
+from treecf._portfolio import portfolio_report
 from treecf.constraints.objects import (
     AllowedCategories,
     AllowMissing,
@@ -51,6 +52,7 @@ __all__ = [
     "check_certificate",
     "constraints_fingerprint",
     "ir_fingerprint",
+    "portfolio_report",
 ]
 
 FloatArray = npt.NDArray[np.float64]
