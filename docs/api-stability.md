@@ -72,6 +72,9 @@ New public symbols in this release, as one running list:
   value policy when the region was built; `describe()` phrases those on the
   integers, and every phrase is now strict where a rounded endpoint would
   overstate the box.
+- `RecourseRegion.data_limited`: the sides that stopped at the observed
+  range of the explainer's background data, which now bounds every side no
+  constraint bounds; batch files round-trip the field.
 - `Explainer.search_profile(x, target=None)`: per-feature domain sizes and
   the total search-space size before an exact solve; the budget-exhaustion
   warning quotes that size.

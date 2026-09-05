@@ -86,8 +86,12 @@ res.region.feature_intervals    # {"income": (lo, hi), ...} — certified interv
 res.region.feature_categories   # {"occupation": (1, 2)} — certified category codes
 ```
 
-![Certified region per feature: intervals with caps marking whether the model or a constraint stopped each bound, and category tiles for the categorical feature](img/plot_region.png)
+![Certified region per feature: intervals with caps marking whether the model, a constraint, or the data range stopped each bound, and category tiles for the categorical feature](img/plot_region.png)
 
+A side no constraint bounds stops at the observed range of the explainer's
+background data (`res.region.data_limited` names those sides), so an
+unconstrained feature reads `in [0, 1)` rather than `< 1` over an implicit
+minus infinity; add a `Range` where the domain is known.
 Regions are sound but not monotone in the target interval, and in the
 default fast mode not maximal either —
 [the fine print](../concepts/certification.md#regions-certified-not-maximal-not-monotone).

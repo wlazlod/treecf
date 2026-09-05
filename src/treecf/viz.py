@@ -1059,6 +1059,9 @@ def plot_region(
         else not maximal_categories.get(name, False)
         for j, name, kind in rows
     )
+    show_data = any(
+        any(_data_limited_sides(region, name)) for _j, name, kind in rows if kind == "numeric"
+    )
 
     if units == "raw":
         _, axes = plt.subplots(
@@ -1073,7 +1076,7 @@ def plot_region(
             )
             strip.set_yticks([0.0])
             strip.set_yticklabels([name])
-        _region_legend(axes[0], show_caveat)
+        _region_legend(axes[0], show_caveat, show_data)
         axes[0].set_title(f"certified recourse region — {total_rows} feature(s)")
         if hidden:
             axes[-1].annotate(
@@ -1099,7 +1102,7 @@ def plot_region(
             f"(+{hidden} more)", xy=(0.99, 0.02), xycoords="axes fraction",
             ha="right", fontsize=8, color="0.4",
         )
-    _region_legend(ax, show_caveat)
+    _region_legend(ax, show_caveat, show_data)
     return ax
 
 
@@ -1208,6 +1211,7 @@ def _trace_outcome(result: Any, stats: dict[str, Any]) -> str:
 _CAP_MODEL = "stopped by the model"
 _CAP_CONSTRAINT = "stopped by a constraint"
 _CAP_PROVED = "stopped at a proved boundary"
+_CAP_DATA = "stopped at the data range"
 _CAP_CAVEAT = "certified, not necessarily maximal"
 
 
@@ -1218,13 +1222,23 @@ def _proved_sides(region: Any, name: str) -> tuple[bool, bool]:
     return bool(flags[0]), bool(flags[1])
 
 
+def _data_limited_sides(region: Any, name: str) -> tuple[bool, bool]:
+    """Which sides of ``name`` stopped at the observed data range."""
+    flags = getattr(region, "data_limited", {}).get(name, (False, False))
+    return bool(flags[0]), bool(flags[1])
+
+
 def _unproven_sides(region: Any, name: str, lo_b: float, hi_b: float) -> bool:
-    """Whether some finite side of ``name`` is neither at its instance bound
-    nor proved maximal — the case the legend's caveat line speaks to."""
+    """Whether some finite side of ``name`` is neither at its instance bound,
+    nor at the data range, nor proved maximal — the case the legend's caveat
+    line speaks to."""
     lo, hi = region.feature_intervals[name]
     proved_lo, proved_hi = _proved_sides(region, name)
-    for endpoint, bound, proved in ((lo, lo_b, proved_lo), (hi, hi_b, proved_hi)):
-        if math.isfinite(endpoint) and not _constraint_limited(endpoint, bound) and not proved:
+    data_lo, data_hi = _data_limited_sides(region, name)
+    for endpoint, bound, settled in (
+        (lo, lo_b, proved_lo or data_lo), (hi, hi_b, proved_hi or data_hi)
+    ):
+        if math.isfinite(endpoint) and not _constraint_limited(endpoint, bound) and not settled:
             return True
     return False
 
@@ -1308,7 +1322,11 @@ def _region_row(
             continue
         bound = float(lo_b[j]) if side == "lo" else float(hi_b[j])
         proved = _proved_sides(region, name)[0 if side == "lo" else 1]
-        if _constraint_limited(endpoint, bound):
+        data_limited = _data_limited_sides(region, name)[0 if side == "lo" else 1]
+        if data_limited:
+            ax.plot([drawn], [y], marker="D", color="0.45", markersize=6,
+                    zorder=4, label="_cap_data")
+        elif _constraint_limited(endpoint, bound):
             ax.plot([drawn], [y], marker="$[$" if side == "lo" else "$]$",
                     color="C3", markersize=11, zorder=4, label="_cap_constraint")
         elif proved:
@@ -1375,7 +1393,7 @@ def _categorical_tiles(
         )
 
 
-def _region_legend(ax: Any, show_caveat: bool = True) -> None:
+def _region_legend(ax: Any, show_caveat: bool = True, show_data: bool = False) -> None:
     from matplotlib.lines import Line2D
 
     handles = [
@@ -1386,6 +1404,11 @@ def _region_legend(ax: Any, show_caveat: bool = True) -> None:
         Line2D([], [], marker="s", color="C0", markersize=7, linestyle="none",
                label=_CAP_PROVED),
     ]
+    if show_data:
+        handles.append(
+            Line2D([], [], marker="D", color="0.45", markersize=6, linestyle="none",
+                   label=_CAP_DATA)
+        )
     if show_caveat:
         handles.append(Line2D([], [], linestyle="none", label=_CAP_CAVEAT))
     ax.legend(handles=handles, loc="best", fontsize=7, frameon=False)

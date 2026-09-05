@@ -57,6 +57,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   behavior, mirrored by a CONTRIBUTING checklist item; the narration test covers Rust and
   Markdown sources too.
 
+### Changed
+
+- **Regions stop at the data range where no constraint bounds them.** A side without a
+  `Range` used to grow to infinity, so an unconstrained count read `"≤ 1"` over an implicit
+  minus infinity. An explainer with `background` data now grows such a side no further than
+  the observed range (widened to include the counterfactual itself); the box is a sound
+  sub-box of the old one, `RecourseRegion.data_limited` names the sides that stopped there,
+  `describe()` marks them `"(data-limited)"`, and `plot_region` draws them with a diamond
+  cap. In the maximal mode a data-limited side counts as settled, like a `Range` bound. An
+  explainer built from `normalizers` alone is unchanged.
+
 ### Fixed
 
 - **XGBoost and CatBoost route float64 inputs as the native model does.** Both libraries cast
@@ -90,9 +101,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Invariants
 
-- Default behavior is byte-identical to the previous release: the classic exact fixtures, the
-  fast region fixtures, the genetic parity fixtures, and the committed certificate goldens are
-  untouched, and every new behavior sits behind a flag or a new function.
+- Default behavior is byte-identical to the previous release, with one deliberate exception —
+  regions grown by an explainer that has background data stop at the data range (see
+  *Changed*): the classic exact fixtures, the fast region fixtures, the genetic parity
+  fixtures, and the committed certificate goldens are untouched, and every other new behavior
+  sits behind a flag or a new function.
 - The Python and Rust engines remain byte-identical on every solve, now including the refine
   search, the maximal region mode, and the certification trace.
 

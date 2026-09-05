@@ -122,6 +122,14 @@ class RecourseRegion:
         Names of the features under an ``"integer"`` value policy when the
         region was built; ``describe()`` phrases their intervals on the
         integers.
+    data_limited
+        ``{feature: (lower side, upper side)}`` for every feature some side
+        of which stopped at the observed range of the explainer's background
+        data rather than at a constraint or at the model. A feature with no
+        ``Range`` constraint on a side is grown no further than the data
+        reaches on that side (a counterfactual outside the data still lies
+        in its box); the flag says which sides that was. Empty when the
+        explainer has no background data.
     """
 
     lo: FloatArray
@@ -139,6 +147,7 @@ class RecourseRegion:
     maximal_categories: dict[str, bool] = field(default_factory=dict)
     witnesses: dict[str, FloatArray] | None = None
     integer_features: tuple[str, ...] = ()
+    data_limited: dict[str, tuple[bool, bool]] = field(default_factory=dict)
 
     def contains(self, x: FloatArray) -> bool:
         """Whether ``x`` lies inside the region, coordinate by coordinate.
@@ -184,7 +193,9 @@ class RecourseRegion:
         feature in ``integer_features`` is phrased on the integers the box
         contains (``"= 0"``, ``"≤ 0"``, ``"in [2, 4]"``). A feature whose
         every side the maximal mode proved carries the suffix
-        ``" (maximal)"``.
+        ``" (maximal)"``, and one some side of which stopped at the data
+        range ``" (data-limited)"`` (``" (maximal, data-limited)"`` for
+        both).
 
         Returns
         -------
@@ -196,8 +207,13 @@ class RecourseRegion:
                 out[name] = _integer_phrase(lo, hi)
             else:
                 out[name] = _interval_phrase(lo, hi)
+            notes = []
             if self.maximal.get(name) == (True, True):
-                out[name] += " (maximal)"
+                notes.append("maximal")
+            if any(self.data_limited.get(name, (False, False))):
+                notes.append("data-limited")
+            if notes:
+                out[name] += f" ({', '.join(notes)})"
         for name, codes in self.feature_categories.items():
             names = self.category_names.get(name)
             rendered = (
@@ -543,6 +559,7 @@ def _recourse_region(
     budget: int = 100_000,
     keep_witnesses: bool = False,
     integer_features: Sequence[str] = (),
+    data_bounds: tuple[FloatArray, FloatArray] | None = None,
 ) -> RecourseRegion:
     """Grow a certified box around the verified counterfactual ``x_cf``.
 
@@ -572,6 +589,11 @@ def _recourse_region(
     budgeted emptiness search of at most ``budget`` sub-boxes per side (see
     the module docstring); ``keep_witnesses`` keeps the violating point found
     for each proved side.
+
+    ``data_bounds`` (per-feature observed minimum and maximum, NaN where
+    unknown) stand in for the instance bounds on every side no constraint
+    bounds, widened to include ``x_cf`` itself; the sides that stopped there
+    are reported in ``RecourseRegion.data_limited``.
     """
     from treecf.backends.regions_rust import _rust_available, compute_region_rust
 
@@ -583,6 +605,19 @@ def _recourse_region(
     lo_b, hi_b, frozen = compiled.instance_bounds(x)
     lo_b = np.where(np.isnan(lo_b), -math.inf, lo_b)
     hi_b = np.where(np.isnan(hi_b), math.inf, hi_b)
+    data_lo_side = [False] * len(x_cf)
+    data_hi_side = [False] * len(x_cf)
+    if data_bounds is not None:
+        data_lo, data_hi = data_bounds
+        for j in range(len(x_cf)):
+            if j in ir.categorical or math.isnan(x_cf[j]):
+                continue
+            if lo_b[j] == -math.inf and not math.isnan(data_lo[j]):
+                lo_b[j] = min(float(data_lo[j]), float(x_cf[j]))
+                data_lo_side[j] = True
+            if hi_b[j] == math.inf and not math.isnan(data_hi[j]):
+                hi_b[j] = max(float(data_hi[j]), float(x_cf[j]))
+                data_hi_side[j] = True
     degenerate = _degenerate_features(compiled, frozen, lo_b, hi_b, x_cf)
     # categorical coordinates are always pinned for the numeric machinery
     # (lo = hi = the counterfactual's code); their growth is a separate
@@ -606,6 +641,14 @@ def _recourse_region(
         for j in range(len(x_cf))
         if j not in degenerate
     }
+    data_limited: dict[str, tuple[bool, bool]] = {}
+    for j in range(len(x_cf)):
+        if j in degenerate:
+            continue
+        at_lo = data_lo_side[j] and float(box_lo[j]) == float(lo_b[j])
+        at_hi = data_hi_side[j] and float(box_hi[j]) == float(hi_b[j])
+        if at_lo or at_hi:
+            data_limited[compiled.feature_names[j]] = (at_lo, at_hi)
     cat_sets = {j: tuple(sorted(members)) for j, members in sorted(grown_sets.items())}
     feature_categories = {
         compiled.feature_names[j]: codes for j, codes in cat_sets.items()
@@ -642,6 +685,7 @@ def _recourse_region(
         maximal_categories=maximal_categories,
         witnesses=witnesses,
         integer_features=tuple(integer_features),
+        data_limited=data_limited,
     )
 
 

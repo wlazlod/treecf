@@ -190,10 +190,20 @@ the fast one. `RecourseRegion.maximal`, `maximal_categories`, and `witnesses` ca
 findings, and certificates store the flags as additive keys. Non-monotonicity stands in both
 modes.
 
+A side no constraint bounds is grown no further than the explainer's background data reaches
+on that side (widened to include the counterfactual itself), so a feature without a `Range`
+does not come back as `(-inf, 1)` when every observed value is non-negative: the box is a
+sound sub-box of what the model alone would allow, and `RecourseRegion.data_limited` names
+the sides that stopped there. In the maximal mode such a side counts as settled, the way a
+`Range` bound does. An explainer built from `normalizers` alone has no data range, and every
+unconstrained side then runs to infinity.
+
 `region.describe()` gives one human-readable phrase per non-degenerate feature — two-sided
 (`"in [lo, hi]"`) when both endpoints are finite, one-sided (`"≤ v"` / `"≥ v"`) *only* when
 the other side is genuinely unbounded, not merely wide, and `"unconstrained"` when both
-endpoints are unbounded. `plot_recourse_map(..., schematic=True)`
+endpoints are unbounded; a phrase is strict (`"< 1"`, `"in [0, 1)"`) wherever a rounded
+endpoint would otherwise overstate the box, integer-policy features are phrased on the
+integers, and a data-limited feature carries the suffix `"(data-limited)"`. `plot_recourse_map(..., schematic=True)`
 reads these phrases directly when a plan carries a region, in place of the single-value wording
 it otherwise falls back to.
 

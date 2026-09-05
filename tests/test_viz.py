@@ -1148,6 +1148,35 @@ class TestPlotRegion:
         assert proved_caps and not model_caps
         assert all(ln.get_marker() == "s" for ln in proved_caps)
 
+    def test_data_limited_sides_get_their_own_cap_and_settle_the_caveat(self) -> None:
+        from dataclasses import replace
+
+        from treecf.viz import plot_region
+
+        exp, x, x_cf, region = self._setup()
+        # income stopped at the data range on both sides; utilization's finite
+        # side is proved and its other side open: nothing left unsettled
+        limited = replace(
+            region,
+            data_limited={"income": (True, True)},
+            maximal={"utilization": (True, False)},
+        )
+        ax = plot_region(exp, x, (limited, x_cf))
+        labels = [t.get_text() for t in ax.get_legend().get_texts()]
+        assert "stopped at the data range" in labels
+        assert "certified, not necessarily maximal" not in labels
+        data_caps = [ln for ln in ax.lines if ln.get_label() == "_cap_data"]
+        model_caps = [ln for ln in ax.lines if ln.get_label() == "_cap_model"]
+        assert len(data_caps) == 2 and not model_caps
+
+    def test_legend_omits_the_data_cap_when_no_side_stopped_there(self) -> None:
+        from treecf.viz import plot_region
+
+        exp, x, x_cf, region = self._setup()
+        ax = plot_region(exp, x, (region, x_cf))
+        labels = [t.get_text() for t in ax.get_legend().get_texts()]
+        assert "stopped at the data range" not in labels
+
     def test_one_unproven_side_keeps_the_caveat(self) -> None:
         from dataclasses import replace
 

@@ -15,6 +15,7 @@ from treecf import (
     Infeasible,
     Linear,
     OneHot,
+    Range,
     RecourseRegion,
     Target,
     TreecfError,
@@ -172,6 +173,76 @@ class TestMaximalityFields:
         assert described["a"] == "in [1, 3] (maximal)"
         assert described["b"] == "in [2, 5]"
         assert described["c"] == "∈ {0, 1} (maximal)"
+
+    def test_describe_names_data_limited_sides(self) -> None:
+        region = RecourseRegion(
+            lo=np.array([1.0, 0.0]), hi=np.array([3.0, 2.0]),
+            feature_intervals={"a": (1.0, 3.0), "b": (0.0, 2.0)},
+            certified=True,
+            maximal={"a": (True, True)},
+            data_limited={"a": (False, True), "b": (True, False)},
+        )
+        described = region.describe()
+        assert described["a"] == "in [1, 3] (maximal, data-limited)"
+        assert described["b"] == "in [0, 2] (data-limited)"
+
+
+class TestDataBounds:
+    """Without a Range on a feature, growth stops at the observed range of the
+    explainer's background data instead of running to infinity."""
+
+    @staticmethod
+    def _background() -> np.ndarray:
+        rng = np.random.default_rng(0)
+        bg = np.column_stack([
+            rng.uniform(0.0, 5.0, size=50),
+            rng.uniform(0.0, 3.0, size=50),
+            rng.uniform(-2.0, 2.0, size=50),
+        ])
+        bg[0] = [0.0, 0.0, -2.0]
+        bg[1] = [5.0, 3.0, 2.0]
+        return bg
+
+    def test_sides_without_a_constraint_stop_at_the_data_range(self) -> None:
+        exp = Explainer(_ir(), background=self._background())
+        res = exp.explain(x0, TARGET, seed=0, region=True)
+        assert isinstance(res, Counterfactual) and res.region is not None
+        region = res.region
+        assert region.feature_intervals["a"] == (1.0, 5.0)  # lower side: the model's split
+        assert region.feature_intervals["b"] == (0.0, 3.0)
+        assert region.feature_intervals["c"] == (-2.0, 2.0)
+        assert region.data_limited == {
+            "a": (False, True), "b": (True, True), "c": (True, True),
+        }
+        described = region.describe()
+        assert described["a"] == "in [1, 5] (data-limited)"
+        assert described["b"] == "in [0, 3] (data-limited)"
+
+    def test_a_range_constraint_wins_over_the_data(self) -> None:
+        exp = Explainer(
+            _ir(), background=self._background(), constraints=[Range("b", 0.0, 10.0)]
+        )
+        res = exp.explain(x0, TARGET, seed=0, region=True)
+        assert isinstance(res, Counterfactual) and res.region is not None
+        assert res.region.feature_intervals["b"] == (0.0, 10.0)
+        assert "b" not in res.region.data_limited
+
+    def test_a_counterfactual_outside_the_data_still_lies_in_its_box(self) -> None:
+        bg = self._background()
+        bg[:, 1] += 10.0  # b observed in [10, 13]; the counterfactual keeps b at 0
+        exp = Explainer(_ir(), background=bg)
+        res = exp.explain(x0, Target.raw(range=(0.9, 1.5)), seed=0, region=True)
+        assert isinstance(res, Counterfactual) and res.region is not None
+        lo, hi = res.region.feature_intervals["b"]
+        assert lo == 0.0 and hi < 1.0
+        assert res.region.data_limited["b"] == (True, False)
+        assert res.region.contains(res.x_cf)
+
+    def test_without_background_nothing_changes(self, exp: Explainer) -> None:
+        res = exp.explain(x0, TARGET, seed=0, region=True)
+        assert isinstance(res, Counterfactual) and res.region is not None
+        assert res.region.feature_intervals["b"] == (-math.inf, math.inf)
+        assert res.region.data_limited == {}
 
 
 class TestContains:

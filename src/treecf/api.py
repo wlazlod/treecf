@@ -500,6 +500,9 @@ class Explainer:
         )
         if self.background is not None:
             validate_feature_matrix(self.ir, self.background, where="background")
+        self._data_bounds = (
+            None if self.background is None else _observed_bounds(self.background)
+        )
         self.sigma = _resolve_sigma(names, background, normalizers, frozenset(self.ir.categorical))
         self.weights = np.array([(weights or {}).get(name, 1.0) for name in names])
         self.value_policy = value_policy or {}
@@ -1466,6 +1469,12 @@ class Explainer:
         wider region on some feature. See
         [Certification](../concepts/certification.md#regions-certified-not-maximal-not-monotone).
 
+        A side no constraint bounds is grown no further than the explainer's
+        background data reaches on that side (widened to include ``x_cf``
+        itself), so a feature without a ``Range`` does not come back
+        unbounded; ``RecourseRegion.data_limited`` names those sides. With
+        no background data every such side runs to infinity.
+
         ``mode="fast"`` (the default) stops a side as soon as the conservative
         interval bound fails, so the region is sound but not necessarily
         maximal. ``mode="maximal"`` settles every such side with a budgeted
@@ -1677,7 +1686,7 @@ class Explainer:
         return _recourse_region(
             self.ir, x, x_cf, interval, self.compiled, if_ir, min_total_path,
             cache=self._rust_cache, mode=mode, budget=budget, keep_witnesses=keep_witnesses,
-            integer_features=integer_features,
+            integer_features=integer_features, data_bounds=self._data_bounds,
         )
 
     def _apply_value_policies(
@@ -1792,6 +1801,16 @@ def _snap(
         if in_cell(c) and lo <= c <= hi:
             return c
     return None
+
+
+def _observed_bounds(background: FloatArray) -> tuple[FloatArray, FloatArray]:
+    """Per-feature minimum and maximum over the finite entries of
+    ``background``; NaN for a column with no finite entry."""
+    finite = np.isfinite(background)
+    any_finite = finite.any(axis=0)
+    lo = np.where(any_finite, np.min(np.where(finite, background, math.inf), axis=0), math.nan)
+    hi = np.where(any_finite, np.max(np.where(finite, background, -math.inf), axis=0), math.nan)
+    return lo.astype(np.float64), hi.astype(np.float64)
 
 
 def _resolve_sigma(

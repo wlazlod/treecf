@@ -280,6 +280,10 @@ class BatchResult:
                                 }
                             ),
                             "integer_features": list(record.region.integer_features),
+                            "data_limited": {
+                                name: [bool(lo_ok), bool(hi_ok)]
+                                for name, (lo_ok, hi_ok) in record.region.data_limited.items()
+                            },
                         }
                     ),
                 }
@@ -361,6 +365,10 @@ class BatchResult:
                     integer_features=tuple(
                         str(n) for n in raw_region.get("integer_features", ())
                     ),
+                    data_limited={
+                        name: (bool(lo_ok), bool(hi_ok))
+                        for name, (lo_ok, hi_ok) in raw_region.get("data_limited", {}).items()
+                    },
                 )
             )
             records.append(
