@@ -59,6 +59,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **XGBoost and CatBoost route float64 inputs as the native model does.** Both libraries cast
+  inputs to float32 before comparing against a split, so a float64 value within half a float32
+  ulp of a threshold used to route one way natively and the other way in the IR — enough to
+  flip leaves on a fraction of real training rows and to hand back counterfactuals whose
+  verified score the native model did not reproduce. The parsers now store the float64
+  boundary of that cast (the mechanism the sklearn parser already used), and the conformance
+  suites probe unquantized float64 neighbours of every threshold for all three libraries.
 - **Parser errors are normalized.** A malformed model dump now raises `ParserError` naming the
   format and the cause where it used to leak a bare `KeyError`, `IndexError`, `TypeError`,
   `ValueError`, or `ZeroDivisionError` — a scalar at the top level, a missing key, a truncated

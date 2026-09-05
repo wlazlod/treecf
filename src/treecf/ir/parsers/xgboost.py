@@ -24,6 +24,7 @@ import numpy as np
 
 from treecf._errors import UnsupportedModelError
 from treecf.ir.model import CategoricalFeature, EnsembleIR, Link, Node, SplitOp, Tree
+from treecf.ir.parsers._float32 import effective_lt_threshold
 
 _OBJECTIVE_LINKS = {
     "binary:logistic": Link.SIGMOID,
@@ -133,6 +134,8 @@ def _parse_tree(tree: dict[str, Any], max_code: dict[int, int]) -> Tree:
         # JSON stores float32 values as shortest decimals; parsing them as float64
         # yields numbers off the float32 grid, which flips routing for inputs equal
         # to a threshold. Cast through float32 to recover XGBoost's exact values.
+        # A split threshold is then re-expressed as the float64 boundary of the
+        # float32 cast XGBoost applies to its *inputs* (see ``_float32``).
         condition = float(np.float32(split_conditions[i]))
         if left[i] == -1:
             # Leaf: the JSON schema stores the leaf value in split_conditions.
@@ -177,7 +180,7 @@ def _parse_tree(tree: dict[str, Any], max_code: dict[int, int]) -> Tree:
             Node(
                 node_id=i,
                 feature=int(split_indices[i]),
-                threshold=condition,
+                threshold=effective_lt_threshold(condition),
                 op=SplitOp.LT,
                 missing_left=bool(default_left[i]),
                 left=int(left[i]),

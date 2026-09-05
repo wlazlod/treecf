@@ -174,3 +174,15 @@ def test_declared_cardinality_beyond_training_codes() -> None:
     assert_conformance(
         ir, X, lambda A: booster.predict(_cat_dmatrix(A, feature_types))
     )  # probes now include codes 4 and 5
+
+
+@pytest.mark.parametrize("objective", ["binary:logistic", "reg:squarederror"])
+def test_booster_unquantized_probes(objective: str) -> None:
+    """float64 inputs within half a float32 ulp of a split must route the way
+    XGBoost routes them after its own float32 cast."""
+    booster = _train_booster(objective)
+    X, _, _ = make_synthetic(seed=7)
+    ir = parse_model(booster)
+    assert_conformance(
+        ir, X, lambda A: booster.predict(xgb.DMatrix(A)), n_random=3000, quantize=False
+    )
