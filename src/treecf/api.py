@@ -1671,9 +1671,13 @@ class Explainer:
         plaus = self._plausibility_bound()
         if plaus is not None:
             if_ir, min_total_path = plaus
+        integer_features = tuple(
+            name for name in self.ir.feature_names if self.value_policy.get(name) == "integer"
+        )
         return _recourse_region(
             self.ir, x, x_cf, interval, self.compiled, if_ir, min_total_path,
             cache=self._rust_cache, mode=mode, budget=budget, keep_witnesses=keep_witnesses,
+            integer_features=integer_features,
         )
 
     def _apply_value_policies(

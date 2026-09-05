@@ -66,6 +66,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   verified score the native model did not reproduce. The parsers now store the float64
   boundary of that cast (the mechanism the sklearn parser already used), and the conformance
   suites probe unquantized float64 neighbours of every threshold for all three libraries.
+- **`RecourseRegion.describe()` never overstates the box.** An endpoint that rounds to a value
+  outside the interval is phrased strictly (`"< 1"`, `"in [0, 1)"`) instead of rounding a
+  boundary one float32 ulp below 1 up to `"≤ 1"`; features under an `"integer"` value policy
+  are phrased on the integers the box contains (`"= 0"`, `"≤ 0"`, `"in [2, 4]"`), recorded in
+  the new `RecourseRegion.integer_features` field, which batch files round-trip.
 - **Parser errors are normalized.** A malformed model dump now raises `ParserError` naming the
   format and the cause where it used to leak a bare `KeyError`, `IndexError`, `TypeError`,
   `ValueError`, or `ZeroDivisionError` — a scalar at the top level, a missing key, a truncated

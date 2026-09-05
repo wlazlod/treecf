@@ -68,6 +68,10 @@ New public symbols in this release, as one running list:
   each side (`None` unless kept); certificates store the flags under
   `plan.region_maximal` and `plan.region_maximal_categories` without a
   schema bump.
+- `RecourseRegion.integer_features`: the features under an `"integer"`
+  value policy when the region was built; `describe()` phrases those on the
+  integers, and every phrase is now strict where a rounded endpoint would
+  overstate the box.
 - `Explainer.search_profile(x, target=None)`: per-feature domain sizes and
   the total search-space size before an exact solve; the budget-exhaustion
   warning quotes that size.

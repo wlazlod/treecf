@@ -94,6 +94,59 @@ class TestDescribe:
         )
         assert set(region.describe()) == {"b"}
 
+    def test_an_endpoint_that_rounds_outside_the_box_is_shown_as_strict(self) -> None:
+        # a box ending one float32 ulp below 1 must not read as "1 is fine"
+        just_below = float(np.nextafter(np.float32(1.0), np.float32(0.0)))
+        just_above = float(np.nextafter(np.float32(2.0), np.float32(3.0)))
+        region = RecourseRegion(
+            lo=np.array([0.0, -math.inf, just_above, just_above]),
+            hi=np.array([just_below, just_below, math.inf, 5.0]),
+            feature_intervals={
+                "two_sided": (0.0, just_below),
+                "upper": (-math.inf, just_below),
+                "lower": (just_above, math.inf),
+                "both_strict": (just_above, 5.0),
+            },
+            certified=True,
+        )
+        assert region.describe() == {
+            "two_sided": "in [0, 1)",
+            "upper": "< 1",
+            "lower": "> 2",
+            "both_strict": "in (2, 5]",
+        }
+
+    def test_integer_features_are_described_on_the_integers(self) -> None:
+        just_below = float(np.nextafter(np.float32(1.0), np.float32(0.0)))
+        region = RecourseRegion(
+            lo=np.array([0.0, -math.inf, 1.5, 2.0]),
+            hi=np.array([just_below, just_below, math.inf, 4.7]),
+            feature_intervals={
+                "single": (0.0, just_below),
+                "upper": (-math.inf, just_below),
+                "lower": (1.5, math.inf),
+                "span": (2.0, 4.7),
+            },
+            certified=True,
+            integer_features=("single", "upper", "lower", "span"),
+        )
+        assert region.describe() == {
+            "single": "= 0",
+            "upper": "≤ 0",
+            "lower": "≥ 2",
+            "span": "in [2, 4]",
+        }
+
+    def test_explain_marks_integer_policy_features(self) -> None:
+        exp = Explainer(_ir(), normalizers=np.ones(3), value_policy={"b": "integer"})
+        # a must move to 1; b must stay below its split or the score overshoots
+        res = exp.explain(x0, Target.raw(range=(0.9, 1.5)), seed=0, region=True)
+        assert isinstance(res, Counterfactual) and res.region is not None
+        assert res.region.integer_features == ("b",)
+        described = res.region.describe()
+        assert described["b"] == "≤ 0"
+        assert described["c"] == "< 1"
+
 
 class TestMaximalityFields:
     def test_defaults_claim_nothing(self) -> None:

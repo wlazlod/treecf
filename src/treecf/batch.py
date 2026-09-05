@@ -279,6 +279,7 @@ class BatchResult:
                                     for key, point in record.region.witnesses.items()
                                 }
                             ),
+                            "integer_features": list(record.region.integer_features),
                         }
                     ),
                 }
@@ -355,6 +356,10 @@ class BatchResult:
                             key: np.asarray(decode_floats(point), dtype=np.float64)
                             for key, point in raw_region["witnesses"].items()
                         }
+                    ),
+                    # absent in files written before integer phrasing existed
+                    integer_features=tuple(
+                        str(n) for n in raw_region.get("integer_features", ())
                     ),
                 )
             )

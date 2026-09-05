@@ -40,7 +40,7 @@ genuinely unsound.
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -118,6 +118,10 @@ class RecourseRegion:
         each proved side, one point just past it that leaves the target
         or violates a constraint; ``None`` unless the region was asked to
         keep them.
+    integer_features
+        Names of the features under an ``"integer"`` value policy when the
+        region was built; ``describe()`` phrases their intervals on the
+        integers.
     """
 
     lo: FloatArray
@@ -134,6 +138,7 @@ class RecourseRegion:
     maximal: dict[str, tuple[bool, bool]] = field(default_factory=dict)
     maximal_categories: dict[str, bool] = field(default_factory=dict)
     witnesses: dict[str, FloatArray] | None = None
+    integer_features: tuple[str, ...] = ()
 
     def contains(self, x: FloatArray) -> bool:
         """Whether ``x`` lies inside the region, coordinate by coordinate.
@@ -169,11 +174,17 @@ class RecourseRegion:
     def describe(self) -> dict[str, str]:
         """One human-readable phrase per non-degenerate feature.
 
-        One-sided (``"<= v"``/``">= v"``) when the other endpoint is
+        One-sided (``"≤ v"``/``"≥ v"``) when the other endpoint is
         infinite, two-sided (``"in [lo, hi]"``) otherwise, and
-        ``"unconstrained"`` when both endpoints are infinite; values
-        formatted ``"{:.3g}"``. A feature whose every side the maximal mode
-        proved carries the suffix ``" (maximal)"``.
+        ``"unconstrained"`` when both endpoints are infinite; values are
+        shown to three significant digits. A shown value never overstates
+        the box: an endpoint that rounds to a value outside the interval is
+        phrased strictly (``"< 1"``, ``"in [0, 1)"``), so a box that stops
+        one float32 ulp below 1 does not read as if 1 were inside it. A
+        feature in ``integer_features`` is phrased on the integers the box
+        contains (``"= 0"``, ``"≤ 0"``, ``"in [2, 4]"``). A feature whose
+        every side the maximal mode proved carries the suffix
+        ``" (maximal)"``.
 
         Returns
         -------
@@ -181,14 +192,10 @@ class RecourseRegion:
         """
         out: dict[str, str] = {}
         for name, (lo, hi) in self.feature_intervals.items():
-            if lo == -math.inf and hi == math.inf:
-                out[name] = "unconstrained"
-            elif lo == -math.inf:
-                out[name] = f"≤ {hi:.3g}"
-            elif hi == math.inf:
-                out[name] = f"≥ {lo:.3g}"
+            if name in self.integer_features:
+                out[name] = _integer_phrase(lo, hi)
             else:
-                out[name] = f"in [{lo:.3g}, {hi:.3g}]"
+                out[name] = _interval_phrase(lo, hi)
             if self.maximal.get(name) == (True, True):
                 out[name] += " (maximal)"
         for name, codes in self.feature_categories.items():
@@ -202,6 +209,46 @@ class RecourseRegion:
             if self.maximal_categories.get(name):
                 out[name] += " (maximal)"
         return out
+
+
+def _shown(value: float, *, upper: bool) -> tuple[str, bool]:
+    """``value`` to three significant digits, and whether the shown number
+    lies outside the interval on that side (so the phrase must be strict)."""
+    text = f"{value:.3g}"
+    shown = float(text)
+    return text, (shown > value if upper else shown < value)
+
+
+def _interval_phrase(lo: float, hi: float) -> str:
+    if lo == -math.inf and hi == math.inf:
+        return "unconstrained"
+    if lo == -math.inf:
+        text, strict = _shown(hi, upper=True)
+        return f"{'<' if strict else '≤'} {text}"
+    if hi == math.inf:
+        text, strict = _shown(lo, upper=False)
+        return f"{'>' if strict else '≥'} {text}"
+    lo_text, lo_strict = _shown(lo, upper=False)
+    hi_text, hi_strict = _shown(hi, upper=True)
+    return f"in {'(' if lo_strict else '['}{lo_text}, {hi_text}{')' if hi_strict else ']'}"
+
+
+def _integer_phrase(lo: float, hi: float) -> str:
+    """The integers of ``[lo, hi]``; falls back to the plain phrase when the
+    interval holds none."""
+    lo_int = None if lo == -math.inf else math.ceil(lo)
+    hi_int = None if hi == math.inf else math.floor(hi)
+    if lo_int is None and hi_int is None:
+        return "unconstrained"
+    if lo_int is None:
+        return f"≤ {hi_int}"
+    if hi_int is None:
+        return f"≥ {lo_int}"
+    if lo_int > hi_int:
+        return _interval_phrase(lo, hi)
+    if lo_int == hi_int:
+        return f"= {lo_int}"
+    return f"in [{lo_int}, {hi_int}]"
 
 
 def _is_order_pair(lin: ResolvedLinear) -> bool:
@@ -495,6 +542,7 @@ def _recourse_region(
     mode: str = "fast",
     budget: int = 100_000,
     keep_witnesses: bool = False,
+    integer_features: Sequence[str] = (),
 ) -> RecourseRegion:
     """Grow a certified box around the verified counterfactual ``x_cf``.
 
@@ -593,6 +641,7 @@ def _recourse_region(
         maximal=maximal,
         maximal_categories=maximal_categories,
         witnesses=witnesses,
+        integer_features=tuple(integer_features),
     )
 
 

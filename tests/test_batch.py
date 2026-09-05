@@ -433,6 +433,7 @@ class TestPersistence:
                 maximal={name: (True, False)},
                 maximal_categories={},
                 witnesses={f"{name}:lo": np.array([1.0, math.nan, 3.0])},
+                integer_features=(name,),
             )
             flagged_records.append(dc_replace(record, region=region))
         flagged = dc_replace(batch, records=tuple(flagged_records))
@@ -444,6 +445,7 @@ class TestPersistence:
             assert restored.region is not None
             assert restored.region.maximal == original.region.maximal
             assert restored.region.maximal_categories == {}
+            assert restored.region.integer_features == original.region.integer_features
             assert restored.region.witnesses is not None
             for key, point in original.region.witnesses.items():
                 np.testing.assert_array_equal(restored.region.witnesses[key], point)
@@ -451,7 +453,7 @@ class TestPersistence:
             raw = json.load(fh)
         for record in raw["records"]:
             if record["region"] is not None:
-                for key in ("maximal", "maximal_categories", "witnesses"):
+                for key in ("maximal", "maximal_categories", "witnesses", "integer_features"):
                     record["region"].pop(key, None)
         with open(path, "w", encoding="utf-8") as fh:
             json.dump(raw, fh)
@@ -459,6 +461,7 @@ class TestPersistence:
             if restored.region is not None:
                 assert restored.region.maximal == {}
                 assert restored.region.witnesses is None
+                assert restored.region.integer_features == ()
 
         # a file saved without region=True (or by an older version) has no
         # "region" key per record at all -- the loader must not choke on it.
