@@ -418,3 +418,91 @@ class TestCategoricalRegionSoundness:
                             f"seed {seed}: certified point {point} scores {s} "
                             f"outside {interval}"
                         )
+
+
+# --------------------------------------------------------------------------
+# Maximal mode: extended slabs stay sound, witnesses really violate, flags
+# and witnesses agree.
+# --------------------------------------------------------------------------
+
+
+def _maximal_region(
+    exp: Explainer, x: np.ndarray, x_cf: np.ndarray, target: Target
+) -> RecourseRegion:
+    from treecf.regions import _recourse_region
+
+    interval = target.raw_interval(exp.ir.link)
+    plausibility = exp._plausibility_bound()
+    if_ir, min_total_path = (None, 0.0) if plausibility is None else plausibility
+    return _recourse_region(
+        exp.ir, x, x_cf, interval, exp.compiled, if_ir, min_total_path,
+        mode="maximal", budget=2_000, keep_witnesses=True,
+    )
+
+
+def _violates(exp: Explainer, x: np.ndarray, z: np.ndarray, target: Target) -> bool:
+    interval = target.raw_interval(exp.ir.link)
+    if exp._verify(x, z, interval) is not None:
+        return True
+    plausibility = exp._plausibility_bound()
+    if plausibility is None:
+        return False
+    if_ir, min_total_path = plausibility
+    return bool(raw_score(if_ir, z) < min_total_path)
+
+
+@settings(max_examples=25, deadline=None)
+@given(seed=st.integers(min_value=0, max_value=1_000_000))
+def test_maximal_region_samples_stay_feasible(seed: int) -> None:
+    case = _feasible_case(seed)
+    if case is None:
+        return
+    exp, x, target, result = case
+    region = _maximal_region(exp, x, result.x_cf, target)
+    assert region.contains(result.x_cf)
+    rng = np.random.default_rng(seed)
+    for z in _sample_points(rng, result.x_cf, region, _non_degenerate(exp, region)):
+        assert not _violates(exp, x, z, target), f"seed {seed}: sample {z} is not sound"
+
+
+@settings(max_examples=25, deadline=None)
+@given(seed=st.integers(min_value=0, max_value=1_000_000))
+def test_maximal_witnesses_really_violate(seed: int) -> None:
+    case = _feasible_case(seed)
+    if case is None:
+        return
+    exp, x, target, result = case
+    region = _maximal_region(exp, x, result.x_cf, target)
+    assert region.witnesses is not None
+    for key, point in region.witnesses.items():
+        assert not region.contains(point), f"seed {seed}: witness {key} lies inside the region"
+        assert _violates(exp, x, point, target), f"seed {seed}: witness {key} does not violate"
+
+
+@settings(max_examples=25, deadline=None)
+@given(seed=st.integers(min_value=0, max_value=1_000_000))
+def test_maximal_flags_and_witnesses_agree(seed: int) -> None:
+    """A finite side flagged proved and strictly inside its instance bounds
+    carries a witness; a side not flagged carries none."""
+    case = _feasible_case(seed)
+    if case is None:
+        return
+    exp, x, target, result = case
+    region = _maximal_region(exp, x, result.x_cf, target)
+    assert region.witnesses is not None
+    lo_b, hi_b, _ = exp.compiled.instance_bounds(x)
+    index = {name: j for j, name in enumerate(exp.ir.feature_names)}
+    assert set(region.maximal) == set(region.feature_intervals)
+    for name, (lo, hi) in region.feature_intervals.items():
+        j = index[name]
+        proved_lo, proved_hi = region.maximal[name]
+        for side, endpoint, proved, bound in (
+            ("lo", lo, proved_lo, lo_b[j]), ("hi", hi, proved_hi, hi_b[j]),
+        ):
+            has_witness = f"{name}:{side}" in region.witnesses
+            if not proved:
+                assert not has_witness, f"seed {seed}: unproven {name}:{side} has a witness"
+            elif math.isfinite(endpoint) and not (
+                not math.isnan(bound) and endpoint == bound
+            ):
+                assert has_witness, f"seed {seed}: proved {name}:{side} has no witness"

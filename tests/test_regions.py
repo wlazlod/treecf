@@ -402,11 +402,112 @@ class TestBatchRegion:
             assert record.region is None
 
 
+class TestMaximalMode:
+    """The maximal mode settles every side the conservative bound stops:
+    extends it when a budgeted search finds no violating point, proves it
+    with a witness otherwise, and reports a side it could not decide."""
+
+    @staticmethod
+    def _xor_ir() -> EnsembleIR:
+        """Score 0 on the diagonal cells (a<1, b<1) and (a>=1, b>=1), 1 off it."""
+        tree3 = Tree(
+            nodes=(
+                Node(0, 0, 1.0, SplitOp.LT, True, 1, 2, None),
+                _leaf(1, 0.0),
+                Node(2, 1, 1.0, SplitOp.LT, True, 3, 4, None),
+                _leaf(3, 0.0),
+                _leaf(4, -2.0),
+            )
+        )
+        return EnsembleIR(
+            trees=(_stump(0, 1.0, 1.0), _stump(1, 1.0, 1.0), tree3),
+            base_score=0.0,
+            link=Link.IDENTITY,
+            n_features=2,
+            feature_names=("a", "b"),
+            meta={},
+        )
+
+    def _region(self, interval, mode="maximal", budget=100_000, keep_witnesses=True,
+                constraints=()):
+        from treecf.constraints.compile import compile_constraints
+        from treecf.regions import _recourse_region
+
+        ir = self._xor_ir()
+        compiled = compile_constraints(constraints, ir.feature_names)
+        x_cf = np.zeros(2)
+        return _recourse_region(
+            ir, x_cf, x_cf, interval, compiled, None, 0.0,
+            mode=mode, budget=budget, keep_witnesses=keep_witnesses,
+        )
+
+    def test_fast_mode_stops_where_the_bound_fails(self) -> None:
+        region = self._region((-0.5, 1.5), mode="fast")
+        assert region.feature_intervals["a"] == (-math.inf, math.inf)
+        assert region.feature_intervals["b"][1] < 1.0
+        assert region.maximal == {} and region.witnesses is None
+
+    def test_search_extends_a_side_the_bound_rejected(self) -> None:
+        region = self._region((-0.5, 1.5))
+        assert region.feature_intervals == {
+            "a": (-math.inf, math.inf), "b": (-math.inf, math.inf),
+        }
+        assert region.maximal == {"a": (True, True), "b": (True, True)}
+        assert region.witnesses == {}
+
+    def test_witnesses_prove_the_sides_that_cannot_extend(self) -> None:
+        region = self._region((-0.5, 0.5))
+        assert region.feature_intervals["a"][1] < 1.0
+        assert region.feature_intervals["b"][1] < 1.0
+        assert region.maximal == {"a": (True, True), "b": (True, True)}
+        assert region.witnesses is not None
+        assert set(region.witnesses) == {"a:hi", "b:hi"}
+        np.testing.assert_array_equal(region.witnesses["a:hi"], [1.0, 0.0])
+        np.testing.assert_array_equal(region.witnesses["b:hi"], [0.0, 1.0])
+        for point in region.witnesses.values():
+            assert not region.contains(point)
+
+    def test_witnesses_are_dropped_unless_asked_for(self) -> None:
+        region = self._region((-0.5, 0.5), keep_witnesses=False)
+        assert region.witnesses is None
+        assert region.maximal == {"a": (True, True), "b": (True, True)}
+
+    def test_budget_leaves_a_side_unproven(self) -> None:
+        tight = self._region((-0.5, 1.5), budget=2)
+        assert tight.maximal["b"] == (True, False)
+        assert tight.feature_intervals["b"][1] < 1.0
+        enough = self._region((-0.5, 1.5), budget=3)
+        assert enough.maximal["b"] == (True, True)
+
+    def test_order_pair_corner_is_a_witness_without_any_search(self) -> None:
+        from treecf.constraints import Linear
+
+        region = self._region(
+            (-0.5, 0.5), constraints=[Linear({"a": 1.0, "b": -1.0}, "<=", 0.0)],
+        )
+        # the corner that breaks a <= b: a just past its factual, b unchanged
+        assert region.feature_intervals["a"] == (-math.inf, 0.0)
+        assert region.maximal["a"] == (True, True)
+        assert region.witnesses is not None
+        witness = region.witnesses["a:hi"]
+        assert witness[0] > witness[1] == 0.0 and witness[0] < 1.0
+
+    def test_describe_marks_the_proved_features(self) -> None:
+        region = self._region((-0.5, 0.5))
+        assert all(phrase.endswith("(maximal)") for phrase in region.describe().values())
+
+    def test_unknown_mode_and_bad_budget_are_rejected(self) -> None:
+        with pytest.raises(TreecfError, match="mode"):
+            self._region((-0.5, 0.5), mode="sloppy")
+        with pytest.raises(ValueError, match="budget"):
+            self._region((-0.5, 0.5), budget=0)
+
+
 class TestCategoricalRegions:
     """Category sets are grown, rendered, and honored by membership checks."""
 
     @staticmethod
-    def _region(constraints=(), interval_width=0.4):
+    def _region(constraints=(), interval_width=0.4, mode="fast"):
         from treecf.constraints.compile import compile_constraints
         from treecf.ir.evaluate import raw_score
         from treecf.ir.model import CategoricalFeature, EnsembleIR, Link, Node, Tree
@@ -437,7 +538,9 @@ class TestCategoricalRegions:
         x = np.array([2.0])
         score = raw_score(ir, x)
         interval = (score - interval_width, score + interval_width)
-        return _recourse_region(ir, x, x, interval, compiled, None, 0.0)
+        return _recourse_region(
+            ir, x, x, interval, compiled, None, 0.0, mode=mode, keep_witnesses=True
+        )
 
     def test_grows_the_routing_equivalent_codes(self) -> None:
         # codes 2 and 3 share a block (both in the split set): the whole block
@@ -468,3 +571,17 @@ class TestCategoricalRegions:
     def test_describe_renders_names(self) -> None:
         region = self._region(interval_width=0.4)
         assert region.describe()["occupation"] == "∈ {nurse, smith}"
+
+    def test_maximal_mode_proves_the_excluded_block_with_a_witness(self) -> None:
+        region = self._region(interval_width=0.4, mode="maximal")
+        assert region.feature_categories == {"occupation": (2, 3)}
+        assert region.maximal_categories == {"occupation": True}
+        assert region.witnesses is not None
+        np.testing.assert_array_equal(region.witnesses["occupation:cat"], [0.0])
+        assert region.describe()["occupation"] == "∈ {nurse, smith} (maximal)"
+
+    def test_maximal_mode_with_every_block_admitted(self) -> None:
+        region = self._region(interval_width=2.0, mode="maximal")
+        assert region.feature_categories == {"occupation": (0, 1, 2, 3, 4)}
+        assert region.maximal_categories == {"occupation": True}
+        assert region.witnesses == {}

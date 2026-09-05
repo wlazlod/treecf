@@ -435,10 +435,11 @@ def run_region_fixture(
         cat_candidates = {}
     del math_mod
     min_total_path = fixture.min_total_path if fixture.min_total_path is not None else 0.0
-    return _grow_box(
+    lo, hi, cat_sets, _extras = _grow_box(
         fixture.ir, fixture.x_cf, fixture.interval, fixture.compiled,
         fixture.if_ir, min_total_path, degenerate, lo_b, hi_b, cat_candidates,
     )
+    return lo, hi, cat_sets
 
 
 def diff_region_golden(
