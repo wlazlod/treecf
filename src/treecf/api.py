@@ -24,6 +24,7 @@ from treecf.plausibility import Plausibility
 from treecf.targets import Target
 
 if TYPE_CHECKING:
+    from treecf._menu import DiverseSet, RecourseMenu
     from treecf.backends.exact import ExactResult
     from treecf.backends.genetic import GeneticResult
     from treecf.regions import RecourseRegion
@@ -221,6 +222,7 @@ _DEFAULT_WARM_START = True
 _DEFAULT_NODE_BUDGET = 2_000_000
 _DEFAULT_GAP = 0.0
 _DEFAULT_SEARCH = "classic"
+_DEFAULT_TIME_BUDGET_S = 10.0
 _SEARCH_MODES = ("classic", "refine")
 
 
@@ -1441,6 +1443,162 @@ class Explainer:
         return search_space_profile(
             self.ir, x, self.compiled, self.sigma, self.weights, 0.0, self.value_policy,
             self._plausibility_bound(), interval,
+        )
+
+    def recourse_menu(
+        self,
+        x: FloatArray,
+        target: Target,
+        *,
+        max_levers: int = 3,
+        mode: str = "minimal",
+        backend: str = "exact",
+        search: str = "classic",
+        seed: int | None = None,
+        time_budget_s: float | None = None,
+        total_budget_s: float | None = None,
+        warm_start: bool | None = None,
+        node_budget: int | None = None,
+        gap: float | None = None,
+    ) -> RecourseMenu:
+        """Every lever set up to ``max_levers`` solved as its own coalition.
+
+        The candidate levers are the features the search would branch on for
+        ``x`` (see ``search_profile``: not frozen, more than one candidate
+        value, influential). Sets are enumerated by ascending size, sets of
+        one size in lexicographic feature order, and each is solved with
+        every other feature frozen — the same clone path
+        ``explain_coalitions`` uses — so an entry is exactly the plan that
+        changing only those levers admits, with the proof the backend
+        attaches. Entries are keyed by the features the plan actually changed
+        (sorted names joined by ``"+"``); a set whose plan changed a strict
+        subset is filed under the subset and listed in ``implied``.
+
+        ``mode="minimal"`` (the default) skips every set that contains a set
+        already found feasible — those are feasible by monotonicity and not
+        minimal — and ``RecourseMenu.minimal`` lists the frontier;
+        ``mode="all"`` solves every set. An ``Infeasible`` entry keeps its
+        proof: ``"certified"`` from a completed exact search means no
+        acceptance is reachable by changing only those levers.
+
+        ``time_budget_s`` caps each solve (``explain``'s default when
+        ``None``); ``total_budget_s`` caps the whole enumeration, and sets
+        not reached go to ``RecourseMenu.unresolved``. One aggregate
+        ``TreecfWarning`` reports unresolved and uncertified counts; the
+        genetic backend never certifies, so it never warns about that and its
+        menus are never ``complete``. ``warm_start``/``node_budget``/``gap``/
+        ``search`` are the exact backend's options, as in ``explain``.
+
+        Parameters
+        ----------
+        x
+            The factual instance.
+        target
+            A single-interval target.
+        max_levers
+            Largest lever-set size to enumerate.
+        mode
+            ``"minimal"`` or ``"all"``.
+        backend
+            ``"exact"`` (certifies) or ``"genetic"``.
+        search
+            Exact search mode, ``"classic"`` or ``"refine"``.
+        seed
+            Passed to every solve.
+        time_budget_s
+            Per-solve wall budget; ``None`` for ``explain``'s default.
+        total_budget_s
+            Wall budget for the whole menu; ``None`` for no cap.
+        warm_start, node_budget, gap
+            Exact-backend options, as in ``explain``.
+
+        Returns
+        -------
+        The ``RecourseMenu``: a mapping from lever-set key to result, in
+        display order (minimal feasible sets by cost, other feasible sets by
+        cost, infeasible sets by size).
+
+        Raises
+        ------
+        TreecfError
+            If ``target`` is a ``Target.bands`` ladder, if the factual already
+            satisfies the target (nothing to enumerate), or if two solves
+            contradict monotonicity (a certified-infeasible set containing a
+            feasible one — a solver inconsistency).
+        ValueError
+            If ``mode`` is unknown, ``max_levers`` is below one,
+            ``total_budget_s`` is negative, or an exact-only option is given
+            with another backend.
+        """
+        from treecf._menu import build_menu
+
+        return build_menu(
+            self, x, target, max_levers=max_levers, mode=mode, backend=backend,
+            search=search, seed=seed, time_budget_s=time_budget_s,
+            total_budget_s=total_budget_s, warm_start=warm_start, node_budget=node_budget,
+            gap=gap,
+        )
+
+    def explain_diverse(
+        self,
+        x: FloatArray,
+        target: Target,
+        *,
+        k: int = 5,
+        diversity: str = "levers",
+        coalitions: Mapping[str, Sequence[str]] | None = None,
+        max_levers: int = 3,
+        **menu_kwargs: Any,
+    ) -> DiverseSet:
+        """Up to ``k`` plans that reach the target through different lever sets.
+
+        Diversity means distinct changed feature sets. ``diversity="levers"``
+        takes the ``k`` cheapest entries of ``recourse_menu(mode="minimal",
+        max_levers=...)``, so the plans are pairwise distinct in what they
+        change by construction. ``diversity="coalitions"`` needs
+        ``coalitions=`` in the ``explain_coalitions`` form: each declared
+        coalition is solved as itself, and only when fewer than ``k`` are
+        feasible are unions of two, then three, ... coalitions tried, level by
+        level; plans from disjoint coalitions are the diverse set a customer
+        can act on. ``menu_kwargs`` (``backend``, ``search``, ``seed``,
+        ``time_budget_s``, ``total_budget_s``, ``warm_start``,
+        ``node_budget``, ``gap``) go to the menu or the ladder solves.
+
+        Parameters
+        ----------
+        x
+            The factual instance.
+        target
+            A single-interval target.
+        k
+            How many plans to return at most.
+        diversity
+            ``"levers"`` or ``"coalitions"``.
+        coalitions
+            ``{name: [features]}``; required for ``"coalitions"``.
+        max_levers
+            Largest lever-set size for the ``"levers"`` criterion.
+
+        Returns
+        -------
+        The ``DiverseSet``, cheapest plan first; ``complete`` says whether
+        the criterion was exhausted with certificates before ``k`` was
+        reached.
+
+        Raises
+        ------
+        ValueError
+            If ``diversity`` is not one of the two criteria, ``k`` is below
+            one, or ``coalitions=`` accompanies the ``"levers"`` criterion.
+        TreecfError
+            If ``diversity="coalitions"`` has no ``coalitions=``, or for the
+            reasons ``recourse_menu``/``explain_coalitions`` raise.
+        """
+        from treecf._menu import build_diverse
+
+        return build_diverse(
+            self, x, target, k=k, diversity=diversity, coalitions=coalitions,
+            max_levers=max_levers, menu_kwargs=dict(menu_kwargs),
         )
 
     def recourse_region(
