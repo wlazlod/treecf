@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import TYPE_CHECKING
 
-from treecf._errors import TreecfError
+from treecf._errors import ParserError, TreecfError
 
 if TYPE_CHECKING:
     import numpy as np
@@ -83,6 +83,97 @@ class EnsembleIR:
     feature_names: tuple[str, ...]
     meta: dict[str, object]
     categorical: dict[int, CategoricalFeature] = field(default_factory=dict)
+
+
+def validate_ir(ir: EnsembleIR) -> None:
+    """Check that an ensemble has the shape every consumer relies on.
+
+    Feature names match the feature count; every tree is non-empty, its
+    nodes carry their own index as ``node_id``, every child pointer stays
+    inside the tree and the pointers form a tree (each node reached exactly
+    once from the root); a split names a feature inside the model and is
+    either numeric (a finite threshold with an operator) or set-membership
+    (a non-empty code set within the feature's cardinality); a leaf carries a
+    finite value; the base score is finite; categorical display names, when
+    present, cover exactly the cardinality.
+
+    Raises
+    ------
+    ParserError
+        Naming the first violation found.
+    """
+    if ir.n_features < 0:
+        raise ParserError(f"feature count {ir.n_features} is negative")
+    if len(ir.feature_names) != ir.n_features:
+        raise ParserError(
+            f"{len(ir.feature_names)} feature names for {ir.n_features} features"
+        )
+    if not math.isfinite(ir.base_score):
+        raise ParserError(f"base score {ir.base_score!r} is not finite")
+    for j, info in ir.categorical.items():
+        if not (0 <= j < ir.n_features):
+            raise ParserError(f"categorical feature index {j} is outside the model")
+        if info.cardinality < 1:
+            raise ParserError(f"feature {j} has cardinality {info.cardinality}")
+        if info.categories is not None and len(info.categories) != info.cardinality:
+            raise ParserError(
+                f"feature {j} names {len(info.categories)} categories for "
+                f"cardinality {info.cardinality}"
+            )
+    for t, tree in enumerate(ir.trees):
+        _validate_tree(ir, t, tree)
+
+
+def _validate_tree(ir: EnsembleIR, t: int, tree: Tree) -> None:
+    n = len(tree.nodes)
+    if n == 0:
+        raise ParserError(f"tree {t} has no nodes")
+    for i, node in enumerate(tree.nodes):
+        where = f"tree {t} node {i}"
+        if node.node_id != i:
+            raise ParserError(f"{where} carries node_id {node.node_id}")
+        if node.feature is None:
+            if node.value is None or not math.isfinite(node.value):
+                raise ParserError(f"{where} is a leaf without a finite value")
+            continue
+        if not (0 <= node.feature < ir.n_features):
+            raise ParserError(f"{where} splits on feature {node.feature}, outside the model")
+        if node.left is None or node.right is None:
+            raise ParserError(f"{where} is a split without two children")
+        for child in (node.left, node.right):
+            if not (0 <= child < n) or child == i:
+                raise ParserError(f"{where} points at child {child}")
+        if node.categories is not None:
+            if node.threshold is not None or node.op is not None:
+                raise ParserError(f"{where} mixes a threshold with a category set")
+            if not node.categories:
+                raise ParserError(f"{where} has an empty category set")
+            info = ir.categorical.get(node.feature)
+            if info is not None and any(
+                not (0 <= code < info.cardinality) for code in node.categories
+            ):
+                raise ParserError(f"{where} names a category code outside the cardinality")
+        else:
+            if node.threshold is None or node.op is None:
+                raise ParserError(f"{where} is a numeric split without a threshold")
+            if not math.isfinite(node.threshold):
+                raise ParserError(f"{where} has a non-finite threshold")
+    # every node reached exactly once from the root: the pointers form a tree
+    seen = [False] * n
+    stack = [0]
+    while stack:
+        i = stack.pop()
+        if seen[i]:
+            raise ParserError(f"tree {t} reaches node {i} twice: not a tree")
+        seen[i] = True
+        node = tree.nodes[i]
+        if node.feature is not None:
+            assert node.left is not None and node.right is not None
+            stack.append(node.right)
+            stack.append(node.left)
+    if not all(seen):
+        unreached = seen.index(False)
+        raise ParserError(f"tree {t} never reaches node {unreached}")
 
 
 def apply_categories(

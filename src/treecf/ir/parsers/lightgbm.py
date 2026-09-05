@@ -24,7 +24,7 @@ from typing import Any
 
 import numpy as np
 
-from treecf._errors import UnsupportedModelError
+from treecf._errors import ParserError, UnsupportedModelError
 from treecf.ir.model import CategoricalFeature, EnsembleIR, Link, Node, SplitOp, Tree
 
 # LightGBM zeroes inputs with |v| <= kZeroThreshold (1e-35f) before comparing, so its
@@ -62,6 +62,8 @@ def parse_lightgbm_dump(
     link = _OBJECTIVE_LINKS[objective]
 
     n_features = int(dump["max_feature_idx"]) + 1
+    if n_features < 1:
+        raise ParserError(f"max_feature_idx {dump['max_feature_idx']!r} leaves no features")
     names = tuple(dump.get("feature_names") or (f"f{i}" for i in range(n_features)))
 
     trees = []

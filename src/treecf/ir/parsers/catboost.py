@@ -306,6 +306,8 @@ def _expand_oblivious(
     splits = tree["splits"] or []
     leaf_values = tree["leaf_values"]
     depth = len(splits)
+    if depth > 16:  # CatBoost's own ceiling; deeper claims cannot be genuine
+        raise ParserError(f"oblivious tree depth {depth} exceeds the format's maximum")
     if len(leaf_values) != 2**depth:
         raise UnsupportedModelError("oblivious tree leaf count does not match its depth")
 

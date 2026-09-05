@@ -1,0 +1,26 @@
+{
+ "dump": {
+  "learner": {
+   "feature_names": [
+    "f0",
+    "f1",
+    "f2"
+   ],
+   "learner_model_param": {
+    "base_score": "[0.5]",
+    "num_class": "0",
+    "num_feature": "3"
+   },
+   "objective": {
+    "name": "binary:logistic"
+   }
+  },
+  "version": [
+   3,
+   0,
+   0
+  ]
+ },
+ "format": "xgboost",
+ "note": "learner.gradient_booster is absent"
+}

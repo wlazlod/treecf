@@ -1,0 +1,5 @@
+{
+ "dump": 5,
+ "format": "none",
+ "note": "the top level is a number, not an object"
+}
