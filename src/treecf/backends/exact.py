@@ -45,8 +45,9 @@ and keeps its claim when the answer it did find is already that cheap.
 
 The one feature the repair leaves alone is one carrying a value policy: only
 one point per cell is on the policy's grid to begin with, so there is nowhere
-legal to move it, and a search over such a pair never claims to have settled
-the space.
+legal to move it. A completion that breaks a pair over such a feature is set
+aside unrepaired, which withdraws the claim exactly as any other failed repair
+does; a search that never meets one keeps its certificate.
 
 The other rule is propagation: assigning a feature can settle other features
 outright (the trigger side of an implication, or the last free member of a
@@ -361,7 +362,6 @@ def solve_exact(
     repairable_pairs = frozenset(
         (a, b) for a, b in order_pairs if not any(policy_active(f) for f in (a, b))
     )
-    policy_bound = bool(order_pairs) and len(repairable_pairs) < len(order_pairs)
     onehot_members = {f for group in compiled.onehot_groups for f in group}
     demanded_values = _demanded_values(compiled)
     entangled_pairs = frozenset(
@@ -408,7 +408,7 @@ def solve_exact(
     nodes_pruned_cost = 0
     gap_prune_fired = False
     completed = True
-    ledger = _Ledger(dropped_floor=-math.inf if policy_bound else math.inf)
+    ledger = _Ledger(dropped_floor=math.inf)
 
     stack: list[int] = []  # state index chosen at each assigned level
     frames: list[_Frame] = []
@@ -476,11 +476,18 @@ def solve_exact(
 
     def unorderable() -> bool:
         """True when some pair ``a <= b`` is already out of reach: the lowest
-        value ``a`` can still hold is above the highest ``b`` can."""
+        value ``a`` can still hold is above the highest ``b`` can.
+
+        A pair no repair may touch is judged on the values its features were
+        given. When their cells could still have been ordered, the cut leaves
+        a completion the search never settled, and the ledger says so.
+        """
         for pair in bounded_pairs:
             a, b = pair
             movable = pair in repairable_pairs
             if reach(a, movable)[0] > reach(b, movable)[1]:
+                if not movable and reach(a, True)[0] <= reach(b, True)[1]:
+                    ledger.dropped_floor = -math.inf
                 return True
         return False
 
@@ -563,7 +570,10 @@ def solve_exact(
         if not violated:
             return row if accepts(row) else None
         if any(pair not in repairable_pairs for pair in violated):
-            return None  # a policy-bound pair; the arbiter rejects the row anyway
+            # a policy-bound pair: nothing legal to move, so the completion is
+            # dropped unrepaired, and the ledger records that it was
+            set_aside(violated, g_now)
+            return None
         if len(violated) == 1:
             a, b = violated[0]
             best_row: FloatArray | None = None

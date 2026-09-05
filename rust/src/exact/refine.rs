@@ -546,7 +546,7 @@ pub(crate) fn run(
 
         if conflict
             || (!ctx.bounded_pairs.is_empty()
-                && ctx.unorderable(assigned, values, &picked, &range_span))
+                && ctx.unorderable(assigned, values, &picked, &range_span, &mut dropped_floor))
         {
             nodes_pruned_cost += 1;
             continue;

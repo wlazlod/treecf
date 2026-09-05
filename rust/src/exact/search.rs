@@ -559,12 +559,17 @@ impl Ctx<'_> {
 
     /// True when some pair `a <= b` is already out of reach: the lowest value `a`
     /// can still hold is above the highest `b` can.
+    ///
+    /// A pair no repair may touch is judged on the values its features were
+    /// given. When their cells could still have been ordered, the cut leaves a
+    /// completion the search never settled, and the ledger says so.
     pub(crate) fn unorderable(
         &self,
         assigned: &[bool],
         values: &[f64],
         picked: &[usize],
         range_span: &[Option<(f64, f64)>],
+        dropped_floor: &mut f64,
     ) -> bool {
         for pair in &self.bounded_pairs {
             let (a, b) = *pair;
@@ -576,6 +581,12 @@ impl Ctx<'_> {
                     .reach(b, movable, assigned, values, picked, range_span)
                     .1
             {
+                if !movable
+                    && self.reach(a, true, assigned, values, picked, range_span).0
+                        <= self.reach(b, true, assigned, values, picked, range_span).1
+                {
+                    *dropped_floor = f64::NEG_INFINITY;
+                }
                 return true;
             }
         }
@@ -690,7 +701,10 @@ impl Ctx<'_> {
             .iter()
             .any(|pair| !self.repairable_pairs.contains(pair))
         {
-            return None; // a policy-bound pair; the arbiter rejects the row anyway
+            // a policy-bound pair: nothing legal to move, so the completion is
+            // dropped unrepaired, and the ledger records that it was
+            self.set_aside(&violated, g, dropped_floor);
+            return None;
         }
         if violated.len() == 1 {
             let (a, b) = violated[0];
@@ -1097,18 +1111,6 @@ pub fn solve_exact(
         .copied()
         .filter(|&(a, b)| !policy_active(a) && !policy_active(b))
         .collect();
-    // Python holds the repairable pairs in a frozenset and weighs its size
-    // against the *list* of order pairs, so a pair declared twice — two
-    // identical `a - b <= 0` Linears, which the compiler accepts — already
-    // trips the withdrawal even with no value policy anywhere. Only this count
-    // is deduplicated; membership tests read the same either way.
-    let mut unique_repairable: Vec<(usize, usize)> = Vec::new();
-    for &pair in &repairable_pairs {
-        if !unique_repairable.contains(&pair) {
-            unique_repairable.push(pair);
-        }
-    }
-    let policy_bound = !order_pairs.is_empty() && unique_repairable.len() < order_pairs.len();
     let mut onehot_member = vec![false; cons.n_features];
     for group in &cons.onehot {
         for &f in group {
@@ -1158,11 +1160,7 @@ pub fn solve_exact(
             &h_suffix,
             incumbent,
             presolve_removed,
-            if policy_bound {
-                f64::NEG_INFINITY
-            } else {
-                f64::INFINITY
-            },
+            f64::INFINITY,
             start,
             params,
             probe,
@@ -1190,11 +1188,7 @@ pub fn solve_exact(
     // cheapest committed cost among the completions the repair had to set aside;
     // nothing derived from one of those can cost less than this, so once the
     // incumbent is at least as cheap, setting them aside changed nothing
-    let mut dropped_floor = if policy_bound {
-        f64::NEG_INFINITY
-    } else {
-        f64::INFINITY
-    };
+    let mut dropped_floor = f64::INFINITY;
 
     let mut stack: Vec<usize> = Vec::new(); // state index chosen at each assigned level
                                             // the state index each assigned feature sits on; the classic search never
@@ -1313,7 +1307,7 @@ pub fn solve_exact(
 
         if conflict
             || (!ctx.bounded_pairs.is_empty()
-                && ctx.unorderable(&assigned, &values, &picked, &range_span))
+                && ctx.unorderable(&assigned, &values, &picked, &range_span, &mut dropped_floor))
         {
             // No completion below this state can satisfy the constraints, so it
             // is cut on feasibility, counted with the cost prunes.
@@ -1999,9 +1993,10 @@ mod tests {
         assert_eq!(result.stats.presolve_removed, 1);
     }
 
-    /// A value policy on either side makes the pair unrepairable, so the search
-    /// withdraws its claim on the whole space (`completed` false) instead of
-    /// reporting a certificate.
+    /// A value policy on either side makes the pair unrepairable. The one
+    /// in-target completion breaks the pair on values its cells could still
+    /// have ordered, so cutting it withdraws the claim on the whole space
+    /// (`completed` false) instead of reporting a certificate.
     #[test]
     fn policy_bound_pair_withdraws_the_completeness_claim() {
         let ens = stumps(&[(0, 1.0, true, 0.0, 1.0)], 2);
@@ -2380,12 +2375,10 @@ mod tests {
     }
 
     /// The same pair declared twice — two identical `a - b <= 0` Linears, which
-    /// the compiler accepts — collapses in Python's frozenset of repairable
-    /// pairs but not in the list of order pairs, so the withdrawal fires even
-    /// with no value policy in sight. Python: `x_cf = [1.0, 1.0]`, distance 1.5,
-    /// proof "heuristic", completed false (against "optimal"/true for one copy).
+    /// the compiler accepts — is repaired like a single copy and keeps the
+    /// certificate. Python: `x_cf = [1.0, 1.0]`, distance 1.5, proof "optimal".
     #[test]
-    fn duplicate_order_pair_withdraws_the_completeness_claim() {
+    fn duplicate_order_pairs_are_one_pair() {
         let ens = stumps(&[(0, 1.0, true, 0.0, 1.0)], 2);
         let pair = || LinearC {
             indices: vec![0, 1],
@@ -2411,16 +2404,16 @@ mod tests {
             vec![0x3ff0000000000000, 0x3ff0000000000000]
         );
         assert_eq!(result.distance.unwrap().to_bits(), 0x3ff8000000000000);
-        assert_eq!(result.proof, "heuristic");
+        assert_eq!(result.proof, "optimal");
         assert_eq!(
             result.stats,
             ExactStats {
                 nodes_expanded: 2,
                 nodes_pruned_score: 0,
                 nodes_pruned_cost: 0,
-                lower_bound: 0.0,
+                lower_bound: 1.5,
                 gap: 0.0,
-                completed: false,
+                completed: true,
                 warm_start_used: false,
                 presolve_removed: 1,
                 presolve_certified: false,

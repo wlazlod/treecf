@@ -71,6 +71,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   boundary one float32 ulp below 1 up to `"≤ 1"`; features under an `"integer"` value policy
   are phrased on the integers the box contains (`"= 0"`, `"≤ 0"`, `"in [2, 4]"`), recorded in
   the new `RecourseRegion.integer_features` field, which batch files round-trip.
+- **A value policy no longer withdraws the exact certificate up front.** With an order pair
+  over a policy-bound feature the search used to give up its optimality claim before
+  expanding a single node. It now withdraws only when a completion actually breaks such a
+  pair on values its cells could still have ordered; a policy run that never meets one reports
+  `proof="optimal"` as the documentation promised. Declaring the same order pair twice no
+  longer withdraws either.
 - **Parser errors are normalized.** A malformed model dump now raises `ParserError` naming the
   format and the cause where it used to leak a bare `KeyError`, `IndexError`, `TypeError`,
   `ValueError`, or `ZeroDivisionError` — a scalar at the top level, a missing key, a truncated

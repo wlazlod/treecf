@@ -46,9 +46,12 @@ other backend.
 sometimes need a repaired value the search's own candidate grid does not offer; the repair is
 conservative by design — see [How it works](../how-it-works.md#the-exact-search-cells-domains-and-branch-and-bound)
 — and when it cannot settle every such pair it withdraws the optimality claim rather than risk
-overstating it. The row itself is still real, still float-verified, and still the cheapest one
-the search happened to find — only the "cheapest possible" claim is dropped. Read `proof`, not
-`x_cf`'s presence, to know which claim you got:
+overstating it. The same happens when a pair ties a feature under a `value_policy`: such a
+pair is never repaired, so a completion that breaks it on values its cells could still have
+ordered is dropped unsettled and the claim goes with it — but only then; a search that never
+meets such a completion keeps its certificate. The row itself is still real, still
+float-verified, and still the cheapest one the search happened to find — only the "cheapest
+possible" claim is dropped. Read `proof`, not `x_cf`'s presence, to know which claim you got:
 
 ```python
 # exp, x, target: the docs explainer, one rejected applicant, the target
@@ -115,6 +118,9 @@ policy differently:
   the only candidates its search ever builds — a feature under `value_policy={"n_active_loans":
   "integer"}` never gets a fractional candidate to begin with. So `proof="optimal"` on a policy
   run means *optimal among policy-conforming rows*, not optimal over the unrestricted space.
+  An order pair (`constraint("a <= b")`) over a policy feature is the one place a policy can
+  cost the certificate, and only when a completion actually breaks that pair (see the honesty
+  note above).
   A callable `value_policy` is rejected outright at exact-backend validation time (it names
   `backend="genetic"` as the fallback): the search has no way to enumerate an arbitrary
   function's conforming values.

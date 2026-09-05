@@ -112,21 +112,60 @@ class TestExhaustionBodies:
         assert "NOT a certified infeasibility" in message
 
 
-class TestWithdrawalBody:
-    """Declaring the same order pair twice trips the conservative repair's
-    "several pairs sharing features" fallback -- a completion is set aside
-    although the whole budget was never touched."""
+class TestPolicyPairsKeepTheCertificate:
+    """An order pair over a feature under a value policy cannot be repaired,
+    but that costs the certificate only when a completion actually breaks the
+    pair; a search that never meets one stays exact."""
 
     @pytest.mark.parametrize("search", SEARCH_MODES)
-    def test_duplicate_order_pair_withdraws_without_exhaustion(self, search: str) -> None:
-        withdrawing = Explainer(
+    def test_no_broken_completion_means_optimal(self, search: str) -> None:
+        exp = Explainer(
+            _ir(), normalizers=np.ones(3),
+            constraints=[constraint("a <= b")], value_policy={"a": "integer"},
+        )
+        # b already sits at 1, so moving a to 1 keeps a <= b; the only
+        # cheaper candidates fail the score bound before any repair is due
+        result = exp.explain(
+            np.array([0.0, 1.0, 0.0]), Target.raw(op=">=", value=1.5), backend="exact",
+            seed=0, warm_start=False, search=search,
+        )
+        assert isinstance(result, Counterfactual)
+        assert result.x_cf.tolist() == [1.0, 1.0, 0.0]
+        assert result.proof == "optimal"
+        assert result.solver_stats["completed"] is True
+
+    @pytest.mark.parametrize("search", SEARCH_MODES)
+    def test_duplicate_order_pairs_are_one_pair(self, search: str) -> None:
+        exp = Explainer(
             _ir(), normalizers=np.ones(3),
             constraints=[constraint("a <= b"), constraint("a <= b")],
         )
+        result = exp.explain(
+            x0, Target.raw(op=">=", value=0.5), backend="exact", seed=0,
+            warm_start=False, search=search,
+        )
+        assert isinstance(result, Counterfactual)
+        assert result.proof == "optimal"
+
+
+class TestWithdrawalBody:
+    """A completion that breaks an order pair over a policy-bound feature is
+    dropped rather than repaired, so the search sets it aside although the
+    whole budget was never touched."""
+
+    @pytest.mark.parametrize("search", SEARCH_MODES)
+    def test_policy_bound_pair_withdraws_without_exhaustion(self, search: str) -> None:
+        withdrawing = Explainer(
+            _ir(), normalizers=np.ones(3),
+            constraints=[constraint("a <= b")], value_policy={"a": "integer"},
+        )
         target = Target.raw(op=">=", value=0.5)
+        # a and b both sit above their splits, in one shared cell where a plain
+        # repair could order them; the policy on a forbids moving it, so the
+        # completion is cut unsettled and the claim goes with it
         with pytest.warns(TreecfWarning) as record:
             result = withdrawing.explain(
-                x0, target, backend="exact", seed=0,
+                np.array([2.0, 1.5, 0.0]), target, backend="exact", seed=0,
                 warm_start=False, node_budget=2_000_000, time_budget_s=10.0, search=search,
             )
         assert isinstance(result, Counterfactual)
@@ -134,11 +173,14 @@ class TestWithdrawalBody:
         stats = result.solver_stats
         assert stats["completed"] is False
         assert stats["nodes_expanded"] < 100  # budget (2_000_000) nowhere near touched
-        assert len(record) == 1
-        message = str(record[0].message)
+        messages = [
+            str(w.message) for w in record
+            if "withdrew its optimality certificate" in str(w.message)
+        ]
+        assert len(messages) == 1  # the factual-violation warning also fires
+        message = messages[0]
         # the cardinal rule: a withdrawal must never be spelled as an exhaustion
         assert "exhausted" not in message
-        assert "withdrew its optimality certificate" in message
         assert "not proven cheapest" in message
 
     def test_no_row_withdrawal_never_claims_exhaustion(self) -> None:
