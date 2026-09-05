@@ -21,3 +21,5 @@
 ::: treecf.ir_fingerprint
 
 ::: treecf.constraints_fingerprint
+
+::: treecf.audit.portfolio_report

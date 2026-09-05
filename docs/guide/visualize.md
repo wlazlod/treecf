@@ -63,8 +63,11 @@ presentation-ready sketch of the same geometry:
 ## A certified region
 
 The certified box from `region=True` — per-feature intervals, category
-tiles for categorical features, and a marker for what stopped each bound
-(the model or a constraint):
+tiles for categorical features, and a marker for what stopped each bound:
+the model, a constraint, or — for a region grown with
+`region_mode="maximal"` — a proved boundary (a filled square). The legend's
+"certified, not necessarily maximal" line appears only while some side is
+neither at a bound nor proved ([prove the boundary](certify.md#prove-the-boundary)):
 
 ```python
 # exp, x, target: the docs explainer, one rejected applicant, the target

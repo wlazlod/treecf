@@ -15,6 +15,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Branch-and-refine exact search.** `explain(..., backend="exact", search="refine")` holds
+  each numeric feature to a range of routing cells first and descends only where the score
+  bound forces it, accepting whole boxes at their true minimum cost; it proves the same optimum
+  and the same certified infeasibility as the classic engine (the returned row may be a
+  different argmin of the same cost). `solver_stats` gains `search`, `coarse_accepts`, and
+  `refinements`; the Python and Rust engines agree byte for byte on a new fixture set. The
+  default `search="classic"` is unchanged.
+- **Maximal recourse regions.** `explain(..., region=True, region_mode="maximal",
+  region_budget=...)` and `Explainer.recourse_region(..., mode="maximal", budget=,
+  keep_witnesses=)` settle every side the fast growth stops with a budgeted search for a
+  violating point in the next routing cell: an empty search extends the side, a witness
+  proves it maximal, a spent budget leaves it unproven. `RecourseRegion.maximal`,
+  `maximal_categories`, and `witnesses` carry the findings; batch files round-trip them and
+  certificates store the flags as additive keys under schema version 2. `plot_region` draws a
+  proved side as a filled square and shows the "not necessarily maximal" caveat only while a
+  side is unproven. The default `region_mode="fast"` is unchanged.
+- **Portfolio report.** `treecf.audit.portfolio_report(batch, groups, ...)` summarizes a
+  campaign as a strict-JSON artifact — population and proof mix, recourse burden per segment,
+  dominant levers, missing-value transitions, fingerprints — and renders it on request as one
+  self-contained HTML page or as Markdown with figures beside the file. Disparity ratios are
+  off by default and framed by one fixed sentence when enabled.
+- **Certification trace.** Every exact solve records `solver_stats["trace"]` — the incumbent
+  cost and the sound lower bound sampled at every incumbent update and every power-of-two node
+  count, capped at 256 entries — and `plot_certification_trace` draws it with the outcome named.
+- **Search profile.** `Explainer.search_profile(x, target=None)` sizes the classic search
+  before it runs (atomic cells, domain sizes, influential features, `log10_states`, and the
+  presolve-filtered sizes with a target); the budget-exhaustion warning quotes the figure.
+- **Conformance hardening.** A parser fuzz leg with a committed corpus of once-crashing dumps,
+  and a CatBoost category-hashing property leg over drawn strings, both in CI's slow leg.
+- **Commit hygiene.** A pull-request CI job checks that commit subjects and bodies describe
+  behavior, mirrored by a CONTRIBUTING checklist item; the narration test covers Rust and
+  Markdown sources too.
+
+### Fixed
+
+- **Parser errors are normalized.** A malformed model dump now raises `ParserError` naming the
+  format and the cause where it used to leak a bare `KeyError`, `IndexError`, `TypeError`,
+  `ValueError`, or `ZeroDivisionError` — a scalar at the top level, a missing key, a truncated
+  parallel array, a probability base score of exactly one, a LightGBM category token that is
+  not an integer, a CatBoost `scale_and_bias` of the wrong shape or a split on a float feature
+  the model does not declare, a negative feature count, a child pointer outside the tree, and a
+  threshold that overflows float32 (some of which only failed once the model was scored). Every
+  parsed ensemble is now structurally validated before it is returned.
+- The certification concept page described the certificate schema as version 1 and the
+  calibrator block as a bare string; both now match what `certificate` writes.
+
+### Invariants
+
+- Default behavior is byte-identical to the previous release: the classic exact fixtures, the
+  fast region fixtures, the genetic parity fixtures, and the committed certificate goldens are
+  untouched, and every new behavior sits behind a flag or a new function.
+- The Python and Rust engines remain byte-identical on every solve, now including the refine
+  search, the maximal region mode, and the certification trace.
+
 ## [0.3.0] - 2026-08-31
 
 ### Added

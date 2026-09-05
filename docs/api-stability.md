@@ -24,11 +24,11 @@ The public API is exactly the export lists below; anything prefixed with
 - `treecf.constraints.__all__`: the constraint objects plus
   `CompiledConstraints`, `compile_constraints`, and `constraint`.
 - `treecf.audit.__all__`: `build_certificate`, `check_certificate`,
-  `ir_fingerprint`, `constraints_fingerprint`.
+  `ir_fingerprint`, `constraints_fingerprint`, `portfolio_report`.
 - `treecf.viz.__all__` (extra `treecf[viz]`): `plot_changes`,
   `plot_counterfactuals`, `plot_ladder`, `plot_alternatives`,
   `plot_tradeoff`, `plot_recourse_map`, `plot_waterfall`, `plot_effort`,
-  `plot_region`.
+  `plot_region`, `plot_certification_trace`.
 - `treecf.viz_batch.__all__` (extra `treecf[viz]`): `plot_batch_levers`,
   `plot_batch_matrix`, `plot_batch_summary`, `plot_batch_deltas`,
   `plot_recourse_burden`, `recourse_burden_table`.

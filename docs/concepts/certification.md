@@ -59,8 +59,16 @@ if isinstance(res, Counterfactual):
     res.proof          # "optimal" | "optimal_within_gap" | "heuristic"
     res.solver_stats   # nodes_expanded, nodes_pruned_score, nodes_pruned_cost,
                        # lower_bound, gap, completed, warm_start_used,
-                       # presolve_removed, presolve_certified
+                       # presolve_removed, presolve_certified, search,
+                       # coarse_accepts, refinements, trace
 ```
+
+`search` names the engine that ran (`"classic"` or `"refine"`); `coarse_accepts` and
+`refinements` count the boxes the refine engine accepted whole and the ranges it split (zero for
+the classic engine); `trace` is the certification trace — `(nodes_expanded, incumbent_cost,
+lower_bound)` sampled at every incumbent update and every power-of-two node count, plus one
+terminal sample, capped at 256 entries — that
+[`plot_certification_trace`](../guide/certify.md#watch-the-proof-form) draws.
 
 **Certified infeasibility comes only from a completed search.** `Infeasible.proof="certified"`
 means the exact backend enumerated the whole reachable grid and rejected every row — it did not
@@ -93,7 +101,10 @@ solve — they collapse every degraded solve from one call into a single aggrega
 that breaks the count down by cause (`exhausted: N solves; withdrawn: M solves`) and points back
 at each result's own `proof`/`solver_stats` for which case applies to it. Read `solver_stats` on
 the affected result(s) directly for the full picture: `nodes_expanded`, `nodes_pruned_score`,
-`nodes_pruned_cost`, `lower_bound`, `gap`, `completed`, and `warm_start_used`.
+`nodes_pruned_cost`, `lower_bound`, `gap`, `completed`, and `warm_start_used`. An exhaustion
+warning also quotes the size of the space the search could not finish — the `log10_states`
+figure `Explainer.search_profile` reports — so a budget can be set with the problem's size in
+view.
 
 ## Value policies under certification
 
@@ -152,7 +163,7 @@ still plausible when plausibility is configured, still constraint-feasible — p
 interval-tree walk of every ensemble tree plus a worst-corner check of every linear constraint,
 never by sampling.
 
-Two things the certificate does *not* claim:
+Two things the certificate does *not* claim in the default fast mode:
 
 - **Not maximal.** The box is grown greedily, one joint-grid cell at a time, accepting an
   expansion only when the whole enlarged box still passes the soundness oracle. A larger sound
@@ -161,6 +172,17 @@ Two things the certificate does *not* claim:
   strictly wider region on some feature — growth is greedy and order-dependent, so a feature
   that is forced to stop early on one target can free up room a later feature grows into on a
   narrower one. Do not assume tightening the target only shrinks the region.
+
+`region_mode="maximal"` addresses the first: every side the conservative bound stops is
+settled by a budgeted search for a violating point in the next routing cell. A side is
+**proved** when such a point exists (kept as a witness on request), **extended** when the search
+completes without finding one, and left unproven when the search spends its budget — the fast
+mode's state. The claim per proved side is local: the region cannot be extended into the next
+cell on that side while every other coordinate ranges over the box as certified; a different
+box that also shrinks another feature is not excluded, and a maximal region need not contain
+the fast one. `RecourseRegion.maximal`, `maximal_categories`, and `witnesses` carry the
+findings, and certificates store the flags as additive keys. Non-monotonicity stands in both
+modes.
 
 `region.describe()` gives one human-readable phrase per non-degenerate feature — two-sided
 (`"in [lo, hi]"`) when both endpoints are finite, one-sided (`"≤ v"` / `"≥ v"`) *only* when
@@ -248,19 +270,21 @@ returned plan at issue time — it does not cryptographically prove that a searc
 `proof="optimal"` claim is true; re-running with the recorded seed and budgets on a
 fingerprint-matching model is how a validator checks that.
 
-The certificate is a plain `dict` with `"schema_version": 1` that serializes with
+The certificate is a plain `dict` with `"schema_version": 2` that serializes with
 `json.dumps(cert, allow_nan=False, sort_keys=True)` — non-finite floats are encoded as the
-strings `"NaN"`, `"Infinity"`, and `"-Infinity"` wherever they can occur. Its fields:
+strings `"NaN"`, `"Infinity"`, and `"-Infinity"` wherever they can occur. Keys are only ever
+added: a reader tolerates keys it does not know, and only removing or repurposing a key bumps
+the schema version ([API stability](../api-stability.md#the-artifact-promise)). Its fields:
 
 | Field | Contents |
 |---|---|
-| `schema_version`, `created_utc`, `treecf_version` | Schema version (`1`), timezone-aware ISO 8601 issue time, the issuing treecf version |
+| `schema_version`, `created_utc`, `treecf_version` | Schema version (`2`; version-1 files, which carry no categorical fields, still verify), timezone-aware ISO 8601 issue time, the issuing treecf version |
 | `reproducible` (+ `reproducible_reason`) | `false` when a component has no canonical encoding (a callable `value_policy`), with the reason |
 | `model` | `ir_fingerprint` (SHA-256 over a canonical byte encoding of the ensemble), feature names, link name; a `plausibility` sub-block (forest fingerprint, `min_total_path`) when configured |
 | `constraints` | `fingerprint` (SHA-256 over the constraint set, `sigma`, `weights`, and value policies) plus a human-readable `listing` — the listing is for humans, the fingerprint is for machines |
-| `target` | Declared space and bounds (the band's own name and bounds for a `Target.bands` result, passed via `band=`), the resolved raw interval actually used, and `"calibrator": "external — not embedded"` for calibrated targets |
-| `solve` | `backend` (recovered from the result's own stats), `proof`, full `solver_stats`, and — when the caller supplies them — `seed`/`node_budget`/`gap`/`time_budget_s`/`warm_start` under `solve.declared` (the result object does not carry them, so their caller-supplied provenance stays explicit) |
-| `factual` / `plan` / `infeasible` | The factual `x`; for a `Counterfactual`: `x_cf`, `changes`, `distance`, `snapped`, and region intervals when present; for an `Infeasible`: `reason` and `proof` |
+| `target` | Declared space and bounds (the band's own name and bounds for a `Target.bands` result, passed via `band=`), the resolved raw interval actually used, and for calibrated targets a `calibrator` block (not embedded: its fingerprint, type, and buffer) |
+| `solve` | `backend` (recovered from the result's own stats), `proof`, full `solver_stats` (the trace included), and — when the caller supplies them — `seed`/`node_budget`/`gap`/`time_budget_s`/`warm_start`/`search` under `solve.declared` (the result object does not carry them, so their caller-supplied provenance stays explicit) |
+| `factual` / `plan` / `infeasible` | The factual `x`; for a `Counterfactual`: `x_cf`, `changes`, `distance`, `snapped`, region intervals and category sets when present, and — for a region grown in the maximal mode — `region_maximal` / `region_maximal_categories`; for an `Infeasible`: `reason` and `proof` |
 | `verification` | Performed **fresh at issue time**, never copied from the solve: recomputed raw score, target membership, the compiled constraint check, plausibility when configured, and — for a region — a sampled set of re-checked points (each widened feature's endpoints plus the all-lo/all-hi corners; every checked point is recorded). For an `Infeasible` it records only whether the factual itself sits outside the target |
 
 A certificate whose fresh verification fails is still issued, with the failing booleans

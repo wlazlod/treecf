@@ -57,6 +57,10 @@ CAPABILITIES = [
     "certificate",
     "categorical",
     "probcal",
+    "refine",
+    "maximal",
+    "trace",
+    "portfolio report",
 ]
 
 # Every public plot function must appear as a committed, alt-texted figure

@@ -323,6 +323,20 @@ through `proof`, rather than pretend it settled that corner of the space. What a
 does or does not prove — and the difference between a `proof="heuristic"` row and a `proof="optimal"`
 one — is worked out completely in [Certification](concepts/certification.md).
 
+The classic search branches over atomic cells, and a numeric feature with many thresholds has
+many of them — breadth, not node throughput, is what limits certification on wide models. The
+opt-in **refine** engine (`search="refine"`) branches coarse-to-fine instead: each numeric
+feature's surviving cells are arranged in a balanced binary tree, the search first holds a
+feature to a *range* of cells (at most eight per feature), routes every tree node on that
+feature by interval — one child when the threshold falls outside the range, both when it falls
+inside, the same rule the region oracle uses — and refines only where the bound cannot decide.
+A box whose bracket lies inside the target and whose representative row (the cheapest candidate
+of each range) passes every constraint is accepted whole at its true minimum cost; otherwise the
+feature with the most tree nodes still straddled is split into its two children. Refined all the
+way down, a box is exactly the atomic cells the classic search visits, settled by the same rules
+— so a completed refine search proves the same optimum, and a completed empty one the same
+infeasibility. Both engines record a certification trace as they go.
+
 Two more things carry over from the genetic search rather than reinvent it: a rust-first
 dispatch (the Rust engine is a bit-parity mirror of the Python one, not a heuristic stand-in —
 fixtures pin the two to identical results), and an optional **warm start**, where a short
@@ -357,9 +371,20 @@ because widening them soundly is not an argument this release has proven, not be
 them is known to be unsafe. Like the exact search, region growth dispatches rust-first with a
 byte-identical Python fallback.
 
-What the resulting box does and does not promise — it is certified but neither the largest
-possible sound box nor monotone in the target interval, and `describe()`'s one-sided phrasing has
-a specific meaning — is spelled out in [Certification — regions](concepts/certification.md#regions-certified-not-maximal-not-monotone).
+The interval bracket is sound but loose: it brackets what the box *might* reach, not what its
+points reach. The opt-in **maximal** mode (`region_mode="maximal"`) therefore settles every side
+the fast growth stops with a second question — does the next cell on that side contain a point
+that actually leaves the target or breaks a constraint? — answered by a budgeted depth-first
+search over sub-boxes, each bracketed by the same interval routing and split on the feature with
+the most straddled tree nodes. An empty search extends the side; a violating point proves it
+maximal and is kept as a witness; a spent budget leaves it as the fast mode would. A linear
+constraint never needs the search: the oracle's worst corner is exact, and a failing corner is
+itself the witness.
+
+What the resulting box does and does not promise — it is certified but not monotone in the
+target interval, not the largest possible sound box unless the maximal mode proved each side,
+and `describe()`'s one-sided phrasing has a specific meaning — is spelled out in
+[Certification — regions](concepts/certification.md#regions-certified-not-maximal-not-monotone).
 
 ## Grouped recourse: coalitions
 

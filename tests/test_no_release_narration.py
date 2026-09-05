@@ -24,6 +24,7 @@ ALLOWED_FILES = {
     "docs/concepts/backends.md",  # benchmark provenance: versions a measurement used
     "tests/test_no_release_narration.py",
     "tests/test_version_everywhere.py",  # parses the version locations
+    "tests/test_commit_hygiene.py",  # holds the shorthand it proves the checker refuses
 }
 ALLOWED_DIRS = (
     "docs/benchmarks/",  # generated from measured runs; carries version stamps
