@@ -88,6 +88,23 @@ class TestRefineOnAStaircase:
         assert refine.stats["trace"][-1][2] == refine.stats["lower_bound"]
 
 
+class TestRefineGap:
+    def test_gap_prune_reports_optimal_within_gap(self) -> None:
+        """A warm-start incumbent worth 21 against a true optimum of 20.5: with
+        gap=0.5 the widened threshold cuts the cheaper branches, the incumbent
+        stands, and the claim is downgraded to "within gap"."""
+        ir = _wide_ir()
+        x = np.array([0.0, 0.0])
+        warm = np.array([21.0, 0.0])
+        assert raw_score(ir, warm) >= 2.05
+        refine = _solve(ir, x, (2.05, math.inf), "refine", gap=0.5, incumbent=(21.0, warm))
+        assert refine.proof == "optimal_within_gap"
+        assert refine.distance == 21.0
+        assert refine.stats["completed"] is True
+        assert refine.stats["lower_bound"] == pytest.approx(21.0 / 1.5)
+        assert refine.stats["trace"][-1][2] == refine.stats["lower_bound"]
+
+
 class TestRefineArguments:
     def test_unknown_search_mode_is_rejected(self) -> None:
         ir = _wide_ir(3)

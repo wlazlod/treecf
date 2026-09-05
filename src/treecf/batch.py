@@ -430,6 +430,7 @@ def explain_batch(
     warm_start: bool | None = None,
     node_budget: int | None = None,
     gap: float | None = None,
+    search: str | None = None,
     region: bool = False,
     allow_exact_batch: bool = False,
 ) -> BatchResult:
@@ -504,7 +505,9 @@ def explain_batch(
     # Validated here too (not only inside `_explain`) because the rust
     # wave-parallel paths below (`_rows_by_seed_waves`, `_lever_primaries`)
     # never call `_explain` and would otherwise silently ignore the kwargs.
-    resolved_warm_start, _, _ = _resolve_exact_kwargs(backend, warm_start, node_budget, gap)
+    resolved_warm_start, _, _, _ = _resolve_exact_kwargs(
+        backend, warm_start, node_budget, gap, search
+    )
     X = np.asarray(X, dtype=np.float64)
     validate_feature_matrix(explainer.ir, X, where="factual")
     if backend == "exact" and not allow_exact_batch:
@@ -562,7 +565,7 @@ def explain_batch(
         records = _rows_by_coalitions(
             explainer, X, target, row_ids, coalitions, include_full,
             backend, time_budget_s, sparsity_weight, seed=seed,
-            warm_start=warm_start, node_budget=node_budget, gap=gap, region=region,
+            warm_start=warm_start, node_budget=node_budget, gap=gap, search=search, region=region,
             row_degraded=row_degraded,
         )
     elif diversity == "seeds" and backend in ("genetic", "genetic-rust"):
@@ -607,7 +610,7 @@ def explain_batch(
             if diversity == "lever-blocking":
                 primaries = _exact_lever_primaries(
                     explainer, X, target, time_budget_s, sparsity_weight,
-                    node_budget, gap, seed, row_incumbents, row_degraded,
+                    node_budget, gap, search, seed, row_incumbents, row_degraded,
                 )
         for i, row_id in enumerate(row_ids):
             if diversity == "seeds":
@@ -616,7 +619,7 @@ def explain_batch(
                     backend, time_budget_s, sparsity_weight,
                     master_seed=seed * 1_000_003 + i * 1_009,
                     warm_start=False if backend == "exact" else warm_start,
-                    node_budget=node_budget, gap=gap, region=region,
+                    node_budget=node_budget, gap=gap, search=search, region=region,
                     degraded=row_degraded[i],
                     incumbent=None if row_incumbents is None else row_incumbents[i],
                 )
@@ -625,8 +628,8 @@ def explain_batch(
                     explainer, X[i], target, row_id, n_per_example,
                     backend, time_budget_s, sparsity_weight, seed=seed,
                     primary=None if primaries is None else primaries[i],
-                    warm_start=warm_start, node_budget=node_budget, gap=gap, region=region,
-                    degraded=row_degraded[i],
+                    warm_start=warm_start, node_budget=node_budget, gap=gap, search=search,
+                    region=region, degraded=row_degraded[i],
                 )
                 essential[row_id] = row_essential
             records.extend(row_records)
@@ -910,6 +913,7 @@ def _exact_lever_primaries(
     sparsity_weight: float,
     node_budget: int | None,
     gap: float | None,
+    search: str | None,
     seed: int,
     row_incumbents: Sequence[tuple[float, FloatArray] | None],
     row_degraded: list[list[_Degradation]],
@@ -928,7 +932,7 @@ def _exact_lever_primaries(
     return [
         explainer._explain_one(
             X[i], target, "exact", time_budget_s, sparsity_weight, seed,
-            warn_factual=False, warm_start=False, node_budget=node_budget, gap=gap,
+            warn_factual=False, warm_start=False, node_budget=node_budget, gap=gap, search=search,
             degraded=row_degraded[i], incumbent=row_incumbents[i],
         )
         for i in range(len(X))
@@ -949,6 +953,7 @@ def _rows_by_coalitions(
     warm_start: bool | None = None,
     node_budget: int | None = None,
     gap: float | None = None,
+    search: str | None = None,
     region: bool = False,
     row_degraded: list[list[_Degradation]] | None = None,
 ) -> list[BatchRecord]:
@@ -998,7 +1003,7 @@ def _rows_by_coalitions(
                 solver._explain_one(
                     X[i], target, backend, time_budget_s, sparsity_weight, seed,
                     warn_factual=False,
-                    warm_start=warm_start, node_budget=node_budget, gap=gap,
+                    warm_start=warm_start, node_budget=node_budget, gap=gap, search=search,
                     degraded=None if row_degraded is None else row_degraded[i],
                 )
                 for i in range(len(X))
@@ -1038,6 +1043,7 @@ def _row_by_seeds(
     warm_start: bool | None = None,
     node_budget: int | None = None,
     gap: float | None = None,
+    search: str | None = None,
     region: bool = False,
     degraded: list[_Degradation] | None = None,
     incumbent: tuple[float, FloatArray] | None = None,
@@ -1056,7 +1062,7 @@ def _row_by_seeds(
         result = explainer._explain(
             x, target, backend, time_budget_s, sparsity_weight, attempt_seed,
             warn_factual=False,  # explain_batch already warned in aggregate
-            warm_start=warm_start, node_budget=node_budget, gap=gap,
+            warm_start=warm_start, node_budget=node_budget, gap=gap, search=search,
             degraded=degraded, incumbent=incumbent,
         )
         if isinstance(result, Counterfactual):
@@ -1094,6 +1100,7 @@ def _row_by_lever_blocking(
     warm_start: bool | None = None,
     node_budget: int | None = None,
     gap: float | None = None,
+    search: str | None = None,
     region: bool = False,
     degraded: list[_Degradation] | None = None,
 ) -> tuple[list[BatchRecord], list[str]]:
@@ -1103,7 +1110,7 @@ def _row_by_lever_blocking(
         explained = explainer._explain(
             x, target, backend, time_budget_s, sparsity_weight, seed,
             warn_factual=False,  # explain_batch already warned in aggregate
-            warm_start=warm_start, node_budget=node_budget, gap=gap,
+            warm_start=warm_start, node_budget=node_budget, gap=gap, search=search,
             degraded=degraded,
         )
         assert not isinstance(explained, dict)  # bands are rejected by explain_batch
@@ -1133,7 +1140,7 @@ def _row_by_lever_blocking(
         alternative = clone._explain(
             x, target, backend, time_budget_s, sparsity_weight, seed,
             warn_factual=False,  # explain_batch already warned in aggregate
-            warm_start=warm_start, node_budget=node_budget, gap=gap,
+            warm_start=warm_start, node_budget=node_budget, gap=gap, search=search,
             degraded=degraded,
         )
         if isinstance(alternative, Counterfactual):

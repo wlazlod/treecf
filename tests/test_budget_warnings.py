@@ -74,16 +74,20 @@ class TestGapParenthetical:
         assert _gap_parenthetical(1.0, math.inf) == ""
 
 
+SEARCH_MODES = ["classic", "refine"]
+
+
 class TestExhaustionBodies:
     """node_budget=1 exhausts on the very first assignment; the two bodies
     differ only by whether the warm start had already produced a row."""
 
-    def test_incumbent_exists_uses_body_a(self, exp: Explainer) -> None:
+    @pytest.mark.parametrize("search", SEARCH_MODES)
+    def test_incumbent_exists_uses_body_a(self, exp: Explainer, search: str) -> None:
         target = Target.raw(op=">=", value=1.5)  # needs at least two levers
         with pytest.warns(TreecfWarning, match="exhausted") as record:
             result = exp.explain(
                 X0, target, backend="exact", seed=0,
-                warm_start=True, node_budget=1, time_budget_s=5.0,
+                warm_start=True, node_budget=1, time_budget_s=5.0, search=search,
             )
         assert isinstance(result, Counterfactual)
         assert result.solver_stats["completed"] is False
@@ -92,12 +96,13 @@ class TestExhaustionBodies:
         assert "the result is the best found, not proven optimal" in message
         assert "raise node_budget/time_budget_s" in message
 
-    def test_no_incumbent_uses_body_b(self, exp: Explainer) -> None:
+    @pytest.mark.parametrize("search", SEARCH_MODES)
+    def test_no_incumbent_uses_body_b(self, exp: Explainer, search: str) -> None:
         target = Target.raw(op=">=", value=1.5)
         with pytest.warns(TreecfWarning, match="exhausted") as record:
             result = exp.explain(
                 X0, target, backend="exact", seed=0,
-                warm_start=False, node_budget=1, time_budget_s=5.0,
+                warm_start=False, node_budget=1, time_budget_s=5.0, search=search,
             )
         assert isinstance(result, Infeasible)
         assert result.solver_stats["completed"] is False
@@ -112,7 +117,8 @@ class TestWithdrawalBody:
     "several pairs sharing features" fallback -- a completion is set aside
     although the whole budget was never touched."""
 
-    def test_duplicate_order_pair_withdraws_without_exhaustion(self) -> None:
+    @pytest.mark.parametrize("search", SEARCH_MODES)
+    def test_duplicate_order_pair_withdraws_without_exhaustion(self, search: str) -> None:
         withdrawing = Explainer(
             _ir(), normalizers=np.ones(3),
             constraints=[constraint("a <= b"), constraint("a <= b")],
@@ -121,7 +127,7 @@ class TestWithdrawalBody:
         with pytest.warns(TreecfWarning) as record:
             result = withdrawing.explain(
                 X0, target, backend="exact", seed=0,
-                warm_start=False, node_budget=2_000_000, time_budget_s=10.0,
+                warm_start=False, node_budget=2_000_000, time_budget_s=10.0, search=search,
             )
         assert isinstance(result, Counterfactual)
         assert result.proof == "heuristic"
@@ -235,20 +241,22 @@ class TestNeverWarns:
     suite's ``filterwarnings = ["error"]`` is the real net, this just names
     the three cases explicitly."""
 
+    @pytest.mark.parametrize("search", SEARCH_MODES)
     def test_completed_counterfactual_never_warns(
-        self, exp: Explainer, recwarn: pytest.WarningsRecorder
+        self, exp: Explainer, recwarn: pytest.WarningsRecorder, search: str
     ) -> None:
         target = Target.raw(op=">=", value=0.5)
-        result = exp.explain(X0, target, backend="exact", seed=0)
+        result = exp.explain(X0, target, backend="exact", seed=0, search=search)
         assert isinstance(result, Counterfactual)
         assert result.solver_stats["completed"] is True
         assert not any(issubclass(w.category, TreecfWarning) for w in recwarn.list)
 
+    @pytest.mark.parametrize("search", SEARCH_MODES)
     def test_certified_infeasible_never_warns(
-        self, exp: Explainer, recwarn: pytest.WarningsRecorder
+        self, exp: Explainer, recwarn: pytest.WarningsRecorder, search: str
     ) -> None:
         target = Target.raw(op=">=", value=10.0)  # unreachable: max raw score is 2.4
-        result = exp.explain(X0, target, backend="exact", seed=0)
+        result = exp.explain(X0, target, backend="exact", seed=0, search=search)
         assert isinstance(result, Infeasible)
         assert result.proof == "certified"
         assert not any(issubclass(w.category, TreecfWarning) for w in recwarn.list)

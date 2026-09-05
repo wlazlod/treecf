@@ -43,19 +43,44 @@ def _fmt_s(value: float) -> str:
     return f"{value:.3f} s"
 
 
+MODES = ("classic", "refine")
+
+
+def _by_tag(rows: list[dict]) -> dict[str, dict[str, dict]]:
+    """Rows grouped by scenario tag, then by exact search mode; a row without
+    a mode (an older measurement) counts as the classic engine."""
+    grouped: dict[str, dict[str, dict]] = {}
+    for r in rows:
+        grouped.setdefault(str(r["tag"]), {})[str(r.get("search", "classic"))] = r
+    return grouped
+
+
 def _scenario_rows(results: list[dict]) -> str:
     lines = [
-        "| Scenario | genetic median | exact (warm) median | exact (cold) median "
-        "| heuristic gap median | proof mix |",
-        "|---|---|---|---|---|---|",
+        "| Scenario | genetic median | classic warm | classic cold | refine warm "
+        "| refine cold | heuristic gap median | proof mix (classic) | proof mix (refine) |",
+        "|---|---|---|---|---|---|---|---|---|",
     ]
-    for r in results:
-        if r.get("kind") == "certification":
-            continue
-        proof_mix = ", ".join(f"{k}: {v}" for k, v in r["proof_mix"].items())
+    grouped = _by_tag([r for r in results if r.get("kind") != "certification"])
+    for tag, by_mode in grouped.items():
+        any_row = next(iter(by_mode.values()))
+
+        def cell(mode: str, key: str) -> str:
+            row = by_mode.get(mode)
+            return "—" if row is None else _fmt_s(row[key][0])
+
+        def mix(mode: str) -> str:
+            row = by_mode.get(mode)
+            if row is None:
+                return "—"
+            return ", ".join(f"{k}: {v}" for k, v in row["proof_mix"].items())
+
+        gap_row = by_mode.get("classic", any_row)
         lines.append(
-            f"| {r['tag']} | {_fmt_s(r['genetic'][0])} | {_fmt_s(r['exact_warm'][0])} "
-            f"| {_fmt_s(r['exact_cold'][0])} | {r['gap_median']:.2%} | {proof_mix} |"
+            f"| {tag} | {_fmt_s(any_row['genetic'][0])} "
+            f"| {cell('classic', 'exact_warm')} | {cell('classic', 'exact_cold')} "
+            f"| {cell('refine', 'exact_warm')} | {cell('refine', 'exact_cold')} "
+            f"| {gap_row['gap_median']:.2%} | {mix('classic')} | {mix('refine')} |"
         )
     return "\n".join(lines)
 
@@ -69,19 +94,29 @@ def _certification_rows(results: list[dict], prefix: str) -> str:
     if not rows:
         return ""
     lines = [
-        "| Scenario | time-to-certificate median | certified ≤ 10 s | certified ≤ 60 s |",
-        "|---|---|---|---|",
+        "| Scenario | classic: median | classic ≤ 10 s | classic ≤ 60 s "
+        "| refine: median | refine ≤ 10 s | refine ≤ 60 s |",
+        "|---|---|---|---|---|---|---|",
     ]
-    for r in rows:
-        median = r["median_time_to_certificate_s"]
-        median_cell = _fmt_s(median) if median == median else "—"
-        lines.append(
-            f"| {r['tag'].removeprefix(prefix).strip()} "
-            f"| {median_cell} "
-            f"| {r['certified_within_10s']:.0%} | {r['certified_within_60s']:.0%} |"
-        )
+    for tag, by_mode in _by_tag(rows).items():
+        cells: list[str] = []
+        for mode in MODES:
+            r = by_mode.get(mode)
+            if r is None:
+                cells += ["—", "—", "—"]
+                continue
+            median = r["median_time_to_certificate_s"]
+            cells += [
+                _fmt_s(median) if median == median else "—",
+                f"{r['certified_within_10s']:.0%}",
+                f"{r['certified_within_60s']:.0%}",
+            ]
+        lines.append(f"| {tag.removeprefix(prefix).strip()} | " + " | ".join(cells) + " |")
     lines.append("")
-    lines.append("A dash: no seed certified within the 60 s budget on this machine.")
+    lines.append(
+        "A dash in a median column: no seed certified within the 60 s budget on this "
+        "machine; a dash across a mode's columns: that engine was not measured."
+    )
     return "\n".join(lines)
 
 
@@ -107,7 +142,9 @@ def render(exact: dict, competitors: list[dict] | None) -> str:
         "",
         "Same model, same target, same seeds; the genetic backend's *gap* is how",
         "much plan cost the heuristic leaves on the table relative to the proved",
-        "optimum. Per-solve budgets: 5 s wall, 2,000,000 nodes.",
+        "optimum. Per-solve budgets: 5 s wall, 2,000,000 nodes. *classic* is the",
+        "default exact engine (`search=\"classic\"`); *refine* is the opt-in",
+        "coarse-to-fine engine (`search=\"refine\"`), timed on the same solves.",
         "",
         _scenario_rows(results),
     ]
@@ -146,7 +183,7 @@ def render(exact: dict, competitors: list[dict] | None) -> str:
     parts += [
         "",
         "Reproduce: `uv run python scripts/bench_exact.py --full --matrix "
-        "--categorical --json results.json`, then re-run this generator.",
+        "--categorical --search both --json results.json`, then re-run this generator.",
         "",
     ]
     return "\n".join(parts)

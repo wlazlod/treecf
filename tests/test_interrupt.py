@@ -100,11 +100,14 @@ def _dense_random_ensemble(
     )
 
 
-def test_exact_search_raises_keyboard_interrupt_promptly() -> None:
+@pytest.mark.parametrize("search", ["classic", "refine"])
+def test_exact_search_raises_keyboard_interrupt_promptly(search: str) -> None:
     """28 independent levers, target on the unreachable half-integer 14.5:
     every one of the 2**28 leaf assignments is expanded and only pruned on
     score at the leaf, so ``warm_start=False`` + ``node_budget=1e9`` never
-    lets the search finish early. Measured uninterrupted: ~23 s (>> 5 s)."""
+    lets the search finish early. Measured uninterrupted: ~23 s (>> 5 s).
+    A two-cell feature has no ranges to hold, so both engines walk the same
+    exhaustive tree."""
     n = 28
     ir = _wide_stump_ensemble(n)
     exp = Explainer(ir, normalizers=np.ones(n))
@@ -119,7 +122,7 @@ def test_exact_search_raises_keyboard_interrupt_promptly() -> None:
         with pytest.raises(KeyboardInterrupt):
             exp.explain(
                 x0, target, backend="exact", warm_start=False,
-                node_budget=10**9, time_budget_s=30.0,
+                node_budget=10**9, time_budget_s=30.0, search=search,
             )
         assert time.perf_counter() - t0 < 5.0
     finally:

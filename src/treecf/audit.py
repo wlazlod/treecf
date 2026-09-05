@@ -449,6 +449,7 @@ def build_certificate(
     gap: float | None = None,
     time_budget_s: float | None = None,
     warm_start: bool | None = None,
+    search: str | None = None,
 ) -> dict[str, object]:
     """Body of ``Explainer.certificate``; see its docstring."""
     from treecf import __version__
@@ -480,6 +481,8 @@ def build_certificate(
         declared["time_budget_s"] = _json_float(time_budget_s)
     if warm_start is not None:
         declared["warm_start"] = warm_start
+    if search is not None:
+        declared["search"] = search
     solve: dict[str, object] = {
         "backend": _backend_of(result.solver_stats),
         "proof": result.proof,

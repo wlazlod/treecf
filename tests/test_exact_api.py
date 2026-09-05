@@ -93,6 +93,56 @@ class TestExactOnlyKwargs:
         assert isinstance(result, Counterfactual | Infeasible)
 
 
+class TestSearchMode:
+    def test_refine_with_other_backend_raises(self, exp: Explainer) -> None:
+        with pytest.raises(ValueError, match="only valid with backend='exact'"):
+            exp.explain(X0, Target.raw(op=">=", value=0.5), backend="genetic", search="refine")
+
+    def test_unknown_mode_raises(self, exp: Explainer) -> None:
+        with pytest.raises(ValueError, match="search"):
+            exp.explain(X0, Target.raw(op=">=", value=0.5), backend="exact", search="bogus")
+
+    def test_classic_is_accepted_explicitly_on_any_backend(self, exp: Explainer) -> None:
+        result = exp.explain(
+            X0, Target.raw(op=">=", value=0.5), backend="genetic", seed=0, search="classic"
+        )
+        assert isinstance(result, Counterfactual | Infeasible)
+
+    def test_refine_runs_and_reports_itself(self, exp: Explainer) -> None:
+        result = exp.explain(
+            X0, Target.raw(op=">=", value=0.9), backend="exact", seed=0, search="refine"
+        )
+        assert isinstance(result, Counterfactual)
+        assert result.solver_stats["search"] == "refine"
+        assert result.proof == "optimal"
+        classic = exp.explain(X0, Target.raw(op=">=", value=0.9), backend="exact", seed=0)
+        assert isinstance(classic, Counterfactual)
+        assert classic.solver_stats["search"] == "classic"
+        assert result.distance == pytest.approx(classic.distance, rel=1e-12)
+
+    def test_coalitions_and_batch_forward_the_mode(self, exp: Explainer) -> None:
+        target = Target.raw(op=">=", value=0.9)
+        by_group = exp.explain_coalitions(
+            X0, target, {"first": ["a"], "rest": ["b", "c"]}, backend="exact", seed=0,
+            search="refine",
+        )
+        assert all(r.solver_stats["search"] == "refine" for r in by_group.values())
+        batch = exp.explain_batch(
+            np.zeros((2, 3)), target, backend="exact", seed=0, allow_exact_batch=True,
+            search="refine",
+        )
+        assert all(rec.solver_stats["search"] == "refine" for rec in batch.records)
+
+    def test_certificate_records_the_declared_mode(self, exp: Explainer) -> None:
+        target = Target.raw(op=">=", value=0.9)
+        result = exp.explain(X0, target, backend="exact", seed=0, search="refine")
+        cert = exp.certificate(X0, result, target, search="refine")
+        solve = cert["solve"]
+        assert isinstance(solve, dict)
+        assert solve["declared"]["search"] == "refine"
+        assert solve["solver_stats"]["search"] == "refine"
+
+
 class TestWarmStart:
     def test_node_budget_one_returns_the_warm_start_row_unchanged(self, exp: Explainer) -> None:
         target = Target.raw(op=">=", value=1.5)  # needs at least two levers

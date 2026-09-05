@@ -220,6 +220,8 @@ def _calibrated_readout(target: Target, score_raw: float) -> float | None:
 _DEFAULT_WARM_START = True
 _DEFAULT_NODE_BUDGET = 2_000_000
 _DEFAULT_GAP = 0.0
+_DEFAULT_SEARCH = "classic"
+_SEARCH_MODES = ("classic", "refine")
 
 
 def _resolve_exact_kwargs(
@@ -227,26 +229,32 @@ def _resolve_exact_kwargs(
     warm_start: bool | None,
     node_budget: int | None,
     gap: float | None,
-) -> tuple[bool, int, float]:
+    search: str | None = None,
+) -> tuple[bool, int, float, str]:
     """Normalize the exact-only kwargs and reject them for other backends.
 
     ``None`` means "not explicitly passed" and normalizes to the documented
     default. An explicit non-default value together with a backend other
     than ``"exact"`` raises ``ValueError`` — a Python-level argument
-    combination error, deliberately not the usual ``TreecfError``.
+    combination error, deliberately not the usual ``TreecfError``. An
+    unknown ``search`` mode raises ``ValueError`` on every backend.
     """
     resolved_warm_start = _DEFAULT_WARM_START if warm_start is None else warm_start
     resolved_node_budget = _DEFAULT_NODE_BUDGET if node_budget is None else node_budget
     resolved_gap = _DEFAULT_GAP if gap is None else gap
+    resolved_search = _DEFAULT_SEARCH if search is None else search
+    if resolved_search not in _SEARCH_MODES:
+        raise ValueError(f"search must be one of {_SEARCH_MODES}, got {search!r}")
     if backend != "exact" and (
         resolved_warm_start is not _DEFAULT_WARM_START
         or resolved_node_budget != _DEFAULT_NODE_BUDGET
         or resolved_gap != _DEFAULT_GAP
+        or resolved_search != _DEFAULT_SEARCH
     ):
         raise ValueError(
-            "warm_start, node_budget, and gap are only valid with backend='exact'"
+            "warm_start, node_budget, gap, and search are only valid with backend='exact'"
         )
-    return resolved_warm_start, resolved_node_budget, resolved_gap
+    return resolved_warm_start, resolved_node_budget, resolved_gap, resolved_search
 
 
 @dataclass(frozen=True)
@@ -483,6 +491,7 @@ class Explainer:
         warm_start: bool | None = None,
         node_budget: int | None = None,
         gap: float | None = None,
+        search: str | None = None,
         region: bool = False,
     ) -> Counterfactual | Infeasible | dict[str, object]:
         """Search for a counterfactual (or one per band for ``Target.bands``).
@@ -523,6 +532,13 @@ class Explainer:
         additive rather than deducted from the budget. ``gap`` lets the exact
         search settle for a counterfactual within that relative fraction of
         the true optimum, reported through ``proof="optimal_within_gap"``.
+        ``search`` picks the exact engine: ``"classic"`` (the default)
+        assigns one candidate value per feature at a time; ``"refine"``
+        first holds each numeric feature to a range of routing cells and
+        descends only where the score bound forces it, which proves the same
+        optimum and the same infeasibility certificates — often in far fewer
+        nodes on models with many thresholds per feature — though the row it
+        returns may be a different argmin of the same cost.
 
         An exact search can return a feasible row with ``proof="heuristic"``
         without exhausting ``node_budget`` or ``time_budget_s``: conservative
@@ -560,7 +576,7 @@ class Explainer:
         Raises
         ------
         ValueError
-            If ``warm_start``, ``node_budget``, or ``gap`` is
+            If ``warm_start``, ``node_budget``, ``gap``, or ``search`` is
             given a non-default value together with a ``backend`` other
             than ``"exact"``.
         TreecfError
@@ -575,7 +591,8 @@ class Explainer:
         """
         return self._explain(
             x, target, backend, time_budget_s, sparsity_weight, seed, warn_factual=True,
-            warm_start=warm_start, node_budget=node_budget, gap=gap, region=region,
+            warm_start=warm_start, node_budget=node_budget, gap=gap, search=search,
+            region=region,
         )
 
     def _explain(
@@ -591,6 +608,7 @@ class Explainer:
         warm_start: bool | None = None,
         node_budget: int | None = None,
         gap: float | None = None,
+        search: str | None = None,
         region: bool = False,
         degraded: list[_Degradation] | None = None,
         incumbent: tuple[float, FloatArray] | None = None,
@@ -619,8 +637,8 @@ class Explainer:
             raise TreecfError("plausibility with missing factual values is not supported")
         if backend not in ("genetic", "genetic-rust", "python", "exact"):
             raise TreecfError(f"unknown backend {backend!r}; use 'genetic', 'python', or 'exact'")
-        resolved_warm_start, resolved_node_budget, resolved_gap = _resolve_exact_kwargs(
-            backend, warm_start, node_budget, gap
+        resolved_warm_start, resolved_node_budget, resolved_gap, resolved_search = (
+            _resolve_exact_kwargs(backend, warm_start, node_budget, gap, search)
         )
         rust = backend in ("genetic", "genetic-rust")
 
@@ -633,7 +651,7 @@ class Explainer:
                     self._explain_exact(
                         x, interval, time_budget_s, resolved_warm_start,
                         resolved_node_budget, resolved_gap, sparsity_weight, seed,
-                        degraded=band_degraded,
+                        degraded=band_degraded, search=resolved_search,
                     )
                     if backend == "exact"
                     else self._explain_genetic(
@@ -658,7 +676,7 @@ class Explainer:
             self._explain_exact(
                 x, interval, time_budget_s, resolved_warm_start,
                 resolved_node_budget, resolved_gap, sparsity_weight, seed,
-                incumbent=incumbent, degraded=degraded,
+                incumbent=incumbent, degraded=degraded, search=resolved_search,
             )
             if backend == "exact"
             else self._explain_genetic(
@@ -689,6 +707,7 @@ class Explainer:
         warm_start: bool | None = None,
         node_budget: int | None = None,
         gap: float | None = None,
+        search: str | None = None,
         region: bool = False,
         allow_exact_batch: bool = False,
     ) -> Any:
@@ -752,7 +771,7 @@ class Explainer:
             outside ``diversity="coalitions"`` (or omitted inside it), or
             if ``ids`` does not have one entry per row of ``X``.
         ValueError
-            If ``warm_start``, ``node_budget``, or ``gap`` is
+            If ``warm_start``, ``node_budget``, ``gap``, or ``search`` is
             given a non-default value together with a ``backend`` other
             than ``"exact"``; if ``backend="exact"`` is requested without
             ``allow_exact_batch=True`` (message names the wall time
@@ -767,8 +786,8 @@ class Explainer:
             ids=ids, backend=backend, time_budget_s=time_budget_s,
             sparsity_weight=sparsity_weight, seed=seed,
             coalitions=coalitions, include_full=include_full,
-            warm_start=warm_start, node_budget=node_budget, gap=gap, region=region,
-            allow_exact_batch=allow_exact_batch,
+            warm_start=warm_start, node_budget=node_budget, gap=gap, search=search,
+            region=region, allow_exact_batch=allow_exact_batch,
         )
 
     def explain_coalitions(
@@ -784,6 +803,7 @@ class Explainer:
         warm_start: bool | None = None,
         node_budget: int | None = None,
         gap: float | None = None,
+        search: str | None = None,
         region: bool = False,
     ) -> dict[str, Counterfactual | Infeasible]:
         """One counterfactual per named feature coalition (opt-in mode).
@@ -819,7 +839,7 @@ class Explainer:
             references an unknown feature, or if ``include_full=True`` and
             a coalition is named ``"(all levers)"`` (the reserved key).
         ValueError
-            If ``warm_start``, ``node_budget``, or ``gap`` is
+            If ``warm_start``, ``node_budget``, ``gap``, or ``search`` is
             given a non-default value together with a ``backend`` other
             than ``"exact"``.
         """
@@ -833,14 +853,14 @@ class Explainer:
         if include_full:
             results[_ALL_LEVERS] = self._explain_one(
                 x, target, backend, time_budget_s, sparsity_weight, seed,
-                warm_start=warm_start, node_budget=node_budget, gap=gap, region=region,
-                degraded=degraded,
+                warm_start=warm_start, node_budget=node_budget, gap=gap, search=search,
+                region=region, degraded=degraded,
             )
         for name, clone in self._coalition_explainers(normalized).items():
             results[name] = clone._explain_one(
                 x, target, backend, time_budget_s, sparsity_weight, seed,
-                warm_start=warm_start, node_budget=node_budget, gap=gap, region=region,
-                degraded=degraded,
+                warm_start=warm_start, node_budget=node_budget, gap=gap, search=search,
+                region=region, degraded=degraded,
             )
         message = _degraded_summary(degraded, len(degraded), len(results), "coalitions")
         if message is not None:
@@ -859,6 +879,7 @@ class Explainer:
         warm_start: bool | None = None,
         node_budget: int | None = None,
         gap: float | None = None,
+        search: str | None = None,
         region: bool = False,
         degraded: list[_Degradation] | None = None,
         incumbent: tuple[float, FloatArray] | None = None,
@@ -867,8 +888,8 @@ class Explainer:
         result = self._explain(
             x, target, backend, time_budget_s, sparsity_weight, seed,
             warn_factual=warn_factual,
-            warm_start=warm_start, node_budget=node_budget, gap=gap, region=region,
-            degraded=degraded, incumbent=incumbent,
+            warm_start=warm_start, node_budget=node_budget, gap=gap, search=search,
+            region=region, degraded=degraded, incumbent=incumbent,
         )
         assert not isinstance(result, dict)  # bands are rejected by the callers
         return result
@@ -1004,6 +1025,7 @@ class Explainer:
         seed: int | None,
         incumbent: tuple[float, FloatArray] | None = None,
         degraded: list[_Degradation] | None = None,
+        search: str = "classic",
     ) -> Counterfactual | Infeasible:
         """Exact-backend counterfactual for one target interval.
 
@@ -1079,6 +1101,7 @@ class Explainer:
                 time_budget_s=time_budget_s,
                 incumbent=incumbent,
                 cache=self._rust_cache,
+                search=search,
             )
         else:
             from treecf.backends.exact import solve_exact
@@ -1097,6 +1120,7 @@ class Explainer:
                 gap=gap,
                 time_budget_s=time_budget_s,
                 incumbent=incumbent,
+                search=search,
             )
         elapsed = time.monotonic() - start
 
@@ -1357,6 +1381,7 @@ class Explainer:
         seed: int | None = None,
         node_budget: int | None = None,
         gap: float | None = None,
+        search: str | None = None,
         time_budget_s: float | None = None,
         warm_start: bool | None = None,
     ) -> dict[str, object]:
@@ -1385,10 +1410,10 @@ class Explainer:
         whose fresh verification fails is still returned, with the failing
         booleans recorded — but a ``TreecfWarning`` names the failed check.
 
-        ``seed``/``node_budget``/``gap``/``time_budget_s``/``warm_start`` are
-        recorded under ``solve.declared`` when given: the result object does
-        not carry them, so they are caller-supplied, and the block's name
-        makes that provenance explicit.
+        ``seed``/``node_budget``/``gap``/``time_budget_s``/``warm_start``/
+        ``search`` are recorded under ``solve.declared`` when given: the
+        result object does not carry them, so they are caller-supplied, and
+        the block's name makes that provenance explicit.
 
         Parameters
         ----------
@@ -1411,6 +1436,9 @@ class Explainer:
             The time budget the solve ran with, likewise.
         warm_start
             The warm-start setting the solve ran with, likewise.
+        search
+            The exact search mode (``"classic"`` or ``"refine"``) the solve
+            ran with, likewise.
 
         Returns
         -------
@@ -1427,7 +1455,7 @@ class Explainer:
 
         return build_certificate(
             self, x, result, target, band=band, seed=seed, node_budget=node_budget,
-            gap=gap, time_budget_s=time_budget_s, warm_start=warm_start,
+            gap=gap, time_budget_s=time_budget_s, warm_start=warm_start, search=search,
         )
 
     def check_certificate(
