@@ -22,6 +22,11 @@ from dataclasses import dataclass
 
 from treecf.ir.model import EnsembleIR, SplitOp, Tree, code_goes_left
 
+# a feature held to a whole interval of values rather than one point: (lo, hi,
+# lo_open, hi_open). The coarse-to-fine search assigns these; the classic search
+# never does.
+_RangeIv = tuple[float, float, bool, bool]
+
 
 @dataclass(frozen=True)
 class _PreparedTree:
@@ -99,13 +104,27 @@ class _EnsembleBounds:
 
     ``assigned`` and ``values`` are the search's own arrays, shared by
     reference so the model and plausibility ensembles read one assignment.
+    ``ranges``, when given, is a third shared array: a feature whose entry is
+    set is held to that whole interval instead of the point in ``values``, and
+    a split on it routes the way the region oracle routes an interval — to one
+    child when the threshold falls outside the interval, to both when it falls
+    inside.
     """
 
-    def __init__(self, ir: EnsembleIR, assigned: list[bool], values: list[float]) -> None:
+    def __init__(
+        self,
+        ir: EnsembleIR,
+        assigned: list[bool],
+        values: list[float],
+        ranges: list[_RangeIv | None] | None = None,
+    ) -> None:
         self.base_score = ir.base_score
         self.trees = tuple(_prepare_tree(tree) for tree in ir.trees)
         self.assigned = assigned
         self.values = values
+        self.ranges: list[_RangeIv | None] = (
+            [None] * ir.n_features if ranges is None else ranges
+        )
         on_feature: list[list[int]] = [[] for _ in range(ir.n_features)]
         for t, tree in enumerate(self.trees):
             for f in sorted(set(tree.feature)):
@@ -159,7 +178,22 @@ class _EnsembleBounds:
         if tree.mask[idx] & assigned_mask == 0:
             return tree.sub_min[idx], tree.sub_max[idx]
         f = tree.feature[idx]  # a set mask bit means this node is a split
-        if self.assigned[f]:
+        rng = self.ranges[f]
+        if rng is not None:
+            lo, hi, lo_open, hi_open = rng
+            t = tree.threshold[idx]
+            if tree.is_lt[idx]:
+                all_left = hi < t or (hi == t and hi_open)
+                all_right = lo >= t
+            else:
+                all_left = hi <= t
+                all_right = lo > t or (lo == t and lo_open)
+            if all_left:
+                return self._walk(tree, tree.left[idx], assigned_mask)
+            if all_right:
+                return self._walk(tree, tree.right[idx], assigned_mask)
+            # the threshold falls inside the interval: both children stay live
+        elif self.assigned[f]:
             value = self.values[f]
             members = tree.categories[idx]
             if math.isnan(value):

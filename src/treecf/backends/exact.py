@@ -79,7 +79,7 @@ import numpy as np
 
 from treecf.aim.cells import Cell, category_blocks
 from treecf.api import ValuePolicy
-from treecf.backends._exact_bounds import _EnsembleBounds
+from treecf.backends._exact_bounds import _EnsembleBounds, _RangeIv
 from treecf.backends._exact_domains import (
     FloatArray,
     _build_domains,
@@ -120,6 +120,16 @@ class ExactResult:
     stats: dict[str, object]
     snapped: dict[str, bool]
     distance: float | None
+
+
+@dataclass
+class _Ledger:
+    """The one piece of search state a repair writes from inside ``finish``:
+    the cheapest committed cost among the completions the repair had to set
+    aside. Nothing derived from one of those can cost less than this, so once
+    the incumbent is at least as cheap, setting them aside changed nothing."""
+
+    dropped_floor: float
 
 
 # (feature index, model bracket frame, plausibility bracket frame, cost before
@@ -272,9 +282,17 @@ def solve_exact(
         )
     assigned = [False] * len(x)
     values = [0.0] * len(x)
+    # the state index each assigned feature currently sits on; a feature held
+    # to a whole interval (the coarse-to-fine search only) has its interval in
+    # ``ranges`` and the interval's achievable span in ``range_span``
+    picked = [0] * len(x)
+    ranges: list[_RangeIv | None] = [None] * len(x)
+    range_span: list[tuple[float, float] | None] = [None] * len(x)
     assigned_mask = 0
-    model_bounds = _EnsembleBounds(ir, assigned, values)
-    if_bounds = _EnsembleBounds(if_ir, assigned, values) if if_ir is not None else None
+    model_bounds = _EnsembleBounds(ir, assigned, values, ranges)
+    if_bounds = (
+        _EnsembleBounds(if_ir, assigned, values, ranges) if if_ir is not None else None
+    )
 
     presolve_removed = _presolve_domains(
         order, domains, model_bounds, if_bounds, min_total_path, lo_t, hi_t,
@@ -296,7 +314,6 @@ def solve_exact(
 
     h_suffix = _h_suffix(order, domains)
 
-    level_of = {f: level for level, f in enumerate(order)}
     # Every feature an implication, a one-hot group or an order pair mentions is
     # constraint-referenced, and _feature_order keeps all of those, so the search
     # really does get to decide each of them.
@@ -363,7 +380,7 @@ def solve_exact(
         )
     )
 
-    propagation = _Propagation(compiled, domains, assigned, values)
+    propagation = _Propagation(compiled, domains, assigned, values, ranges)
 
     incumbent_cost = math.inf
     incumbent_row: FloatArray | None = None
@@ -382,10 +399,7 @@ def solve_exact(
     nodes_pruned_cost = 0
     gap_prune_fired = False
     completed = True
-    # cheapest committed cost among the completions the repair had to set aside;
-    # nothing derived from one of those can cost less than this, so once the
-    # incumbent is at least as cheap, setting them aside changed nothing
-    dropped_floor = -math.inf if policy_bound else math.inf
+    ledger = _Ledger(dropped_floor=-math.inf if policy_bound else math.inf)
 
     stack: list[int] = []  # state index chosen at each assigned level
     frames: list[_Frame] = []
@@ -415,7 +429,7 @@ def solve_exact(
         bound = frontier_bound()
         if gap > 0.0:
             bound = min(bound, incumbent_cost / (1.0 + gap))
-        set_aside_view = 0.0 if dropped_floor == -math.inf else dropped_floor
+        set_aside_view = 0.0 if ledger.dropped_floor == -math.inf else ledger.dropped_floor
         bound = min(bound, set_aside_view, incumbent_cost)
         cost = None if incumbent_row is None else incumbent_cost
         trace.record(nodes_expanded, cost, bound, is_incumbent=is_incumbent)
@@ -442,11 +456,14 @@ def solve_exact(
         """
         if not assigned[f]:
             return spans[f]
+        span = range_span[f]
+        if span is not None:
+            # held to an interval: every state inside lies within its span,
+            # so the span stands in whether or not the pair can be repaired
+            return span
         if not movable:
             return values[f], values[f]
-        level = level_of[f]
-        chosen = stack[level] if level < len(stack) else next_state
-        return state_spans[f][chosen]
+        return state_spans[f][picked[f]]
 
     def unorderable() -> bool:
         """True when some pair ``a <= b`` is already out of reach: the lowest
@@ -461,12 +478,10 @@ def solve_exact(
     def intersected_cell(f: int) -> Cell | None:
         """The cell the current assignment puts ``f`` in, narrowed to its
         constraint bounds; ``None`` when ``f`` is currently missing."""
-        level = level_of[f]
-        chosen = stack[level] if level < len(stack) else next_state
-        picked = domains[f][chosen]
-        if picked.is_nan:
+        state = domains[f][picked[f]]
+        if state.is_nan:
             return None
-        return _intersect_cell(grids[f][picked.cell_idx], float(bounds_lo[f]), float(bounds_hi[f]))
+        return _intersect_cell(grids[f][state.cell_idx], float(bounds_lo[f]), float(bounds_hi[f]))
 
     def demanded_for(a: int, b: int) -> list[float]:
         """Exact values a repair of this pair may have to land on: what an
@@ -504,7 +519,7 @@ def solve_exact(
             and float(row[a]) - float(row[b]) > _LINEAR_SLACK
         ]
 
-    def set_aside(pairs: list[tuple[int, int]]) -> None:
+    def set_aside(pairs: list[tuple[int, int]], g_now: float) -> None:
         """Remember a completion the repair could not settle.
 
         Every repair that comes to nothing goes through here, whatever the
@@ -514,13 +529,12 @@ def solve_exact(
         could have become for the pairs listed in ``g_floor_pairs``, and
         nothing at all can be said about any other, so those withdraw outright.
         """
-        nonlocal dropped_floor
         if all(pair in g_floor_pairs for pair in pairs):
-            dropped_floor = min(dropped_floor, g)
+            ledger.dropped_floor = min(ledger.dropped_floor, g_now)
         else:
-            dropped_floor = -math.inf
+            ledger.dropped_floor = -math.inf
 
-    def finish(row: FloatArray) -> FloatArray | None:
+    def finish(row: FloatArray, g_now: float) -> FloatArray | None:
         """The row to weigh against the incumbent, or ``None`` if there is none.
 
         A completed assignment usually goes straight to the arbiter. When it
@@ -556,7 +570,7 @@ def solve_exact(
                     best_cost = cost
                     best_row = variant
             if best_row is None:
-                set_aside(violated)
+                set_aside(violated, g_now)
             return best_row
         repaired = row.copy()
         for a, b in violated:
@@ -573,12 +587,12 @@ def solve_exact(
                     best_cost = cost
                     best_t = t
             if best_t is None:
-                set_aside(violated)
+                set_aside(violated, g_now)
                 return None
             repaired[a] = best_t
             repaired[b] = best_t
         if broken(repaired, order_pairs) or not accepts(repaired):
-            set_aside(violated)
+            set_aside(violated, g_now)
             return None
         return repaired
 
@@ -604,6 +618,7 @@ def solve_exact(
         prop_frame, conflict = propagation.apply(j, state.value)
         assigned[j] = True
         values[j] = state.value
+        picked[j] = next_state
         assigned_mask |= 1 << j
         frame: _Frame = (
             j,
@@ -646,7 +661,7 @@ def solve_exact(
             for level, chosen in enumerate(stack):
                 row[order[level]] = domains[order[level]][chosen].value
             row[j] = state.value
-            accepted = finish(row)
+            accepted = finish(row, g)
             if accepted is not None:
                 cost = _cost_of_row(
                     x, accepted, sigma, weights, lam, compiled.allow_missing, categorical
@@ -668,7 +683,7 @@ def solve_exact(
         g_stack.append(g)
         next_state = 0
 
-    completed = completed and dropped_floor >= incumbent_cost
+    completed = completed and ledger.dropped_floor >= incumbent_cost
     if completed:
         lower_bound = math.inf
         if incumbent_row is not None:
@@ -681,7 +696,7 @@ def solve_exact(
         # a completion the repair set aside is worth at least its committed
         # cost, or — where even that does not hold — at least nothing, since
         # the objective is a sum of non-negative terms
-        set_aside_view = 0.0 if dropped_floor == -math.inf else dropped_floor
+        set_aside_view = 0.0 if ledger.dropped_floor == -math.inf else ledger.dropped_floor
         lower_bound = min(open_view, incumbent_cost, set_aside_view)
         proof = "heuristic"
     trace.record(

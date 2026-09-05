@@ -230,7 +230,7 @@ impl<'a> EnsembleBounds<'a> {
     fn recompute(&mut self, assigned_mask: &BitSet, assigned: &[bool], values: &[f64]) {
         for t in 0..self.ens.tree_roots.len() {
             let root = self.ens.tree_roots[t] as usize;
-            let (low, high) = self.walk(root, assigned_mask, assigned, values);
+            let (low, high) = self.walk(root, assigned_mask, assigned, values, &[]);
             self.tree_min[t] = low;
             self.tree_max[t] = high;
         }
@@ -245,12 +245,27 @@ impl<'a> EnsembleBounds<'a> {
         assigned: &[bool],
         values: &[f64],
     ) -> Vec<(usize, f64, f64)> {
+        self.apply_with(j, assigned_mask, assigned, values, &[])
+    }
+
+    /// `apply` for a search that also holds features to whole intervals:
+    /// `ranges[f]`, when set, is read instead of `values[f]` and routes a split
+    /// the way the region oracle routes an interval. An empty slice means no
+    /// feature is held to a range, which is what the classic search passes.
+    fn apply_with(
+        &mut self,
+        j: usize,
+        assigned_mask: &BitSet,
+        assigned: &[bool],
+        values: &[f64],
+        ranges: &[Option<Cell>],
+    ) -> Vec<(usize, f64, f64)> {
         let mut frame: Vec<(usize, f64, f64)> = Vec::new();
         for k in 0..self.trees_on_feature[j].len() {
             let t = self.trees_on_feature[j][k];
             frame.push((t, self.tree_min[t], self.tree_max[t]));
             let root = self.ens.tree_roots[t] as usize;
-            let (low, high) = self.walk(root, assigned_mask, assigned, values);
+            let (low, high) = self.walk(root, assigned_mask, assigned, values, ranges);
             self.tree_min[t] = low;
             self.tree_max[t] = high;
         }
@@ -294,13 +309,28 @@ impl<'a> EnsembleBounds<'a> {
         assigned_mask: &BitSet,
         assigned: &[bool],
         values: &[f64],
+        ranges: &[Option<Cell>],
     ) -> (f64, f64) {
         if !self.touches_assigned(idx, assigned_mask) {
             return (self.sub_min[idx], self.sub_max[idx]);
         }
         let f = self.ens.feature[idx] as usize; // a set mask bit means this is a split
         let (left, right) = (self.ens.left[idx] as usize, self.ens.right[idx] as usize);
-        if assigned[f] {
+        if let Some(rng) = ranges.get(f).copied().flatten() {
+            let t = self.ens.threshold[idx];
+            let (all_left, all_right) = if self.ens.is_lt[idx] {
+                (rng.hi < t || (rng.hi == t && rng.hi_open), rng.lo >= t)
+            } else {
+                (rng.hi <= t, rng.lo > t || (rng.lo == t && rng.lo_open))
+            };
+            if all_left {
+                return self.walk(left, assigned_mask, assigned, values, ranges);
+            }
+            if all_right {
+                return self.walk(right, assigned_mask, assigned, values, ranges);
+            }
+            // the threshold falls inside the interval: both children stay live
+        } else if assigned[f] {
             let value = values[f];
             let child = if value.is_nan() {
                 if self.ens.missing_left[idx] {
@@ -325,10 +355,10 @@ impl<'a> EnsembleBounds<'a> {
             } else {
                 right
             };
-            return self.walk(child, assigned_mask, assigned, values);
+            return self.walk(child, assigned_mask, assigned, values, ranges);
         }
-        let (left_min, left_max) = self.walk(left, assigned_mask, assigned, values);
-        let (right_min, right_max) = self.walk(right, assigned_mask, assigned, values);
+        let (left_min, left_max) = self.walk(left, assigned_mask, assigned, values, ranges);
+        let (right_min, right_max) = self.walk(right, assigned_mask, assigned, values, ranges);
         (py_min(left_min, right_min), py_max(left_max, right_max))
     }
 }
@@ -377,7 +407,6 @@ struct Ctx<'a> {
     grids: Vec<Vec<Cell>>,
     domains: Vec<Vec<State>>,
     order: Vec<usize>,
-    level_of: Vec<usize>,
     bounds_lo: Vec<f64>,
     bounds_hi: Vec<f64>,
     order_pairs: Vec<(usize, usize)>,
@@ -415,37 +444,32 @@ impl Ctx<'_> {
         )
     }
 
-    /// The state index feature `f` currently sits on: the one its level pushed,
-    /// or the one being tried right now at the level the stack has not taken yet.
-    fn chosen(&self, f: usize, stack: &[usize], next_state: usize) -> usize {
-        let level = self.level_of[f];
-        if level < stack.len() {
-            stack[level]
-        } else {
-            next_state
-        }
-    }
-
     /// The values feature `f` can still end up holding. Undecided, that is every
     /// cell it might yet be put in; decided, the cell it was put in — a boundary
     /// repair may still move it anywhere inside — unless the pair cannot be
     /// repaired at all, and then the value it was given is the only point left.
+    /// A feature held to a whole interval (`range_span[f]` set) reaches that
+    /// interval's achievable span whether or not the pair can be repaired:
+    /// every state inside lies within it.
     fn reach(
         &self,
         f: usize,
         movable: bool,
         assigned: &[bool],
         values: &[f64],
-        stack: &[usize],
-        next_state: usize,
+        picked: &[usize],
+        range_span: &[Option<(f64, f64)>],
     ) -> (f64, f64) {
         if !assigned[f] {
             return self.spans[f].expect("a bounded pair's features have spans");
         }
+        if let Some(span) = range_span.get(f).copied().flatten() {
+            return span;
+        }
         if !movable {
             return (values[f], values[f]);
         }
-        self.state_spans[f][self.chosen(f, stack, next_state)]
+        self.state_spans[f][picked[f]]
     }
 
     /// True when some pair `a <= b` is already out of reach: the lowest value `a`
@@ -454,17 +478,17 @@ impl Ctx<'_> {
         &self,
         assigned: &[bool],
         values: &[f64],
-        stack: &[usize],
-        next_state: usize,
+        picked: &[usize],
+        range_span: &[Option<(f64, f64)>],
     ) -> bool {
         for pair in &self.bounded_pairs {
             let (a, b) = *pair;
             let movable = self.repairable_pairs.contains(pair);
             if self
-                .reach(a, movable, assigned, values, stack, next_state)
+                .reach(a, movable, assigned, values, picked, range_span)
                 .0
                 > self
-                    .reach(b, movable, assigned, values, stack, next_state)
+                    .reach(b, movable, assigned, values, picked, range_span)
                     .1
             {
                 return true;
@@ -475,13 +499,13 @@ impl Ctx<'_> {
 
     /// The cell the current assignment puts `f` in, narrowed to its constraint
     /// bounds; `None` when `f` is currently missing.
-    fn intersected_cell(&self, f: usize, stack: &[usize], next_state: usize) -> Option<Cell> {
-        let picked = self.domains[f][self.chosen(f, stack, next_state)];
-        if picked.is_nan {
+    fn intersected_cell(&self, f: usize, picked: &[usize]) -> Option<Cell> {
+        let state = self.domains[f][picked[f]];
+        if state.is_nan {
             return None;
         }
         intersect_cell(
-            &self.grids[f][picked.cell_idx],
+            &self.grids[f][state.cell_idx],
             self.bounds_lo[f],
             self.bounds_hi[f],
         )
@@ -508,13 +532,12 @@ impl Ctx<'_> {
         &self,
         a: usize,
         b: usize,
-        stack: &[usize],
-        next_state: usize,
+        picked: &[usize],
         forced_value: &[Option<f64>],
     ) -> Vec<f64> {
         let (Some(cell_a), Some(cell_b)) = (
-            self.intersected_cell(a, stack, next_state),
-            self.intersected_cell(b, stack, next_state),
+            self.intersected_cell(a, picked),
+            self.intersected_cell(b, picked),
         ) else {
             return Vec::new();
         };
@@ -565,8 +588,7 @@ impl Ctx<'_> {
     fn finish(
         &self,
         row: &[f64],
-        stack: &[usize],
-        next_state: usize,
+        picked: &[usize],
         forced_value: &[Option<f64>],
         g: f64,
         dropped_floor: &mut f64,
@@ -589,7 +611,7 @@ impl Ctx<'_> {
             let (a, b) = violated[0];
             let mut best_row: Option<Vec<f64>> = None;
             let mut best_cost = f64::INFINITY;
-            for t in self.candidates_for(a, b, stack, next_state, forced_value) {
+            for t in self.candidates_for(a, b, picked, forced_value) {
                 let mut variant = row.to_vec();
                 variant[a] = t;
                 variant[b] = t;
@@ -608,7 +630,7 @@ impl Ctx<'_> {
         for &(a, b) in &violated {
             let mut best_t: Option<f64> = None;
             let mut best_cost = f64::INFINITY;
-            for t in self.candidates_for(a, b, stack, next_state, forced_value) {
+            for t in self.candidates_for(a, b, picked, forced_value) {
                 let mut variant = repaired.clone();
                 variant[a] = t;
                 variant[b] = t;
@@ -904,9 +926,9 @@ pub fn solve_exact(
 
     let h_suffix = h_suffix(&order, &domains);
 
-    let mut level_of = vec![usize::MAX; x.len()];
-    for (level, &f) in order.iter().enumerate() {
-        level_of[f] = level;
+    let mut in_order = vec![false; x.len()];
+    for &f in &order {
+        in_order[f] = true;
     }
     // Every feature an implication, a one-hot group or an order pair mentions is
     // constraint-referenced, and feature_order keeps all of those, so the search
@@ -917,7 +939,7 @@ pub fn solve_exact(
             .flat_map(|&(ci, _, si, _)| [ci as usize, si as usize])
             .chain(cons.onehot.iter().flatten().map(|&f| f as usize))
             .chain(order_pairs.iter().flat_map(|&(a, b)| [a, b]))
-            .all(|f| level_of[f] != usize::MAX),
+            .all(|f| in_order[f]),
         "a related feature was left out of the search order"
     );
 
@@ -1003,7 +1025,6 @@ pub fn solve_exact(
         grids,
         domains,
         order,
-        level_of,
         bounds_lo,
         bounds_hi,
         order_pairs,
@@ -1045,6 +1066,10 @@ pub fn solve_exact(
     };
 
     let mut stack: Vec<usize> = Vec::new(); // state index chosen at each assigned level
+                                            // the state index each assigned feature sits on; the classic search never
+                                            // holds a feature to an interval, so its range spans stay unset
+    let mut picked: Vec<usize> = vec![0; x.len()];
+    let range_span: Vec<Option<(f64, f64)>> = vec![None; x.len()];
     let mut frames: Vec<Frame> = Vec::new();
     let mut g_stack: Vec<f64> = vec![0.0]; // cost committed before the level of the same index
     let mut g = 0.0;
@@ -1141,6 +1166,7 @@ pub fn solve_exact(
         let (prop_frame, conflict) = propagation.apply(j, state.value, &assigned, &values);
         assigned[j] = true;
         values[j] = state.value;
+        picked[j] = next_state;
         assigned_mask.set(j);
         let frame = Frame {
             j,
@@ -1156,7 +1182,7 @@ pub fn solve_exact(
 
         if conflict
             || (!ctx.bounded_pairs.is_empty()
-                && ctx.unorderable(&assigned, &values, &stack, next_state))
+                && ctx.unorderable(&assigned, &values, &picked, &range_span))
         {
             // No completion below this state can satisfy the constraints, so it
             // is cut on feasibility, counted with the cost prunes.
@@ -1236,8 +1262,7 @@ pub fn solve_exact(
             row[j] = state.value;
             let accepted = ctx.finish(
                 &row,
-                &stack,
-                next_state,
+                &picked,
                 &propagation.forced_value,
                 g,
                 &mut dropped_floor,
