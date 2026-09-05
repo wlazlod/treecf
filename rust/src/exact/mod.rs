@@ -11,6 +11,8 @@
 //! | `treecf.backends._exact_domains` (+ the `treecf.api._snap` it calls) | `domains` |
 //! | `treecf.backends._exact_propagation` | `propagation` |
 //! | `treecf.backends._exact_orderpairs` | `orderpairs` |
+//! | `treecf.backends._exact_refine` | `refine` |
+//! | `treecf.backends._exact_trace` | `trace` |
 //!
 //! Those five Python files carry the bit-parity contract in their own headers;
 //! every module here follows its counterpart line for line, so the operation
@@ -72,6 +74,7 @@
 pub(crate) mod domains;
 pub(crate) mod orderpairs;
 pub(crate) mod propagation;
+pub(crate) mod refine;
 pub(crate) mod search;
 #[cfg(test)]
 pub(crate) mod test_support;

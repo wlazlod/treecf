@@ -32,6 +32,8 @@ pytestmark = pytest.mark.rust
 _treecf_core = pytest.importorskip("treecf._treecf_core")
 
 FIXTURES = fixture_utils.fixture_paths()
+REFINE_FIXTURES = fixture_utils.refine_fixture_paths()
+ALL_FIXTURES = FIXTURES + REFINE_FIXTURES
 
 
 def _bits(v: float | None) -> object:
@@ -106,10 +108,15 @@ def _rust_result(fixture: fixture_utils.ExactFixture) -> fixture_utils.ExactResu
         gap=fixture.gap,
         time_budget_s=fixture.time_budget_s,
         incumbent=fixture.incumbent,
+        search=fixture.search,
     )
 
 
-@pytest.mark.parametrize("path", FIXTURES, ids=[p.stem for p in FIXTURES])
+@pytest.mark.parametrize(
+    "path",
+    ALL_FIXTURES,
+    ids=[f"{p.parent.name}/{p.stem}" for p in ALL_FIXTURES],
+)
 def test_rust_matches_python_and_golden_bitwise(path) -> None:
     fixture = fixture_utils.load_fixture(path)
     python_result = fixture_utils.run_fixture(fixture)

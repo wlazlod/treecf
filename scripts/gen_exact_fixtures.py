@@ -2,9 +2,11 @@
 
 Run with: uv run python scripts/gen_exact_fixtures.py
 
-Regenerating overwrites tests/fixtures/exact/*.json — do this ONLY when the
-Python exact backend's behavior changes deliberately; the fixtures freeze it
-otherwise (the Rust port has to reproduce them bit-for-bit). Every
+Regenerating overwrites tests/fixtures/exact/*.json (the classic search),
+tests/fixtures/exact-refine/*.json (the coarse-to-fine search) and
+tests/fixtures/regions*/ — do this ONLY when the Python exact backend's
+behavior changes deliberately; the fixtures freeze it otherwise (the Rust
+port has to reproduce them bit-for-bit). Every
 input here is either a fixed-seed draw or a hand-built ensemble, so two runs
 of this script always produce byte-identical files.
 """
@@ -48,10 +50,10 @@ def _stump(
     )
 
 
-def _write(payload: dict[str, Any]) -> None:
+def _write(payload: dict[str, Any], out_dir: Path = fixture_utils.FIXTURES_DIR) -> None:
     result = fixture_utils.solve_payload(payload)
     payload["golden"] = fixture_utils.golden_block(result)
-    out = fixture_utils.FIXTURES_DIR / f"{payload['name']}.json"
+    out = out_dir / f"{payload['name']}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     if out.exists():
         # regeneration may change node counters, never results: the answer a
@@ -65,9 +67,12 @@ def _write(payload: dict[str, Any]) -> None:
                 f"{old[key]!r} -> {new[key]!r}"
             )
         counters = {
-            key: (old[key], new[key])
-            for key in ("nodes_expanded", "nodes_pruned_score", "nodes_pruned_cost")
-            if old.get(key) != new[key]
+            key: (old.get(key), new.get(key))
+            for key in (
+                "nodes_expanded", "nodes_pruned_score", "nodes_pruned_cost",
+                "coarse_accepts", "refinements",
+            )
+            if old.get(key) != new.get(key)
         }
         if counters:
             print(f"  {payload['name']}: results identical, node counters: {counters}")
@@ -356,6 +361,83 @@ def _scenario_14_categorical_frozen_nan() -> dict[str, Any]:
     )
 
 
+def _staircase_ir(n_thresholds: int = 40) -> EnsembleIR:
+    """One feature split at forty thresholds — a staircase of forty cells, the
+    shape the coarse-to-fine search exists for — plus one binary lever."""
+    trees = tuple(_stump(0, float(t), 0.0, 0.1) for t in range(1, n_thresholds + 1))
+    return EnsembleIR(
+        trees=(*trees, _stump(1, 0.5, 0.0, 0.05)),
+        base_score=0.0, link=Link.IDENTITY, n_features=2,
+        feature_names=("a", "b"), meta={},
+    )
+
+
+def _scenario_15_wide_staircase() -> dict[str, Any]:
+    """Forty routing cells on one feature: the search holds ranges first and
+    refines down only where the bound forces it, accepting whole boxes."""
+    ir = _staircase_ir()
+    x = np.array([0.0, 0.0])
+    return fixture_utils.build_fixture_payload(
+        "15-wide-staircase", ir, x, (2.05, float("inf")), [], search="refine",
+    )
+
+
+def _scenario_16_wide_order_pair() -> dict[str, Any]:
+    """Two staircase features tied by ``a <= b``: a range's achievable span
+    feeds the order-pair reachability cut while the feature is held to it."""
+    trees_a = tuple(_stump(0, float(t), 0.0, 0.1) for t in range(1, 21))
+    trees_b = tuple(_stump(1, float(t) + 0.5, 0.0, 0.1) for t in range(1, 21))
+    ir = EnsembleIR(
+        trees=(*trees_a, *trees_b), base_score=0.0, link=Link.IDENTITY, n_features=2,
+        feature_names=("a", "b"), meta={},
+    )
+    x = np.array([0.0, 0.0])
+    constraints = [{"type": "Linear", "coefficients": {"a": 1.0, "b": -1.0}, "op": "<=",
+                     "rhs": 0.0}]
+    return fixture_utils.build_fixture_payload(
+        "16-wide-order-pair", ir, x, (1.55, float("inf")), constraints, search="refine",
+    )
+
+
+def _scenario_17_wide_trigger_implies() -> dict[str, Any]:
+    """An implication whose trigger is the staircase feature: the trigger
+    value gets a cell of its own and fires only once the feature narrows to it."""
+    ir = _staircase_ir(12)
+    x = np.array([0.0, 0.0])
+    constraints = [
+        {"type": "Implies", "cond_feature": "a", "cond_value": 1.0,
+         "cons_feature": "b", "cons_value": 1.0},
+    ]
+    return fixture_utils.build_fixture_payload(
+        "17-wide-trigger-implies", ir, x, (0.14, float("inf")), constraints, lam=0.02,
+        search="refine",
+    )
+
+
+def _scenario_18_refine_budget_limited() -> dict[str, Any]:
+    """The staircase cut off after a handful of nodes: pins the lower bound
+    and the trace a coarse-to-fine search reports when it cannot finish."""
+    ir = _staircase_ir()
+    x = np.array([0.0, 0.0])
+    return fixture_utils.build_fixture_payload(
+        "18-refine-budget-limited", ir, x, (2.05, float("inf")), [], node_budget=5,
+        search="refine",
+    )
+
+
+def _as_refine(build: Any) -> Any:
+    """A classic scenario replayed under the coarse-to-fine search: same
+    inputs, same name (the file lives in the other directory)."""
+
+    def build_refine() -> dict[str, Any]:
+        payload = build()
+        payload["search"] = "refine"
+        return payload
+
+    build_refine.__name__ = build.__name__ + "_refine"
+    return build_refine
+
+
 # One builder per fixture, in file order. Exposed as a module constant (not just
 # a literal inside main()) so tests can call each builder twice and diff the
 # payload dicts directly -- the double-generation determinism check without
@@ -375,6 +457,16 @@ SCENARIO_BUILDERS = (
     _scenario_12_categorical_blocks,
     _scenario_13_categorical_allowed,
     _scenario_14_categorical_frozen_nan,
+)
+
+# The coarse-to-fine search over every classic scenario, plus the shapes only
+# it exercises. Written under tests/fixtures/exact-refine/.
+REFINE_SCENARIO_BUILDERS = (
+    *(_as_refine(build) for build in SCENARIO_BUILDERS),
+    _scenario_15_wide_staircase,
+    _scenario_16_wide_order_pair,
+    _scenario_17_wide_trigger_implies,
+    _scenario_18_refine_budget_limited,
 )
 
 
@@ -483,6 +575,9 @@ def main() -> None:
     fixture_utils.FIXTURES_DIR.mkdir(parents=True, exist_ok=True)
     for build in SCENARIO_BUILDERS:
         _write(build())
+    fixture_utils.REFINE_FIXTURES_DIR.mkdir(parents=True, exist_ok=True)
+    for build in REFINE_SCENARIO_BUILDERS:
+        _write(build(), fixture_utils.REFINE_FIXTURES_DIR)
     fixture_utils.REGION_FIXTURES_DIR.mkdir(parents=True, exist_ok=True)
     for build in REGION_SCENARIO_BUILDERS:
         _write_region(build())

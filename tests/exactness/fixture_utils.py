@@ -33,6 +33,7 @@ from treecf.ir.model import EnsembleIR
 from ..parity.harness import build_constraints
 
 FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "exact"
+REFINE_FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "exact-refine"
 REGION_FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "regions"
 
 FloatArray = npt.NDArray[np.float64]
@@ -114,6 +115,9 @@ class ExactFixture:
     golden_completed: bool
     golden_presolve_removed: int
     golden_presolve_certified: bool
+    search: str = "classic"
+    golden_coarse_accepts: int | None = None
+    golden_refinements: int | None = None
 
 
 def build_fixture_payload(
@@ -132,13 +136,16 @@ def build_fixture_payload(
     node_budget: int = 2_000_000,
     gap: float = 0.0,
     incumbent: tuple[float, FloatArray] | None = None,
+    search: str = "classic",
 ) -> dict[str, Any]:
-    """Inputs -> the fixture dict, minus the ``golden`` block (the caller solves and adds it)."""
+    """Inputs -> the fixture dict, minus the ``golden`` block (the caller solves and adds it).
+    The search mode is written only when it is not the classic one, so the
+    classic fixture files keep their byte layout."""
     p = ir.n_features
     sigma = np.ones(p) if sigma is None else sigma
     weights = np.ones(p) if weights is None else weights
     value_policies = dict(value_policies or {})
-    return {
+    payload = {
         "name": name,
         "ensemble": encode_ensemble(ir),
         "if_ensemble": encode_ensemble(if_ir) if if_ir is not None else None,
@@ -159,6 +166,9 @@ def build_fixture_payload(
             else {"cost": encode_floats(incumbent[0]), "row": encode_floats(incumbent[1])}
         ),
     }
+    if search != "classic":
+        payload["search"] = search
+    return payload
 
 
 def solve_payload(payload: Mapping[str, Any]) -> ExactResult:
@@ -168,7 +178,7 @@ def solve_payload(payload: Mapping[str, Any]) -> ExactResult:
 
 
 def golden_block(result: ExactResult) -> dict[str, Any]:
-    return {
+    block = {
         "x_cf": None if result.x_cf is None else encode_floats(result.x_cf),
         "distance": None if result.distance is None else encode_floats(result.distance),
         "proof": result.proof,
@@ -179,10 +189,20 @@ def golden_block(result: ExactResult) -> dict[str, Any]:
         "presolve_removed": result.stats["presolve_removed"],
         "presolve_certified": result.stats["presolve_certified"],
     }
+    if result.stats["search"] == "refine":
+        # the coarse-to-fine counters pin the refine engine's own branching;
+        # classic fixtures never carry them, so their files stay unchanged
+        block["coarse_accepts"] = result.stats["coarse_accepts"]
+        block["refinements"] = result.stats["refinements"]
+    return block
 
 
 def fixture_paths() -> list[Path]:
     return sorted(FIXTURES_DIR.glob("*.json"))
+
+
+def refine_fixture_paths() -> list[Path]:
+    return sorted(REFINE_FIXTURES_DIR.glob("*.json"))
 
 
 def load_fixture(path: Path) -> ExactFixture:
@@ -240,6 +260,11 @@ def _fixture_from_payload(
         golden_completed=bool(golden.get("completed", False)),
         golden_presolve_removed=int(golden.get("presolve_removed", 0)),
         golden_presolve_certified=bool(golden.get("presolve_certified", False)),
+        search=str(payload.get("search", "classic")),
+        golden_coarse_accepts=(
+            None if "coarse_accepts" not in golden else int(golden["coarse_accepts"])
+        ),
+        golden_refinements=None if "refinements" not in golden else int(golden["refinements"]),
     )
 
 
@@ -263,6 +288,7 @@ def run_fixture(fixture: ExactFixture) -> ExactResult:
         gap=fixture.gap,
         time_budget_s=fixture.time_budget_s,
         incumbent=fixture.incumbent,
+        search=fixture.search,
     )
 
 
@@ -457,7 +483,11 @@ def diff_golden(fixture: ExactFixture, result: ExactResult) -> list[str]:
         ("completed", fixture.golden_completed),
         ("presolve_removed", fixture.golden_presolve_removed),
         ("presolve_certified", fixture.golden_presolve_certified),
+        ("coarse_accepts", fixture.golden_coarse_accepts),
+        ("refinements", fixture.golden_refinements),
     ):
+        if want is None:
+            continue  # a classic fixture carries no coarse-to-fine counters
         got = result.stats[key]
         if got != want:
             problems.append(f"{key}: golden={want!r} got={got!r}")

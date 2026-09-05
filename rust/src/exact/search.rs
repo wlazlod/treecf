@@ -26,7 +26,7 @@ const LINEAR_SLACK: f64 = 1e-9;
 /// How many expanded nodes between two interrupt polls. Asking is cheap but not
 /// free, and a search that gets nowhere near this many nodes finishes fast
 /// enough that nobody reaches for the keyboard.
-const SIGNAL_CHECK_INTERVAL: u64 = 1 << 18;
+pub(crate) const SIGNAL_CHECK_INTERVAL: u64 = 1 << 18;
 
 /// Which engine ran: the classic cell-by-cell search, or the coarse-to-fine
 /// search over cell ranges.
@@ -106,23 +106,27 @@ impl Default for ExactParams {
 /// Fixed-width bitset over features — the mirror of Python's arbitrary-precision
 /// int masks, correct for models wider than 64 features.
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct BitSet {
+pub(crate) struct BitSet {
     words: Vec<u64>,
 }
 
 impl BitSet {
-    fn new(n_features: usize) -> Self {
+    pub(crate) fn new(n_features: usize) -> Self {
         Self {
             words: vec![0; n_words(n_features)],
         }
     }
 
-    fn set(&mut self, i: usize) {
+    pub(crate) fn set(&mut self, i: usize) {
         self.words[i / 64] |= 1u64 << (i % 64);
     }
 
-    fn clear(&mut self, i: usize) {
+    pub(crate) fn clear(&mut self, i: usize) {
         self.words[i / 64] &= !(1u64 << (i % 64));
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.words.iter().all(|&w| w == 0)
     }
 
     #[cfg(test)]
@@ -145,7 +149,7 @@ fn n_words(n_features: usize) -> usize {
 /// full walks. The ensemble bracket is then re-summed in full over every tree in
 /// ascending index, the same additions `raw_score` performs (see rule 2 of the
 /// module header).
-struct EnsembleBounds<'a> {
+pub(crate) struct EnsembleBounds<'a> {
     ens: &'a Ensemble,
     n_words: usize,
     sub_min: Vec<f64>,
@@ -154,8 +158,8 @@ struct EnsembleBounds<'a> {
     trees_on_feature: Vec<Vec<usize>>,
     tree_min: Vec<f64>,
     tree_max: Vec<f64>,
-    score_min: f64,
-    score_max: f64,
+    pub(crate) score_min: f64,
+    pub(crate) score_max: f64,
 }
 
 fn prepare_node(
@@ -252,7 +256,7 @@ impl<'a> EnsembleBounds<'a> {
     /// `ranges[f]`, when set, is read instead of `values[f]` and routes a split
     /// the way the region oracle routes an interval. An empty slice means no
     /// feature is held to a range, which is what the classic search passes.
-    fn apply_with(
+    pub(crate) fn apply_with(
         &mut self,
         j: usize,
         assigned_mask: &BitSet,
@@ -274,7 +278,7 @@ impl<'a> EnsembleBounds<'a> {
     }
 
     /// Put back the brackets an `apply` replaced.
-    fn restore(&mut self, frame: &[(usize, f64, f64)]) {
+    pub(crate) fn restore(&mut self, frame: &[(usize, f64, f64)]) {
         for &(t, low, high) in frame {
             self.tree_min[t] = low;
             self.tree_max[t] = high;
@@ -296,6 +300,87 @@ impl<'a> EnsembleBounds<'a> {
         }
         self.score_min = low;
         self.score_max = high;
+    }
+
+    /// Per feature, how many live tree nodes a range assignment leaves
+    /// unresolved: nodes reachable under the current routing whose threshold
+    /// falls strictly inside the interval their feature is held to. Adds into
+    /// `counts` so the model and plausibility ensembles can share one tally.
+    pub(crate) fn count_unresolved(
+        &self,
+        ranges: &[Option<Cell>],
+        range_mask: &BitSet,
+        assigned: &[bool],
+        values: &[f64],
+        counts: &mut [u64],
+    ) {
+        for &root in &self.ens.tree_roots {
+            self.count_node(root as usize, ranges, range_mask, assigned, values, counts);
+        }
+    }
+
+    fn count_node(
+        &self,
+        idx: usize,
+        ranges: &[Option<Cell>],
+        range_mask: &BitSet,
+        assigned: &[bool],
+        values: &[f64],
+        counts: &mut [u64],
+    ) {
+        if !self.touches_assigned(idx, range_mask) {
+            return; // nothing below is held to a range: nothing to resolve
+        }
+        let f = self.ens.feature[idx] as usize;
+        let (left, right) = (self.ens.left[idx] as usize, self.ens.right[idx] as usize);
+        if let Some(rng) = ranges[f] {
+            let t = self.ens.threshold[idx];
+            let (all_left, all_right) = if self.ens.is_lt[idx] {
+                (rng.hi < t || (rng.hi == t && rng.hi_open), rng.lo >= t)
+            } else {
+                (rng.hi <= t, rng.lo > t || (rng.lo == t && rng.lo_open))
+            };
+            if all_left {
+                self.count_node(left, ranges, range_mask, assigned, values, counts);
+            } else if all_right {
+                self.count_node(right, ranges, range_mask, assigned, values, counts);
+            } else {
+                counts[f] += 1;
+                self.count_node(left, ranges, range_mask, assigned, values, counts);
+                self.count_node(right, ranges, range_mask, assigned, values, counts);
+            }
+            return;
+        }
+        if assigned[f] {
+            let value = values[f];
+            let child = if value.is_nan() {
+                if self.ens.missing_left[idx] {
+                    left
+                } else {
+                    right
+                }
+            } else if self.ens.node_set[idx] >= 0 {
+                if self.ens.set_contains(self.ens.node_set[idx], value) {
+                    left
+                } else {
+                    right
+                }
+            } else if self.ens.is_lt[idx] {
+                if value < self.ens.threshold[idx] {
+                    left
+                } else {
+                    right
+                }
+            } else if value <= self.ens.threshold[idx] {
+                left
+            } else {
+                right
+            };
+            self.count_node(child, ranges, range_mask, assigned, values, counts);
+            return;
+        }
+        self.count_node(left, ranges, range_mask, assigned, values, counts);
+        self.count_node(right, ranges, range_mask, assigned, values, counts);
     }
 
     fn touches_assigned(&self, idx: usize, assigned_mask: &BitSet) -> bool {
@@ -392,34 +477,34 @@ fn accepts(
 }
 
 /// Everything the search reads but never writes.
-struct Ctx<'a> {
-    ens: &'a Ensemble,
-    if_ens: Option<&'a Ensemble>,
-    min_total_path: f64,
-    x: &'a [f64],
-    lo_t: f64,
-    hi_t: f64,
-    cons: &'a Constraints,
-    sigma: &'a [f64],
-    weights: &'a [f64],
-    lam: f64,
-    deltas: Vec<(f64, f64)>,
-    grids: Vec<Vec<Cell>>,
-    domains: Vec<Vec<State>>,
-    order: Vec<usize>,
-    bounds_lo: Vec<f64>,
-    bounds_hi: Vec<f64>,
-    order_pairs: Vec<(usize, usize)>,
-    bounded_pairs: Vec<(usize, usize)>,
-    repairable_pairs: Vec<(usize, usize)>,
-    g_floor_pairs: Vec<(usize, usize)>,
-    spans: Vec<Option<(f64, f64)>>,
-    state_spans: Vec<Vec<(f64, f64)>>,
-    demanded: Vec<Vec<f64>>,
+pub(crate) struct Ctx<'a> {
+    pub(crate) ens: &'a Ensemble,
+    pub(crate) if_ens: Option<&'a Ensemble>,
+    pub(crate) min_total_path: f64,
+    pub(crate) x: &'a [f64],
+    pub(crate) lo_t: f64,
+    pub(crate) hi_t: f64,
+    pub(crate) cons: &'a Constraints,
+    pub(crate) sigma: &'a [f64],
+    pub(crate) weights: &'a [f64],
+    pub(crate) lam: f64,
+    pub(crate) deltas: Vec<(f64, f64)>,
+    pub(crate) grids: Vec<Vec<Cell>>,
+    pub(crate) domains: Vec<Vec<State>>,
+    pub(crate) order: Vec<usize>,
+    pub(crate) bounds_lo: Vec<f64>,
+    pub(crate) bounds_hi: Vec<f64>,
+    pub(crate) order_pairs: Vec<(usize, usize)>,
+    pub(crate) bounded_pairs: Vec<(usize, usize)>,
+    pub(crate) repairable_pairs: Vec<(usize, usize)>,
+    pub(crate) g_floor_pairs: Vec<(usize, usize)>,
+    pub(crate) spans: Vec<Option<(f64, f64)>>,
+    pub(crate) state_spans: Vec<Vec<(f64, f64)>>,
+    pub(crate) demanded: Vec<Vec<f64>>,
 }
 
 impl Ctx<'_> {
-    fn accepts(&self, row: &[f64]) -> bool {
+    pub(crate) fn accepts(&self, row: &[f64]) -> bool {
         accepts(
             self.ens,
             self.if_ens,
@@ -432,7 +517,7 @@ impl Ctx<'_> {
         )
     }
 
-    fn cost_of(&self, row: &[f64]) -> f64 {
+    pub(crate) fn cost_of(&self, row: &[f64]) -> f64 {
         cost_of_row(
             self.x,
             row,
@@ -474,7 +559,7 @@ impl Ctx<'_> {
 
     /// True when some pair `a <= b` is already out of reach: the lowest value `a`
     /// can still hold is above the highest `b` can.
-    fn unorderable(
+    pub(crate) fn unorderable(
         &self,
         assigned: &[bool],
         values: &[f64],
@@ -585,7 +670,7 @@ impl Ctx<'_> {
     /// Several broken pairs at once are repaired one after another, each on the
     /// cheapest shared value regardless of the arbiter, and the whole completion
     /// is dropped if any pair is left broken.
-    fn finish(
+    pub(crate) fn finish(
         &self,
         row: &[f64],
         picked: &[usize],
@@ -741,6 +826,30 @@ fn presolve_domains(
         domains[j] = survivors;
     }
     removed
+}
+
+/// Which features of the winning row were moved onto a policy grid, in
+/// search order — a feature an order-pair repair moved no longer holds the
+/// value the policy produced, so it is not reported as snapped either.
+pub(crate) fn snapped_of(
+    order: &[usize],
+    incumbent_states: Option<&[State]>,
+    incumbent_row: Option<&[f64]>,
+    x: &[f64],
+) -> Vec<usize> {
+    let mut snapped: Vec<usize> = Vec::new();
+    for (level, chosen_state) in incumbent_states.into_iter().flatten().enumerate() {
+        let f = order[level];
+        if let Some(row) = incumbent_row {
+            if row[f] != chosen_state.value {
+                continue;
+            }
+        }
+        if chosen_state.snapped && chosen_state.value != x[f] {
+            snapped.push(f);
+        }
+    }
+    snapped
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1037,6 +1146,28 @@ pub fn solve_exact(
     };
 
     let mut propagation = Propagation::new(cons, &ctx.domains);
+
+    if params.search == SearchMode::Refine {
+        return Ok(crate::exact::refine::run(
+            &ctx,
+            &mut propagation,
+            &mut model_bounds,
+            &mut if_bounds,
+            &mut assigned,
+            &mut values,
+            &h_suffix,
+            incumbent,
+            presolve_removed,
+            if policy_bound {
+                f64::NEG_INFINITY
+            } else {
+                f64::INFINITY
+            },
+            start,
+            params,
+            probe,
+        ));
+    }
 
     let mut incumbent_cost = f64::INFINITY;
     let mut incumbent_row: Option<Vec<f64>> = None;
@@ -1346,20 +1477,12 @@ pub fn solve_exact(
         false,
     );
 
-    let mut snapped: Vec<usize> = Vec::new();
-    for (level, chosen_state) in incumbent_states.iter().flatten().enumerate() {
-        let f = ctx.order[level];
-        // a feature an order-pair repair moved no longer holds the value the
-        // policy produced, so it is not reported as snapped either
-        if let Some(row) = incumbent_row.as_ref() {
-            if row[f] != chosen_state.value {
-                continue;
-            }
-        }
-        if chosen_state.snapped && chosen_state.value != x[f] {
-            snapped.push(f);
-        }
-    }
+    let snapped = snapped_of(
+        &ctx.order,
+        incumbent_states.as_deref(),
+        incumbent_row.as_deref(),
+        x,
+    );
 
     Ok(SearchOutcome::Done(ExactResult {
         distance: incumbent_row.as_ref().map(|_| incumbent_cost),

@@ -99,6 +99,7 @@ def solve_exact_rust(
     time_budget_s: float = 10.0,
     incumbent: tuple[float, FloatArray] | None = None,
     cache: dict[str, Any] | None = None,
+    search: str = "classic",
 ) -> ExactResult:
     """Drop-in for ``solve_exact``; ``cache`` (e.g. on the ``Explainer``)
     avoids re-marshaling the ensembles and constraints on every call, exactly
@@ -110,6 +111,8 @@ def solve_exact_rust(
     raising ``KeyboardInterrupt`` with no result and discarding whatever
     incumbent it was holding.
     """
+    if search not in ("classic", "refine"):
+        raise ValueError(f"search must be 'classic' or 'refine', got {search!r}")
     core = _core()
     cache = cache if cache is not None else {}
     if "ensemble" not in cache:
@@ -150,6 +153,7 @@ def solve_exact_rust(
             time_budget_s=time_budget_s,
             incumbent_cost=incumbent_cost,
             incumbent_row=incumbent_row,
+            search=search,
         )
     except ValueError as exc:
         # solve_exact_raw raises ValueError for exactly one thing: the same
