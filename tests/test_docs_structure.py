@@ -61,6 +61,7 @@ CAPABILITIES = [
     "maximal",
     "trace",
     "portfolio report",
+    "menu",
 ]
 
 # Every public plot function must appear as a committed, alt-texted figure

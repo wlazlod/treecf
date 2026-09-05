@@ -58,6 +58,51 @@ sorted(plans)   # ["(all levers)", "profile", "repayment"]
 
 Semantics and comparison plots: [Coalitions](../concepts/coalitions.md).
 
+## Recourse menus and diverse plans
+
+`recourse_menu` solves every lever set up to a size as its own coalition and
+returns the whole picture at once — which combinations of levers reach the
+target, at what cost, and which provably cannot:
+
+```python
+# exp, x, target: the docs explainer, one rejected applicant, the target
+menu = exp.recourse_menu(x, target=target, max_levers=2, backend="exact", seed=0)
+menu.minimal              # the cheapest lever sets no smaller set can replace
+menu.certified_infeasible # sets no acceptance is reachable through, proved
+menu.complete             # True: every set up to two levers was settled with a proof
+menu.describe()["dpd_12m"]   # "no acceptance is reachable by changing only dpd_12m"
+```
+
+The candidate levers are the features the search would branch on for this
+applicant (not frozen, more than one candidate value, influential). Entries
+are keyed by the features each plan actually changed, sorted and joined
+with `+`, so a menu is a mapping in the same shape `explain_coalitions`
+returns and every plot that takes one takes a menu. The default
+`mode="minimal"` skips any set that contains a set already found feasible
+— feasible by monotonicity, and not minimal — and lists the frontier in
+`menu.minimal`; `mode="all"` solves every set. `menu.complete` certifies
+one precise thing: every enumerated set was settled with a proof (an
+optimal plan, or a certified infeasibility) and none was cut off by
+`total_budget_s`. The genetic backend never certifies, so its menus are
+never complete.
+
+`explain_diverse` reads the `k` cheapest plans off that menu. Diversity
+here means distinct lever sets — two plans count as different ways to
+reach the target when they change different features — and nothing else:
+
+```python
+# exp, x, target: the docs explainer, one rejected applicant, the target
+diverse = exp.explain_diverse(x, target=target, k=3, backend="exact", seed=0)
+list(diverse)        # plan keys, cheapest first
+diverse.jaccard      # pairwise distance between the plans' changed sets
+diverse.complete     # False: k plans came back, so more distinct lever sets may exist
+```
+
+`diversity="coalitions"` with the `explain_coalitions` group form solves
+each declared coalition as itself and reaches for unions of groups only
+when fewer than `k` are feasible. The matrix view of a menu is in
+[visualize](visualize.md#a-recourse-menu).
+
 ## A whole dataset
 
 `explain_batch` runs thousands of rows in parallel inside the Rust core and

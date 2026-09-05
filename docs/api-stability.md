@@ -12,7 +12,8 @@ The public API is exactly the export lists below; anything prefixed with
 `_` or not exported is internal and may change without notice.
 
 - `treecf.__all__`: `Explainer`, the result types (`Counterfactual`,
-  `Infeasible`, `BatchResult`, `BatchRecord`, `RecourseRegion`), `Target`,
+  `Infeasible`, `BatchResult`, `BatchRecord`, `RecourseRegion`, `RecourseMenu`,
+  `DiverseSet`), `Target`,
   the constraint objects (`Freeze`, `Monotone`, `Range`, `Linear`, `Equals`,
   `Implies`, `OneHot`, `AllowMissing`, `AllowedCategories`, the
   `constraint()` mini-language), `Plausibility`, `Grid`, constraint mining
@@ -28,7 +29,7 @@ The public API is exactly the export lists below; anything prefixed with
 - `treecf.viz.__all__` (extra `treecf[viz]`): `plot_changes`,
   `plot_counterfactuals`, `plot_ladder`, `plot_alternatives`,
   `plot_tradeoff`, `plot_recourse_map`, `plot_waterfall`, `plot_effort`,
-  `plot_region`, `plot_certification_trace`.
+  `plot_region`, `plot_certification_trace`, `plot_recourse_menu`.
 - `treecf.viz_batch.__all__` (extra `treecf[viz]`): `plot_batch_levers`,
   `plot_batch_matrix`, `plot_batch_summary`, `plot_batch_deltas`,
   `plot_recourse_burden`, `recourse_burden_table`.
@@ -75,6 +76,17 @@ New public symbols in this release, as one running list:
 - `RecourseRegion.data_limited`: the sides that stopped at the observed
   range of the explainer's background data, which now bounds every side no
   constraint bounds; batch files round-trip the field.
+- `Explainer.recourse_menu(x, target, max_levers=, mode=, ...)` and
+  `RecourseMenu` (`treecf`): every lever set up to a size solved as its own
+  coalition, keyed by the features each plan changed, with the minimal
+  frontier, the certified-infeasible sets, and a `complete` flag; strict
+  JSON through `to_dict()` (`menu_schema_version` 1, readers tolerate
+  unknown keys).
+- `Explainer.explain_diverse(x, target, k=, diversity=, ...)` and
+  `DiverseSet` (`treecf`): the `k` cheapest plans with distinct lever sets,
+  or a ladder over declared coalitions and their unions.
+- `plot_recourse_menu` (`treecf.viz`): the lever-set by feature matrix of a
+  menu with a proof glyph per row.
 - `Explainer.search_profile(x, target=None)`: per-feature domain sizes and
   the total search-space size before an exact solve; the budget-exhaustion
   warning quotes that size.

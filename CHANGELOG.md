@@ -56,6 +56,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Commit hygiene.** A pull-request CI job checks that commit subjects and bodies describe
   behavior, mirrored by a CONTRIBUTING checklist item; the narration test covers Rust and
   Markdown sources too.
+- **Certified recourse menus over lever sets (`recourse_menu`), lever-diverse plans
+  (`explain_diverse`), and the menu matrix plot.** Every lever set up to a size is solved as
+  its own coalition; the menu lists the minimal frontier, the sets proved unable to reach the
+  target, and whether every set was settled with a certificate. `explain_diverse` returns the
+  cheapest plans with distinct lever sets, or climbs declared coalitions and their unions;
+  `plot_recourse_menu` draws the matrix with a proof glyph per row.
 
 ### Changed
 

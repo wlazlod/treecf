@@ -12,6 +12,12 @@
 
 ::: treecf.BatchRecord
 
+## Recourse menus
+
+::: treecf.RecourseMenu
+
+::: treecf.DiverseSet
+
 ## Regions
 
 ::: treecf.RecourseRegion
