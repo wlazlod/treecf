@@ -531,6 +531,17 @@ def build_certificate(
                 plan["region_feature_categories"] = {
                     name: list(codes) for name, codes in region_categories.items()
                 }
+            # the maximal mode's claims travel as additive keys; a fast-mode
+            # region writes none, so its certificates keep their exact shape
+            if result.region.maximal:
+                plan["region_maximal"] = {
+                    name: [bool(lo_ok), bool(hi_ok)]
+                    for name, (lo_ok, hi_ok) in result.region.maximal.items()
+                }
+            if result.region.maximal_categories:
+                plan["region_maximal_categories"] = {
+                    name: bool(ok) for name, ok in result.region.maximal_categories.items()
+                }
         cert["plan"] = plan
         verification, failed = _verify_plan(
             explainer, x, result.x_cf, interval, region_intervals, region_categories

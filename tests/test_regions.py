@@ -95,6 +95,32 @@ class TestDescribe:
         assert set(region.describe()) == {"b"}
 
 
+class TestMaximalityFields:
+    def test_defaults_claim_nothing(self) -> None:
+        region = RecourseRegion(
+            lo=np.array([1.0]), hi=np.array([math.inf]),
+            feature_intervals={"a": (1.0, math.inf)}, certified=True,
+        )
+        assert region.maximal == {}
+        assert region.maximal_categories == {}
+        assert region.witnesses is None
+
+    def test_describe_marks_fully_proved_features(self) -> None:
+        region = RecourseRegion(
+            lo=np.array([1.0, 2.0, 0.0]), hi=np.array([3.0, 5.0, 0.0]),
+            feature_intervals={"a": (1.0, 3.0), "b": (2.0, 5.0)},
+            certified=True,
+            feature_categories={"c": (0, 1)},
+            cat_sets={2: (0, 1)},
+            maximal={"a": (True, True), "b": (True, False)},
+            maximal_categories={"c": True},
+        )
+        described = region.describe()
+        assert described["a"] == "in [1, 3] (maximal)"
+        assert described["b"] == "in [2, 5]"
+        assert described["c"] == "∈ {0, 1} (maximal)"
+
+
 class TestContains:
     def test_closed_box_membership(self) -> None:
         region = RecourseRegion(

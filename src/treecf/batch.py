@@ -263,6 +263,22 @@ class BatchResult:
                                 name: list(names)
                                 for name, names in record.region.category_names.items()
                             },
+                            "maximal": {
+                                name: [bool(lo_ok), bool(hi_ok)]
+                                for name, (lo_ok, hi_ok) in record.region.maximal.items()
+                            },
+                            "maximal_categories": {
+                                name: bool(ok)
+                                for name, ok in record.region.maximal_categories.items()
+                            },
+                            "witnesses": (
+                                None
+                                if record.region.witnesses is None
+                                else {
+                                    key: encode_floats(point)
+                                    for key, point in record.region.witnesses.items()
+                                }
+                            ),
                         }
                     ),
                 }
@@ -323,6 +339,23 @@ class BatchResult:
                         name: tuple(str(n) for n in names)
                         for name, names in raw_region.get("category_names", {}).items()
                     },
+                    # absent in files written before the maximal mode existed
+                    maximal={
+                        name: (bool(lo_ok), bool(hi_ok))
+                        for name, (lo_ok, hi_ok) in raw_region.get("maximal", {}).items()
+                    },
+                    maximal_categories={
+                        name: bool(ok)
+                        for name, ok in raw_region.get("maximal_categories", {}).items()
+                    },
+                    witnesses=(
+                        None
+                        if raw_region.get("witnesses") is None
+                        else {
+                            key: np.asarray(decode_floats(point), dtype=np.float64)
+                            for key, point in raw_region["witnesses"].items()
+                        }
+                    ),
                 )
             )
             records.append(

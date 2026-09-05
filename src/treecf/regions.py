@@ -59,11 +59,14 @@ class RecourseRegion:
 
     ``lo``/``hi`` cover every feature (degenerate coordinates included, as a
     single point); ``feature_intervals`` keys only the non-degenerate ones by
-    name, for display. Regions are certified but neither maximal (a larger
-    sound box may exist) nor monotone in the target interval (a strictly
-    narrower target can still produce a strictly wider region on some
-    feature: growth is greedy and order-dependent, so a feature that is
-    forced to stop early frees room a later feature grows into). See
+    name, for display. Regions are certified but not monotone in the target
+    interval (a strictly narrower target can still produce a strictly wider
+    region on some feature: growth is greedy and order-dependent, so a
+    feature that is forced to stop early frees room a later feature grows
+    into), and in the default fast mode not maximal either (a larger sound
+    box may exist). The maximal mode settles each stopped side with a
+    budgeted search for a violating point and records what it proved in
+    ``maximal``/``maximal_categories``. See
     [Certification](../concepts/certification.md#regions-certified-not-maximal-not-monotone).
 
     Attributes
@@ -82,6 +85,23 @@ class RecourseRegion:
         by ``Explainer.recourse_region``/``explain(..., region=True)`` is
         a sound certificate; the field is reserved for a future relaxed
         mode.
+    maximal
+        ``{feature: (lower side proved, upper side proved)}`` for the
+        non-degenerate numeric features, set by the maximal mode only. A
+        proved side cannot be extended into the next routing cell without
+        leaving the target or breaking a constraint (a witness point
+        exists), or already sits at an instance bound or at infinity. A
+        side left ``False`` stopped on a conservative bound or ran out of
+        its budget — the fast mode's state for every side. Empty in fast
+        mode.
+    maximal_categories
+        ``{feature: proved}`` per grown categorical feature, likewise:
+        ``True`` when every excluded category block was proved impossible.
+    witnesses
+        ``{"feature:lo" | "feature:hi" | "feature:cat": point}`` — for
+        each proved side, one point just past it that leaves the target
+        or violates a constraint; ``None`` unless the region was asked to
+        keep them.
     """
 
     lo: FloatArray
@@ -94,6 +114,10 @@ class RecourseRegion:
     feature_categories: dict[str, tuple[int, ...]] = field(default_factory=dict)
     cat_sets: dict[int, tuple[int, ...]] = field(default_factory=dict)
     category_names: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    # what the maximal mode proved about each stopped side; empty in fast mode
+    maximal: dict[str, tuple[bool, bool]] = field(default_factory=dict)
+    maximal_categories: dict[str, bool] = field(default_factory=dict)
+    witnesses: dict[str, FloatArray] | None = None
 
     def contains(self, x: FloatArray) -> bool:
         """Whether ``x`` lies inside the region, coordinate by coordinate.
@@ -132,7 +156,8 @@ class RecourseRegion:
         One-sided (``"<= v"``/``">= v"``) when the other endpoint is
         infinite, two-sided (``"in [lo, hi]"``) otherwise, and
         ``"unconstrained"`` when both endpoints are infinite; values
-        formatted ``"{:.3g}"``.
+        formatted ``"{:.3g}"``. A feature whose every side the maximal mode
+        proved carries the suffix ``" (maximal)"``.
 
         Returns
         -------
@@ -148,6 +173,8 @@ class RecourseRegion:
                 out[name] = f"≥ {lo:.3g}"
             else:
                 out[name] = f"in [{lo:.3g}, {hi:.3g}]"
+            if self.maximal.get(name) == (True, True):
+                out[name] += " (maximal)"
         for name, codes in self.feature_categories.items():
             names = self.category_names.get(name)
             rendered = (
@@ -156,6 +183,8 @@ class RecourseRegion:
                 else ", ".join(str(c) for c in codes)
             )
             out[name] = f"∈ {{{rendered}}}"
+            if self.maximal_categories.get(name):
+                out[name] += " (maximal)"
         return out
 
 

@@ -45,6 +45,13 @@ Three artifact kinds leave the library, all plain JSON, none ever unpickled:
 - **Model dumps** are inputs, not outputs — the parsers read the training
   libraries' own JSON formats.
 
+Keys are added, never repurposed. A reader of a certificate or a batch file
+must tolerate keys it does not know: a release may add a key to any block
+(a new solver counter, a new region flag) without bumping the schema
+version, and `check_certificate` verifies such a file exactly as it would
+without the addition. Only removing a key, or changing what an existing key
+means, bumps `schema_version`.
+
 ## Added in 0.3.0
 
 New public symbols in this release, as one running list (extend this list

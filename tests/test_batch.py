@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 
 import numpy as np
@@ -416,6 +417,48 @@ class TestPersistence:
             np.testing.assert_array_equal(restored.region.hi, original.region.hi)
             assert restored.region.feature_intervals == original.region.feature_intervals
             assert restored.region.certified == original.region.certified
+
+        # maximality flags and witnesses round-trip too; files written before
+        # they existed load with the empty defaults
+        from dataclasses import replace as dc_replace
+
+        flagged_records = []
+        for record in batch:
+            if record.region is None:
+                flagged_records.append(record)
+                continue
+            name = next(iter(record.region.feature_intervals))
+            region = dc_replace(
+                record.region,
+                maximal={name: (True, False)},
+                maximal_categories={},
+                witnesses={f"{name}:lo": np.array([1.0, math.nan, 3.0])},
+            )
+            flagged_records.append(dc_replace(record, region=region))
+        flagged = dc_replace(batch, records=tuple(flagged_records))
+        flagged_path = f"{tmp_path}/batch_flagged.json"
+        flagged.save(flagged_path)
+        for original, restored in zip(flagged, BatchResult.load(flagged_path), strict=True):
+            if original.region is None:
+                continue
+            assert restored.region is not None
+            assert restored.region.maximal == original.region.maximal
+            assert restored.region.maximal_categories == {}
+            assert restored.region.witnesses is not None
+            for key, point in original.region.witnesses.items():
+                np.testing.assert_array_equal(restored.region.witnesses[key], point)
+        with open(path, encoding="utf-8") as fh:
+            raw = json.load(fh)
+        for record in raw["records"]:
+            if record["region"] is not None:
+                for key in ("maximal", "maximal_categories", "witnesses"):
+                    record["region"].pop(key, None)
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(raw, fh)
+        for restored in BatchResult.load(path):
+            if restored.region is not None:
+                assert restored.region.maximal == {}
+                assert restored.region.witnesses is None
 
         # a file saved without region=True (or by an older version) has no
         # "region" key per record at all -- the loader must not choke on it.
