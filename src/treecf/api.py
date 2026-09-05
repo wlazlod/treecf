@@ -305,19 +305,26 @@ def _gap_parenthetical(distance: float | None, lower_bound: float) -> str:
 
 
 def _exhausted_message(
-    nodes_expanded: int, has_row: bool, distance: float | None, lower_bound: float
+    nodes_expanded: int,
+    has_row: bool,
+    distance: float | None,
+    lower_bound: float,
+    log10_states: float | None = None,
 ) -> str:
+    size = ""
+    if log10_states is not None and math.isfinite(log10_states):
+        size = f" search space ≈ 10^{log10_states:.0f} states; see Explainer.search_profile."
     if has_row:
         return (
             f"exact search exhausted its budget after {nodes_expanded:,} nodes; the "
             "result is the best found, not proven optimal"
             f"{_gap_parenthetical(distance, lower_bound)}; raise node_budget/time_budget_s "
-            "or set gap= to accept a proven tolerance."
+            "or set gap= to accept a proven tolerance." + size
         )
     return (
         f"exact search exhausted its budget after {nodes_expanded:,} nodes without "
         "finding a feasible counterfactual; this is NOT a certified infeasibility — "
-        "raise budgets or use backend='genetic'."
+        "raise budgets or use backend='genetic'." + size
     )
 
 
@@ -336,7 +343,12 @@ def _withdrawn_message(has_row: bool, distance: float | None, lower_bound: float
 
 
 def _degradation_for(
-    res: ExactResult, node_budget: int, time_budget_s: float, elapsed: float, seed: int | None
+    res: ExactResult,
+    node_budget: int,
+    time_budget_s: float,
+    elapsed: float,
+    seed: int | None,
+    log10_states: float | None = None,
 ) -> _Degradation:
     """Classify one degraded exact-search result (``stats["completed"] is False``).
 
@@ -353,7 +365,9 @@ def _degradation_for(
     unseeded = seed is None and bool(stats["warm_start_used"])
     if exhausted:
         kind = "exhausted"
-        message = _exhausted_message(nodes_expanded, has_row, res.distance, lower_bound)
+        message = _exhausted_message(
+            nodes_expanded, has_row, res.distance, lower_bound, log10_states
+        )
     else:
         kind = "withdrawn"
         message = _withdrawn_message(has_row, res.distance, lower_bound)
@@ -1177,7 +1191,14 @@ class Explainer:
         elapsed = time.monotonic() - start
 
         if res.stats["completed"] is False:
-            degradation = _degradation_for(res, node_budget, time_budget_s, elapsed, seed)
+            # the size of the space is computed only on this path: it costs a
+            # domain build, cheap next to an exhausted search
+            log10_states: float | None = None
+            if cast(int, res.stats["nodes_expanded"]) >= node_budget or elapsed >= time_budget_s:
+                log10_states = cast(float, self._search_profile(x, interval)["log10_states"])
+            degradation = _degradation_for(
+                res, node_budget, time_budget_s, elapsed, seed, log10_states
+            )
             if degraded is None:
                 warnings.warn(
                     degradation.message + (_SEED_CLAUSE if degradation.unseeded else ""),
@@ -1366,6 +1387,58 @@ class Explainer:
         if self.plausibility is None:
             return None
         return self.plausibility.if_ir, self.plausibility.min_total_path
+
+    def search_profile(
+        self, x: FloatArray, target: Target | None = None
+    ) -> dict[str, object]:
+        """Size the exact search for one factual before running it.
+
+        Per feature: its kind (``"numeric"``/``"categorical"``), the number of
+        atomic routing cells (or category blocks), the number of candidate
+        values left after the instance bounds (``"domain"``), whether it is
+        frozen, and whether the search would branch on it at all
+        (``"influential"``). The totals ``"influential_features"`` and
+        ``"log10_states"`` (the sum of ``log10`` domain sizes over the
+        influential features — the exponent of the number of complete
+        assignments) size the space the classic search enumerates in the
+        worst case. With ``target``, the presolve filter runs too and adds
+        the ``"presolved"`` size per feature, ``"log10_states_presolved"``,
+        and ``"presolve_certified"`` (whether presolve alone certifies
+        infeasibility). Cheap and deterministic: no search runs.
+
+        Parameters
+        ----------
+        x
+            The factual instance.
+        target
+            Optional single-interval target; enables the presolve figures.
+
+        Returns
+        -------
+        The profile as a plain ``dict``.
+
+        Raises
+        ------
+        TreecfError
+            If ``target`` is a ``Target.bands`` ladder.
+        """
+        x = np.asarray(x, dtype=np.float64)
+        interval = None
+        if target is not None:
+            if target.bands_spec is not None:
+                raise TreecfError("search_profile takes a single-interval target, not bands")
+            interval = target.raw_interval(self.ir.link)
+        return self._search_profile(x, interval)
+
+    def _search_profile(
+        self, x: FloatArray, interval: tuple[float, float] | None
+    ) -> dict[str, object]:
+        from treecf.backends._exact_profile import search_space_profile
+
+        return search_space_profile(
+            self.ir, x, self.compiled, self.sigma, self.weights, 0.0, self.value_policy,
+            self._plausibility_bound(), interval,
+        )
 
     def recourse_region(
         self,
