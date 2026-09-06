@@ -17,6 +17,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.3.2] - 2026-09-06
 
+The exact backend now searches coarse-to-fine by default, which certifies far more of the
+measured matrix in the same budget; a budget that ran out no longer costs seconds more for
+its own warning; certificates of exact solves always name the engine that ran; and a packaged
+credit demo makes every example in the documentation and the README run as written. The
+documentation is restructured so that each page has one job, and its claims are sized to
+what the benchmarks measure.
+
+<details markdown="1">
+<summary>Details</summary>
+
 ### Added
 
 - `treecf.datasets.credit_demo()`: the documentation's credit model, shipped inside the
@@ -31,6 +41,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   matrix in the same budget — on a 300-tree, 50-feature model it settles a three-lever
   coalition in under half a second where the classic search runs out of a 60 s budget. The
   returned row may be a different argmin of the same cost.
+- **Certificates of exact solves always record the engine.** `solve.declared.search` is
+  taken from the result's own solver statistics when the caller does not pass `search=`, so
+  a certificate never leaves the engine to be inferred from the issuing release's default.
 
 ### Fixed
 
@@ -39,6 +52,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bracket walk through every tree per candidate state — after the budget had already ended,
   which on a 300-tree, 50-feature model added 5 s to a 10 s budget. The figure is now the
   un-presolved size, which costs a domain build.
+
+</details>
 
 ## [0.3.1] - 2026-09-06
 
