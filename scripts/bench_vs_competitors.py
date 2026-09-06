@@ -20,9 +20,18 @@ Protocol (identical for every method):
   NICE fit) happens outside the timer;
 - validity is re-checked against the model by this script, never taken from
   the library;
-- treecf runs WITHOUT constraints so no method solves a harder problem;
+- treecf's genetic and exact rows run WITHOUT constraints so no method solves
+  a harder problem; a third treecf row adds the scenario's constraints to
+  show what they cost, since no competitor can express them;
 - the batch section measures whole-dataset throughput: treecf's parallel
-  ``explain_batch`` in one call vs looping each library row by row.
+  ``explain_batch`` in one call vs looping each library row by row;
+- DiCE's kdtree mode is skipped where its per-instance time runs to
+  minutes (the large and the public scenarios).
+
+Scenarios: two synthetic populations (credit-shaped, and wide) and one
+public dataset, the OpenML default-of-credit-card-clients table (30,000
+rows, 23 features), with its demographic columns frozen in the constrained
+row.
 
 Run:  uv run scripts/bench_vs_competitors.py [--json results.json]
 
@@ -83,11 +92,53 @@ def make_wide_data() -> tuple[np.ndarray, np.ndarray, list[str]]:
     return X, y, [f"f{j:02d}" for j in range(p)]
 
 
+PUBLIC_NAMES = [
+    "limit_bal", "sex", "education", "marriage", "age",
+    "pay_0", "pay_2", "pay_3", "pay_4", "pay_5", "pay_6",
+    "bill_amt1", "bill_amt2", "bill_amt3", "bill_amt4", "bill_amt5", "bill_amt6",
+    "pay_amt1", "pay_amt2", "pay_amt3", "pay_amt4", "pay_amt5", "pay_amt6",
+]
+
+
+def make_public_data() -> tuple[np.ndarray, np.ndarray, list[str]]:
+    """OpenML default-of-credit-card-clients: 30,000 rows, 23 numeric features."""
+    from sklearn.datasets import fetch_openml
+
+    bunch = fetch_openml("default-of-credit-card-clients", version=1, as_frame=True)
+    X = bunch.data.to_numpy(dtype=float)
+    y = bunch.target.astype(int).to_numpy()
+    return X, y, PUBLIC_NAMES
+
+
+def credit_constraints(names: list[str]) -> list[object]:
+    from treecf import Freeze, constraint
+
+    return [Freeze("age"), constraint("max_dpd_30d <= max_dpd_12m")]
+
+
+def wide_constraints(names: list[str]) -> list[object]:
+    from treecf import Freeze, Monotone
+
+    return [Freeze(names[0]), Monotone(names[1], "increase")]
+
+
+def public_constraints(names: list[str]) -> list[object]:
+    from treecf import Freeze
+
+    return [Freeze(n) for n in ("sex", "education", "marriage", "age")]
+
+
 SCENARIOS = [
     {"name": "medium (120 trees, depth 4, 8 features)", "data": make_credit_data,
-     "n_estimators": 120, "max_depth": 4, "n_instances": 100, "n_batch": 500},
+     "n_estimators": 120, "max_depth": 4, "n_instances": 100, "n_batch": 500,
+     "constraints": credit_constraints, "kdtree": True},
     {"name": "large (300 trees, depth 6, 50 features)", "data": make_wide_data,
-     "n_estimators": 300, "max_depth": 6, "n_instances": 50, "n_batch": 200},
+     "n_estimators": 300, "max_depth": 6, "n_instances": 50, "n_batch": 200,
+     "constraints": wide_constraints, "kdtree": False},
+    {"name": "public (credit-card default, 200 trees, depth 5, 23 features)",
+     "data": make_public_data,
+     "n_estimators": 200, "max_depth": 5, "n_instances": 100, "n_batch": 500,
+     "constraints": public_constraints, "kdtree": False},
 ]
 
 
@@ -148,11 +199,25 @@ def run_scenario(
     sigma = fit_normalizers(X)
 
     exp = Explainer(clf, background=X)
+    exp_constrained = Explainer(
+        clf, background=X, constraints=spec["constraints"](names)  # type: ignore[operator]
+    )
     target = Target.probability(range=(0.0, CUTOFF))
     exp.explain(rows[0], target, seed=0)  # warm-up: marshaling + cell cache
+    exp_constrained.explain(rows[0], target, seed=0)
 
     def run_treecf(x: np.ndarray) -> np.ndarray | None:
         res = exp.explain(x, target, seed=0)
+        return res.x_cf if isinstance(res, Counterfactual) else None
+
+    def run_treecf_exact(x: np.ndarray) -> np.ndarray | None:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = exp.explain(x, target, backend="exact", search="refine", seed=0)
+        return res.x_cf if isinstance(res, Counterfactual) else None
+
+    def run_treecf_constrained(x: np.ndarray) -> np.ndarray | None:
+        res = exp_constrained.explain(x, target, seed=0)
         return res.x_cf if isinstance(res, Counterfactual) else None
 
     frame = pd.DataFrame(X, columns=names)
@@ -184,12 +249,15 @@ def run_scenario(
         return nice_exp.explain(x.reshape(1, -1))
 
     runners: list[tuple[str, Callable[[np.ndarray], np.ndarray | None]]] = [
-        ("treecf", run_treecf),
+        ("treecf (genetic)", run_treecf),
+        ("treecf (exact, refine)", run_treecf_exact),
+        ("treecf (genetic, constrained)", run_treecf_constrained),
         ("DiCE (random)", dice_runner("random")),
         ("DiCE (genetic)", dice_runner("genetic")),
-        ("DiCE (kdtree)", dice_runner("kdtree")),
         ("NICE (sparsity)", run_nice),
     ]
+    if spec["kdtree"]:
+        runners.insert(5, ("DiCE (kdtree)", dice_runner("kdtree")))
     per_instance = []
     for method_name, runner in runners:
         row = evaluate_per_instance(method_name, clf, sigma, rows, runner)
@@ -235,7 +303,7 @@ def run_scenario(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--json", default=None, help="write results to this path")
-    parser.add_argument("--only", default=None, choices=("medium", "large"),
+    parser.add_argument("--only", default=None, choices=("medium", "large", "public"),
                         help="run a single scenario")
     args = parser.parse_args()
 
