@@ -17,6 +17,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.3.1] - 2026-09-06
 
+The exact backend gains an opt-in coarse-to-fine search (`search="refine"`) that
+certifies far larger models in the same time, a maximal region mode that proves where a
+certified box ends, a certification trace you can plot, and a search profile that sizes a
+solve before it runs. Auditors get a one-page portfolio report; analysts get certified
+recourse menus over lever sets and lever-diverse plans. Two correctness fixes reach every
+user: XGBoost and CatBoost models now route float64 inputs exactly as the native model
+does, and a value policy no longer withdraws an exact certificate up front. Regions stop at
+the observed data range instead of running to infinity, and region phrases never overstate
+the box. Everything else is byte-identical to 0.3.0.
+
+<details markdown="1">
+<summary>Details</summary>
+
 ### Added
 
 - **Branch-and-refine exact search.** `explain(..., backend="exact", search="refine")` holds
@@ -115,7 +128,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Python and Rust engines remain byte-identical on every solve, now including the refine
   search, the maximal region mode, and the certification trace.
 
+</details>
+
 ## [0.3.0] - 2026-08-31
+
+Native categorical splits parse exactly for LightGBM, XGBoost, scikit-learn
+HistGradientBoosting, and CatBoost, and every backend searches them over category blocks,
+so cardinality is not the cost driver. Regions certify category sets and certificates store
+them as schema version 2; the exact backend gains a presolve pass; `plot_region` and the
+recourse-burden views arrive; the docs are rebuilt around workflows with every snippet
+executed in CI. Numeric-model results are byte-identical to 0.2.4.
+
+<details markdown="1">
+<summary>Details</summary>
 
 ### Added
 
@@ -183,7 +208,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Python and Rust engines remain byte-identical on every solve, domain, and region,
   including the new categorical paths.
 
+</details>
+
 ## [0.2.4] - 2026-08-23
+
+Calibrator provenance: certificates and batch records carry the calibrator's
+fingerprint and a calibrated-probability read-out, `check_certificate(calibrator=)` can
+re-check it, and a probcal test matrix pins the duck-typed protocol. Strictly additive.
+
+<details markdown="1">
+<summary>Details</summary>
 
 ### Added
 
@@ -218,7 +252,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   produces byte-identical reports to 0.2.3. Calibrators missing optional duck members
   (`fingerprint`, `predict_proba`) degrade to `null`/`None`, never an error.
 
+</details>
+
 ## [0.2.3] - 2026-08-23
+
+A correctness fix for scikit-learn tree ensembles: their float32 input cast could
+route a counterfactual sitting on a split boundary differently from the model itself, so
+an "optimal" plan could miss its target. Thresholds are now stored as the exact float64
+boundary of that cast.
+
+<details markdown="1">
+<summary>Details</summary>
 
 ### Fixed
 
@@ -247,7 +291,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   epilogue (behavior-identical) — clippy 1.98's `needless_late_init` began rejecting
   the old form under `-D warnings` on the freshly installed stable toolchain in CI.
 
+</details>
+
 ## [0.2.2] - 2026-08-19
+
+Audit certificates: `Explainer.certificate` turns any result into a self-contained
+JSON record with model and constraint fingerprints and a fresh verification, and
+`check_certificate` re-checks one later. Batch records gain `proof` and `solver_stats`. No
+solver behavior changes.
+
+<details markdown="1">
+<summary>Details</summary>
 
 ### Added
 
@@ -286,7 +340,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - No solver behavior changes; no fixtures touched; no Rust source changes (only the mirrored
   version in `rust/Cargo.toml`/`Cargo.lock`).
 
+</details>
+
 ## [0.2.1] - 2026-08-15
+
+Ctrl-C now interrupts an exact search, a region growth, or a batch solve promptly.
+Every degraded exact result warns and says whether the budget ran out or a conservative
+repair withdrew the certificate, and exact batches become opt-in behind
+`allow_exact_batch=True`. No result of any completed call changes.
+
+<details markdown="1">
+<summary>Details</summary>
 
 ### Added
 
@@ -341,7 +405,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `proof="optimal"` and a certified "no"; new [Certification](https://wlazlod.github.io/treecf/concepts/certification/)
   sections cover interruption and the always-on degraded-result warning.
 
+</details>
+
 ## [0.2.0] - 2026-08-14
+
+The exact backend: a branch-and-bound search over the routing cells that reports
+`proof="optimal"`, certifies infeasibility, and widens plans into recourse regions —
+certified boxes around a plan — plus the recourse map plot. The Rust core's random-number
+library was upgraded, so seeded genetic results may differ from 0.1.x.
+
+<details markdown="1">
+<summary>Details</summary>
 
 ### Added
 
@@ -387,7 +461,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   constraint itself admits (previously possible with very small or very large
   coefficients).
 
+</details>
+
 ## [0.1.1] - 2026-08-08
+
+A factual that violates its own constraints now warns; single-feature linear
+constraints lower into bounds and other linears get a projection repair, which ends
+spurious infeasibility; wheels are smoke-tested before upload. Seeded results that
+involve non-canonical linear constraints changed.
+
+<details markdown="1">
+<summary>Details</summary>
 
 ### Added
 
@@ -426,7 +510,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   regenerated byte-identical; a new `11-linear-projection` fixture pins the
   projection behavior.
 
+</details>
+
 ## [0.1.0] - 2026-07-23
+
+Calibrated targets through a duck-typed calibrator protocol, post-solve pruning of
+changes that verification proves unnecessary, and a published benchmark against DiCE and
+NICE; a band-target field-propagation bug is fixed.
+
+<details markdown="1">
+<summary>Details</summary>
 
 ### Added
 
@@ -467,11 +560,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - PyPI keywords no longer mention the removed CP-SAT backend; README/docs
   state the published version (0.0.1) consistently.
 
+</details>
+
 ## [0.0.1] - 2026-07-13
+
+The genetic backend runs on a Rust core, batch production
+runs in parallel inside it, coalitions mode and the batch plots arrive, and the CP-SAT
+exact backend is removed.
 
 First published release (PyPI). Version deliberately resets BELOW 0.1.0 (which
 was never published): the Rust-backed rebuild supersedes the prior pure-Python
 implementation outright and restarts the version line.
+
+<details markdown="1">
+<summary>Details</summary>
 
 ### Changed
 
@@ -570,7 +672,14 @@ implementation outright and restarts the version line.
   could route such values opposite to the IR. Both engines changed
   identically; parity fixtures regenerated.
 
-## unreleased
+</details>
+
+## Before 0.0.1 (unpublished)
+
+The pure-Python line the Rust rebuild superseded; kept for the record.
+
+<details markdown="1">
+<summary>Details</summary>
 
 ### Added
 
@@ -604,3 +713,5 @@ implementation outright and restarts the version line.
   benchmark suite); planned v0.2 optimization via table-constraint encoding.
 - Plausibility cannot combine with AllowMissing/NaN factuals.
 - `n_counterfactuals > 1` requires the CP-SAT backend.
+
+</details>
