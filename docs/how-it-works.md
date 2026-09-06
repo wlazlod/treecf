@@ -1,5 +1,10 @@
 # How treecf finds counterfactuals
 
+!!! info "Shared objects"
+    Snippets on this page continue from the objects the [quickstart](getting-started.md) builds with
+    `credit_demo()`: `exp`, `x`, `target`, `X_bg`, the solved `res` and `batch`, and `cal`,
+    a fitted monotone calibrator (see the [FAQ](faq.md#how-do-i-target-a-calibrated-probability)).
+
 A counterfactual explanation answers one question: *what is the smallest realistic change to
 this instance that moves the model's output into a target range?* treecf's promise is that the
 answer is never a guess — every returned counterfactual has been re-scored against the model in
@@ -91,8 +96,8 @@ raw score is always $S(x) = \text{base\_score} + \sum_t \text{leaf}_t(x)$. Every
 audit host with no xgboost installed explains identically to the native object. See
 [Models and the IR](concepts/models.md).
 
+<!-- docs: no-run -->
 ```python
-# docs: no-run — model / X_train stand in for your own trained model and data
 from treecf import Explainer, Freeze, Target, constraint
 
 exp = Explainer(
@@ -109,6 +114,13 @@ exp = Explainer(
     counterfactuals love — points sitting right at a threshold. Every node keeps its native
     operator, and the parsers are conformance-tested against the source library on thousands
     of probes, including NaN and threshold-adjacent values.
+
+    The one rewrite the parsers *do* make is forced by the libraries themselves: XGBoost,
+    CatBoost, and scikit-learn round an input to float32 before comparing it with a split,
+    so a float64 value within half a float32 ulp of a threshold routed differently in the
+    IR than in the deployed model — a divergence found on real training rows and fixed
+    (see the [changelog](changelog.md)) by storing each threshold as the float64 boundary of that cast, with conformance
+    tests that probe unquantized float64 neighbours of every split.
 
 ## The search space: cells, not real numbers
 
@@ -263,7 +275,6 @@ is snapped to conforming values *within their cells*; if snapping breaks validit
 reverted one at a time until the plan verifies again. What you get back is honest about it:
 
 ```python
-# exp, x: the docs explainer and one rejected applicant
 from treecf import Target
 
 res = exp.explain(x, target=Target.probability(range=(0.0, 0.05)), seed=0)
@@ -398,7 +409,6 @@ every feature outside the group frozen — freezing is already a constraint the 
 verifier understand, so no new search semantics are involved. For the running example:
 
 ```python
-# exp, x, target: the docs explainer, one rejected applicant, the target
 result = exp.explain_coalitions(
     x, target=target,
     coalitions={

@@ -1,5 +1,10 @@
 # Targets
 
+!!! info "Shared objects"
+    Snippets on this page continue from the objects the [quickstart](../getting-started.md) builds with
+    `credit_demo()`: `exp`, `x`, `target`, `X_bg`, the solved `res` and `batch`, and `cal`,
+    a fitted monotone calibrator (see the [FAQ](../faq.md#how-do-i-target-a-calibrated-probability)).
+
 A target is an interval on the **raw model output** — this one abstraction
 covers probability cutoffs, regression goals, and rating ladders.
 
@@ -21,7 +26,6 @@ logit; open endpoints (`0`/`1`) map to infinities.
 "price of each grade":
 
 ```python
-# exp, x: the docs explainer and one rejected applicant
 from treecf import Target
 
 ladder = exp.explain(x, target=Target.bands({

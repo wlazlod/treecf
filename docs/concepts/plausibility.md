@@ -3,8 +3,8 @@
 An optional hard constraint keeps counterfactuals inside the data manifold: an
 isolation forest, parsed through the same tree IR, bounds the anomaly score.
 
+<!-- docs: no-run -->
 ```python
-# docs: no-run — model / X_train stand in for your own trained model and data
 from sklearn.ensemble import IsolationForest
 from treecf import Explainer, Plausibility
 

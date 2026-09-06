@@ -1,5 +1,10 @@
 # Certify and widen
 
+!!! info "Shared objects"
+    Snippets on this page continue from the objects the [quickstart](../getting-started.md) builds with
+    `credit_demo()`: `exp`, `x`, `target`, `X_bg`, the solved `res` and `batch`, and `cal`,
+    a fitted monotone calibrator (see the [FAQ](../faq.md#how-do-i-target-a-calibrated-probability)).
+
 The default backend returns a good plan; `backend="exact"` returns a plan
 with a *claim* — proved cheapest, cheapest within a stated gap, or certified
 impossible — and `region=True` widens a point plan into a certified box.
@@ -9,7 +14,6 @@ This page is the workflow; the boundaries of the claims are in
 ## Prove optimality
 
 ```python
-# exp, x, target: the docs explainer, one rejected applicant, the target
 from treecf import Counterfactual, Infeasible
 
 res = exp.explain(x, target=target, backend="exact", seed=0)
@@ -46,8 +50,8 @@ entirely it certifies infeasibility without expanding a single node
 
 ## Refine the search
 
-`search="refine"` (opt-in; the default `"classic"` is unchanged) runs the
-exact backend coarse-to-fine. Instead of trying one candidate value per
+`search="refine"` — the default; `search="classic"` selects the earlier
+engine — runs the exact backend coarse-to-fine. Instead of trying one candidate value per
 feature at a time, it first holds each numeric feature to a *range* of
 routing cells — at most eight per feature — and only splits a range where
 the score bound cannot decide the whole box. A box whose bracket lies inside
@@ -60,7 +64,6 @@ a different argmin of that cost, and `solver_stats` records `search`,
 `coarse_accepts`, and `refinements`:
 
 ```python
-# exp, x, target: the docs explainer, one rejected applicant, the target
 res = exp.explain(x, target=target, backend="exact", search="refine", seed=0)
 res.proof                              # "optimal" — the same claim as the classic search
 res.solver_stats["search"]             # "refine"
@@ -80,7 +83,6 @@ and, for categorical features, sets of category codes — within which *every*
 row still satisfies the target and constraints:
 
 ```python
-# exp, x, target: the docs explainer, one rejected applicant, the target
 res = exp.explain(x, target=target, backend="exact", region=True, seed=0)
 res.region.feature_intervals    # {"income": (lo, hi), ...} — certified intervals
 res.region.feature_categories   # {"occupation": (1, 2)} — certified category codes
@@ -116,7 +118,6 @@ with a budgeted search for such a point. Three outcomes, per side:
   the side is left unproven, which is what fast mode reports for every side.
 
 ```python
-# exp, x, target: the docs explainer, one rejected applicant, the target
 res = exp.explain(
     x, target=target, backend="exact", region=True, region_mode="maximal", seed=0
 )
@@ -149,7 +150,6 @@ bound the search holds at that moment; the incumbent is the cheapest row it
 has found. `plot_certification_trace` draws the two against the node count:
 
 ```python
-# exp, x, target: the docs explainer, one rejected applicant, the target
 import warnings
 
 from treecf import TreecfWarning
@@ -157,8 +157,9 @@ from treecf.viz import plot_certification_trace
 
 with warnings.catch_warnings():
     warnings.simplefilter("ignore", TreecfWarning)   # a cut-off search warns, by design
-    cut = exp.explain(
-        x, target=target, backend="exact", seed=0, node_budget=50_000, warm_start=False
+    cut = exp.explain(   # the classic engine, cut off by a small node budget on purpose
+        x, target=target, backend="exact", search="classic", seed=0,
+        node_budget=50_000, warm_start=False,
     )
 plot_certification_trace(cut)   # incumbent stepping down, the bound below it, the outcome named
 ```
@@ -181,7 +182,6 @@ too and reports the filtered sizes and whether it certifies infeasibility
 outright. The budget-exhaustion warning quotes the same figure.
 
 ```python
-# exp, x, target: the docs explainer, one rejected applicant, the target
 profile = exp.search_profile(x, target)
 profile["influential_features"]         # features the search would branch on
 profile["log10_states"]                 # 10**this complete assignments, at most

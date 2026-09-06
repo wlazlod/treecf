@@ -1,5 +1,10 @@
 # Visualize
 
+!!! info "Shared objects"
+    Snippets on this page continue from the objects the [quickstart](../getting-started.md) builds with
+    `credit_demo()`: `exp`, `x`, `target`, `X_bg`, the solved `res` and `batch`, and `cal`,
+    a fitted monotone calibrator (see the [FAQ](../faq.md#how-do-i-target-a-calibrated-probability)).
+
 Every plot function in one place, grouped by the question it answers. All of
 them live in `treecf.viz` and `treecf.viz_batch` (extra: `treecf[viz]`),
 take an optional `ax`/`axes`, and return the matplotlib axes for further
@@ -11,7 +16,6 @@ styling. Categorical features are drawn with their display names whenever
 What changed, and what it does to the score:
 
 ```python
-# exp, res, target: the docs explainer, its solved plan, and the target
 from treecf.viz import plot_changes, plot_effort, plot_waterfall
 
 plot_changes(res)                      # the changes, largest first
@@ -30,7 +34,6 @@ plot_effort(exp, res)                  # cost per change, in sigma units
 Several plans for the same row, side by side:
 
 ```python
-# exp, x, target: the docs explainer, one rejected applicant, the target
 from treecf import Target
 from treecf.viz import plot_alternatives, plot_ladder, plot_recourse_map, plot_tradeoff
 
@@ -70,7 +73,6 @@ the model, a constraint, or — for a region grown with
 neither at a bound nor proved ([prove the boundary](certify.md#prove-the-boundary)):
 
 ```python
-# exp, x, target: the docs explainer, one rejected applicant, the target
 from treecf.viz import plot_region
 
 certified = exp.explain(x, target=target, backend="exact", region=True, seed=0)
@@ -84,7 +86,6 @@ plot_region(exp, x, certified)
 Reading thousands of rows at a glance:
 
 ```python
-# exp, batch: the docs explainer and its solved batch
 from treecf.viz_batch import (
     plot_batch_deltas, plot_batch_levers, plot_batch_matrix, plot_batch_summary,
 )
@@ -109,7 +110,6 @@ Who pays how much for recourse, and for whom none exists — `groups` is any
 per-row labeling (a segment column, a protected attribute, a portfolio):
 
 ```python
-# exp, X_bg, batch: the docs explainer, its background rows, its solved batch
 from treecf.viz_batch import plot_recourse_burden, recourse_burden_table
 
 groups = ["thin-file" if row[3] < 24 else "established" for row in X_bg[:20]]
@@ -133,7 +133,6 @@ the proof the row carries — a filled square for an optimal plan, a cross for
 a set certified unable to reach the target:
 
 ```python
-# exp, x, target: the docs explainer, one rejected applicant, the target
 from treecf.viz import plot_recourse_map, plot_recourse_menu
 
 menu = exp.recourse_menu(x, target=target, max_levers=2, backend="exact", seed=0)
@@ -157,7 +156,6 @@ Where the menu comes from, and what `complete` certifies:
 `plot_counterfactuals` overlays any list of plans for one factual:
 
 ```python
-# exp, x, res, target: the docs explainer, applicant, plan, and target
 from treecf.viz import plot_counterfactuals
 
 second = exp.explain(x, target=target, seed=1)

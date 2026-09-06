@@ -58,7 +58,7 @@ def _by_tag(rows: list[dict]) -> dict[str, dict[str, dict]]:
 def _scenario_rows(results: list[dict]) -> str:
     lines = [
         "| Scenario | genetic median | classic warm | classic cold | refine warm "
-        "| refine cold | heuristic gap median | proof mix (classic) | proof mix (refine) |",
+        "| refine cold | distance gap median | proof mix (classic) | proof mix (refine) |",
         "|---|---|---|---|---|---|---|---|---|",
     ]
     grouped = _by_tag([r for r in results if r.get("kind") != "certification"])
@@ -140,11 +140,14 @@ def render(exact: dict, competitors: list[dict] | None) -> str:
         "",
         "## Exact versus genetic",
         "",
-        "Same model, same target, same seeds; the genetic backend's *gap* is how",
-        "much plan cost the heuristic leaves on the table relative to the proved",
-        "optimum. Per-solve budgets: 5 s wall, 2,000,000 nodes. *classic* is the",
-        "default exact engine (`search=\"classic\"`); *refine* is the opt-in",
-        "coarse-to-fine engine (`search=\"refine\"`), timed on the same solves.",
+        "Same model, same target, same seeds; the genetic backend's *distance gap*",
+        "is how far its plan sits from the proved minimum of the default objective",
+        "(σ-normalized distance, `sparsity_weight=0`). It is not a quality gap: the",
+        "heuristic's plans change fewer features, which that objective does not",
+        "reward — see [what optimal means](../concepts/certification.md#what-optimal-means-and-what-it-does-not).",
+        "Per-solve budgets: 5 s wall, 2,000,000 nodes. *refine* is the",
+        "default exact engine (`search=\"refine\"`); *classic* is the earlier",
+        "one (`search=\"classic\"`), timed on the same solves.",
         "",
         _scenario_rows(results),
     ]

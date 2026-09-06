@@ -375,3 +375,26 @@ class TestAggregateWarnings:
         assert "2/3 rows" in message  # rows affected, out of all rows
         assert "solves)" in message  # per-kind counts are a different unit
         assert "12 solves" in message  # 2 affected rows x up to 3 seed attempts x k=2
+
+
+class TestExhaustionWarningCost:
+    """The warning sizes the search space without the presolve pass: the
+    profile it asks for carries no target interval."""
+
+    def test_exhausted_path_sizes_the_space_without_presolve(
+        self, exp: Explainer, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seen: list[object] = []
+        original = Explainer._search_profile
+
+        def spy(self: Explainer, x: np.ndarray, interval: object) -> dict[str, object]:
+            seen.append(interval)
+            return original(self, x, interval)
+
+        monkeypatch.setattr(Explainer, "_search_profile", spy)
+        with pytest.warns(TreecfWarning, match="search space"):
+            exp.explain(
+                x0, Target.raw(op=">=", value=1.5), backend="exact", seed=0,
+                warm_start=False, node_budget=1, time_budget_s=5.0,
+            )
+        assert seen == [None]

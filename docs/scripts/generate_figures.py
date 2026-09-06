@@ -23,6 +23,7 @@ import numpy as np
 
 from treecf import Explainer, Range, Target, TreecfWarning
 from treecf.audit import portfolio_report
+from treecf.datasets import credit_demo
 from treecf.viz import (
     plot_alternatives,
     plot_certification_trace,
@@ -45,26 +46,8 @@ from treecf.viz_batch import (
 )
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
-MODEL = REPO / "tests" / "fixtures" / "docs_model.json"
 OUT = REPO / "docs" / "guide" / "img"
 SAMPLES = REPO / "docs" / "guide" / "samples"
-OCCUPATIONS = ("student", "clerk", "manager", "retired")
-
-
-def docs_background(n: int = 400, seed: int = 7) -> np.ndarray:
-    """The fixed docs data recipe (documented in docs/README.md)."""
-    rng = np.random.default_rng(seed)
-    return np.column_stack(
-        [
-            rng.normal(loc=4200.0, scale=1600.0, size=n),  # income
-            np.clip(rng.beta(2.0, 3.5, size=n), 0.0, 1.0),  # utilization
-            np.floor(rng.exponential(scale=6.0, size=n)),  # dpd_12m
-            np.floor(rng.uniform(3, 240, size=n)),  # tenure_months
-            rng.integers(0, 4, size=n).astype(np.float64),  # occupation codes
-        ]
-    )
-
-
 def _save(name: str, fig: object) -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     path = OUT / f"{name}.png"
@@ -79,8 +62,8 @@ def _fig_of(axes: object) -> object:
 
 
 def main() -> None:
-    X_bg = docs_background()
-    exp = Explainer(str(MODEL), background=X_bg, categories={"occupation": OCCUPATIONS})
+    model, X_bg, _x = credit_demo()
+    exp = Explainer(model, background=X_bg)
     target = Target.probability(range=(0.0, 0.05))
     x = X_bg[1]
 
@@ -127,9 +110,8 @@ def main() -> None:
     # One Range constraint so the region shows both cap markers: bounds
     # stopped by the model and bounds stopped by a constraint.
     exp_rng = Explainer(
-        str(MODEL),
+        model,
         background=X_bg,
-        categories={"occupation": OCCUPATIONS},
         constraints=[Range("tenure_months", 0.0, 140.0)],
     )
     certified = exp_rng.explain(x, target=target, backend="exact", region=True, seed=0)
@@ -144,7 +126,8 @@ def main() -> None:
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", TreecfWarning)
         cut = exp.explain(
-            x, target=target, backend="exact", seed=0, node_budget=50_000, warm_start=False
+            x, target=target, backend="exact", search="classic", seed=0,
+            node_budget=50_000, warm_start=False,
         )
     _save("plot_certification_trace", _fig_of(plot_certification_trace(cut)))
 

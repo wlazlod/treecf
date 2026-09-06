@@ -1,5 +1,10 @@
 # FAQ
 
+!!! info "Shared objects"
+    Snippets on this page continue from the objects the [quickstart](getting-started.md) builds with
+    `credit_demo()`: `exp`, `x`, `target`, `X_bg`, the solved `res` and `batch`, and `cal`,
+    a fitted monotone calibrator (see the [FAQ](faq.md#how-do-i-target-a-calibrated-probability)).
+
 **Why does `Target.probability` fail on my RandomForest?**
 Forest classifiers average probabilities; there is no sigmoid link to invert.
 Their raw score *is* the averaged probability — use
@@ -26,7 +31,6 @@ class SupportsIntervalInverse(Protocol):
 ```
 
 ```python
-# exp, x, cal: the docs explainer, one rejected applicant, a fitted calibrator
 import treecf
 
 cal_target = treecf.Target.calibrated(cal, op="<=", value=0.02)   # calibrated PD ≤ 2%
@@ -38,7 +42,6 @@ recalibration or central-tendency drift of magnitude ≤ m in log-odds. For a
 masterscale defined on calibrated PD, bands invert per band:
 
 ```python
-# cal: a fitted calibrator from the docs vocabulary
 import treecf
 
 bands = treecf.Target.bands(
@@ -58,6 +61,61 @@ Yes. Parsers accept JSON dumps (`Booster.save_model("model.json")`,
 `dump_model()`, CatBoost `format="json"`), and the genetic backend has no
 dependencies beyond the wheel itself: `pip install treecf` on the scoring host,
 ship the dump file.
+
+**Is there a wheel for a 32-bit Raspberry Pi?**
+Not from this project's CI; 32-bit Raspberry Pi wheels arrive via piwheels'
+own builders. The recurring Bookworm build failure there is an upstream
+toolchain issue, not a treecf packaging bug. Every other platform ships
+from CI as usual.
+
+**What does `(data-limited)` mean in `region.describe()`?**
+That side of the certified box stopped at the edge of the explainer's
+background data rather than at a constraint or a split of the model. A
+feature with no `Range` is grown no further than the data reaches, so an
+unconstrained count reads `in [0, 1)` instead of `< 1` over an implicit
+minus infinity; `RecourseRegion.data_limited` names the sides. Declare a
+`Range` where the domain is known and the side stops there instead. An
+explainer built from `normalizers` alone has no data range and lets such a
+side run to infinity.
+
+**Why did `proof` come back `"heuristic"` from the exact backend?**
+Two causes, and the warning says which. Either the search ran out of its
+`node_budget` or `time_budget_s` — the row is the best found, not proven
+cheapest; raise the budgets, pass `gap=` to accept a proven tolerance, or
+try `search="refine"` — or it withdrew its certificate without spending the
+budget: an order-pair constraint (`constraint("a <= b")`) tied a feature
+under a value policy, and a completion broke that pair on values the search
+could not repair. The row itself is still float-verified; only the
+"cheapest possible" claim is dropped. See
+[certification](concepts/certification.md#two-honesty-notes).
+
+**Why does the exact backend come back `heuristic` on my 30-feature model?**
+Because the search space is exponential in the number of levers that may move, and with
+every feature free a model that wide sits outside the measured envelope: the exact search
+spends its budget and returns the plan its warm start found, labelled honestly. Restrict
+the levers — `Freeze` what cannot change, or ask `recourse_menu(x, target, max_levers=2,
+search="refine")` for every small lever set solved exactly — and the same model certifies
+each set in a fraction of a second. See
+[the proof envelope](concepts/certification.md#the-proof-envelope-measured).
+
+**Why did the "optimal" plan change more features than the heuristic one?**
+Because the proof is about the objective, and the objective is distance: with the default
+`sparsity_weight=0`, five small moves can cost less than one large one. The genetic search
+favours fewer changes beyond what the objective rewards. Set `sparsity_weight > 0` to make
+the proof value sparsity, or ask a `recourse_menu` for the cheapest plan per lever set. See
+[what optimal means](concepts/certification.md#what-optimal-means-and-what-it-does-not).
+
+**How do float32 casts affect routing?**
+XGBoost, CatBoost, and scikit-learn round an input to float32 before
+comparing it with a split threshold, so a float64 value within half a
+float32 ulp of a threshold can route one way in the library and the other
+way under a plain float64 comparison. The parsers store each threshold as
+the float64 boundary of that cast — the largest value the native model still
+routes left — so float64 inputs route as the deployed model routes them and
+no pre-rounding is needed on your side. Candidate values placed next to a
+threshold are kept one float32 ulp away for the same reason. LightGBM
+compares in float64 and needs no adjustment. See
+[models](concepts/models.md#float32-pitfalls-handled-for-you).
 
 **What is the Rust core, and do I need a Rust toolchain?**
 `backend="genetic"` runs a compiled Rust engine bundled inside the platform

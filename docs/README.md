@@ -28,13 +28,14 @@ keep it that way:
    ...
    ```
 
-   The vocabulary, and what the test harness seeds it with, is exactly:
+   The vocabulary is exactly what the quickstart builds from `credit_demo()`,
+   and the harness seeds it the same way:
 
    | Name | What it is |
    |---|---|
-   | `exp` | An `Explainer` over `tests/fixtures/docs_model.json` (a committed LightGBM dump: `income`, `utilization`, `dpd_12m`, `tenure_months`, and a native categorical `occupation`), background `X_bg`, `categories={"occupation": OCCUPATIONS}` |
-   | `X_bg` | The background matrix (400 rows, fixed recipe in the harness) |
-   | `x` | One rejected factual row (`X_bg[1]`) |
+   | `exp` | `Explainer(model, background=X_bg)` over the packaged demo model from `treecf.datasets.credit_demo()` (a committed LightGBM dump: `income`, `utilization`, `dpd_12m`, `tenure_months`, and a native categorical `occupation` with names installed) |
+   | `X_bg` | The background matrix `credit_demo()` returns (400 rows, fixed recipe) |
+   | `x` | The declined row `credit_demo()` returns (`X_bg[1]`) |
    | `target` | `Target.probability(range=(0.0, 0.05))` |
    | `res` | `exp.explain(x, target=target, seed=0)` — a feasible `Counterfactual` |
    | `batch` | `exp.explain_batch(X_bg[:20], target=target)` |

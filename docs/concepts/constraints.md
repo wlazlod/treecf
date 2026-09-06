@@ -1,5 +1,10 @@
 # Constraints
 
+!!! info "Shared objects"
+    Snippets on this page continue from the objects the [quickstart](../getting-started.md) builds with
+    `credit_demo()`: `exp`, `x`, `target`, `X_bg`, the solved `res` and `batch`, and `cal`,
+    a fitted monotone calibrator (see the [FAQ](../faq.md#how-do-i-target-a-calibrated-probability)).
+
 Constraints are declared once, validated against the model's feature space, and
 compiled by a single visitor into every backend — the abstract constraint form
 and the genetic engines' vectorized check/repair pair share one source of truth.
@@ -48,7 +53,6 @@ integer-valuedness — and returns them **for human review**; nothing is ever
 auto-applied:
 
 ```python
-# exp, X_bg: the docs explainer and its background rows
 import treecf
 
 result = treecf.suggest_constraints(X_bg, feature_names=exp.ir.feature_names)

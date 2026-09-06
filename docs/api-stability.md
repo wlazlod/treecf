@@ -33,6 +33,8 @@ The public API is exactly the export lists below; anything prefixed with
 - `treecf.viz_batch.__all__` (extra `treecf[viz]`): `plot_batch_levers`,
   `plot_batch_matrix`, `plot_batch_summary`, `plot_batch_deltas`,
   `plot_recourse_burden`, `recourse_burden_table`.
+- `treecf.datasets.__all__`: `credit_demo`, `OCCUPATIONS` — the packaged
+  demo the documentation's examples start from.
 
 ## The artifact promise
 
@@ -53,14 +55,29 @@ version, and `check_certificate` verifies such a file exactly as it would
 without the addition. Only removing a key, or changing what an existing key
 means, bumps `schema_version`.
 
+## Added in 0.3.2
+
+New public symbols in this release, as one running list:
+
+- `treecf.datasets.credit_demo()` and `treecf.datasets.OCCUPATIONS`: the
+  documentation's credit model shipped inside the package with a
+  deterministic background sample and one declined applicant, so every
+  example runs as written on a fresh install.
+- Certificates of exact solves always carry `solve.declared.search`, taken
+  from the result's own solver statistics when the caller does not pass it.
+- The exact backend's default search is now `"refine"`; `"classic"` stays
+  available. Same optimum and certificates; the returned row may be a
+  different argmin of the same cost.
+
 ## Added in 0.3.1
 
 New public symbols in this release, as one running list:
 
 - `explain(..., search="refine")` / `explain_batch` / `explain_coalitions`:
-  the coarse-to-fine exact search; `"classic"` stays the default and is
-  unchanged. `Explainer.certificate(..., search=)` records the choice under
-  `declared`.
+  the coarse-to-fine exact search; `"classic"` was the default in this
+  release and is unchanged (the coarse-to-fine search became the default in
+  the next one — see the changelog). `Explainer.certificate(..., search=)`
+  records the choice under `declared`.
 - `explain(..., region_mode="maximal", region_budget=)` and
   `Explainer.recourse_region(mode=, budget=, keep_witnesses=)`: budgeted
   proof that a region side cannot grow, with witness points on request.

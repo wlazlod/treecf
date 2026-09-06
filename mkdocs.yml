@@ -76,8 +76,9 @@ nav:
   - Home: index.md
   - Learn:
       - Install and quickstart: getting-started.md
-      - How it works: how-it-works.md
       - "Tutorial: quickstart": notebooks/01-quickstart.ipynb
+      - "Deep dive: how it works": how-it-works.md
+      - Glossary: glossary.md
   - Guide:
       - Workflows:
           - Bring your model: guide/models.md

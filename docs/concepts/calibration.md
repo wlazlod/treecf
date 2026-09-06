@@ -1,5 +1,10 @@
 # Calibration
 
+!!! info "Shared objects"
+    Snippets on this page continue from the objects the [quickstart](../getting-started.md) builds with
+    `credit_demo()`: `exp`, `x`, `target`, `X_bg`, the solved `res` and `batch`, and `cal`,
+    a fitted monotone calibrator (see the [FAQ](../faq.md#how-do-i-target-a-calibrated-probability)).
+
 Post-hoc calibration inserts a monotone map `g` between the model's probability
 output and the number a decision actually uses: `p' = g(predict_proba(x))`.
 Cutoffs, rating grades, and recourse policies are then stated on the
@@ -55,7 +60,6 @@ non-monotone map need not be an interval.
 ## Usage
 
 ```python
-# exp, x, cal: the docs explainer, one rejected applicant, a fitted calibrator
 import treecf
 
 cal_target = treecf.Target.calibrated(cal, op="<=", value=0.02)   # calibrated PD ≤ 2%
@@ -65,7 +69,6 @@ result = exp.explain(x, target=cal_target, seed=0)
 Masterscales defined on calibrated PD invert per band:
 
 ```python
-# cal: a fitted calibrator from the docs vocabulary
 import treecf
 
 bands = treecf.Target.bands(
@@ -84,7 +87,6 @@ log-odds *before* inversion, so the produced counterfactual survives any
 future drift of magnitude ≤ m:
 
 ```python
-# cal: a fitted calibrator from the docs vocabulary
 import treecf
 
 buffered = treecf.Target.calibrated(cal, op="<=", value=0.02, buffer_logit=0.1)
@@ -122,7 +124,6 @@ it. What it does not prove: that the interval is correct — for that, pass the
 calibrator back:
 
 ```python
-# exp, x, cal: the docs explainer, one rejected applicant, a fitted calibrator
 import treecf
 
 cal_res = exp.explain(x, target=treecf.Target.calibrated(cal, op="<=", value=0.02), seed=0)
@@ -145,7 +146,6 @@ Results for calibrated targets carry `score_calibrated` — the calibrator's
 probability at the counterfactual (and, on certificates, at the factual):
 
 ```python
-# exp, x, cal: the docs explainer, one rejected applicant, a fitted calibrator
 import treecf
 
 res = exp.explain(x, target=treecf.Target.calibrated(cal, op="<=", value=0.02), seed=0)
@@ -166,8 +166,8 @@ protocol end to end; its [treecf guide](https://wlazlod.github.io/probcal/guide/
 walks through the pairing from the other side. The trio that covers most
 policies:
 
+<!-- docs: no-run -->
 ```python
-# docs: no-run — a worked probcal session; scores/y/model/X are your own data
 import probcal, treecf
 
 cal = probcal.BetaCalibrator().fit(scores, y)

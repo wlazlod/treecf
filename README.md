@@ -1,76 +1,121 @@
 # treecf
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22069503.svg)](https://doi.org/10.5281/zenodo.22069503)
+[![PyPI](https://img.shields.io/pypi/v/treecf.svg)](https://pypi.org/project/treecf/)
+[![Python](https://img.shields.io/pypi/pyversions/treecf.svg)](https://pypi.org/project/treecf/)
+[![CI](https://github.com/wlazlod/treecf/actions/workflows/ci.yml/badge.svg)](https://github.com/wlazlod/treecf/actions/workflows/ci.yml)
+[![License](https://img.shields.io/pypi/l/treecf.svg)](LICENSE)
 
 **Constrained, threshold-aware counterfactual explanations for tree ensembles.**
 
 `treecf` answers the question: *"what is the minimal, feasible change to this instance such
-that the model's raw output lands in a target interval?"* — for XGBoost, LightGBM, CatBoost
-and scikit-learn tree ensembles.
+that the model's output lands in a target interval?"* — for XGBoost, LightGBM, CatBoost and
+scikit-learn tree ensembles.
+
+![Lever-set by feature matrix of a recourse menu: filled cells where a plan changes that lever, a square for a proved-optimal plan, a cross for a lever set certified unable to reach the target](https://raw.githubusercontent.com/wlazlod/treecf/main/docs/guide/img/plot_recourse_menu.png)
 
 > On [PyPI](https://pypi.org/project/treecf/). See the [documentation](https://wlazlod.github.io/treecf/) for concepts and tutorials.
 
 ## Why another counterfactual package?
 
-- **Tree-native and fast.** Models are parsed into a shared tree IR; the constrained
-  genetic search runs on a bundled **Rust core** 44–58× faster than the equivalent numpy
-  implementation (see the "Backends and proofs" docs page; the pure-Python engine remains
-  available as `backend="python"`), and every result is float-verified against the IR
-  before it is returned.
-- **Optional optimality proof.** `backend="exact"` branch-and-bounds the same candidate
-  grid; on the standard bench model (30-tree/8-feature XGBoost) it proves the cheapest
-  counterfactual in a median 0.24s versus 0.005s for the genetic heuristic, closing a
-  median 14.33% cost gap the heuristic leaves on the table — measured on a 4-core dev
-  machine (`scripts/bench_exact.py`).
-- **Certified "no".** A completed exact search returns `Infeasible(proof="certified")` —
-  "no recourse exists within these constraints" becomes a provable statement, not a shrug
-  after a timeout.
+- **Tree-native and fast.** Models are parsed into a shared tree IR and the constrained
+  search runs on a bundled Rust core, typically in milliseconds; every result is
+  float-verified against the parsed model before it is returned, and the parsers are
+  conformance-tested against the native library.
+- **Optional proofs, inside a measured envelope.** `backend="exact"` returns
+  `proof="optimal"` when no cheaper plan exists under the declared objective (weighted
+  distance, plus a per-feature term only if you set `sparsity_weight`), and a completed
+  search that finds nothing returns `Infeasible(proof="certified")`. Proofs scale with the
+  number of levers the search may move, not with the model's width: on the measured matrix
+  the refine search certifies up to 200 trees with 12 free features inside 60 s and no
+  20-feature model beyond the smallest one (50 trees at depth 3) — while on the 300-tree,
+  50-feature model a coalition of up to
+  three levers certifies in under half a second with `search="refine"`, so wide models get
+  proofs once the levers are restricted with `Freeze`, coalitions, or a `recourse_menu`. A
+  search that runs out of budget returns its best plan labelled `heuristic` and warns; it
+  never claims more.
 - **Recourse regions.** Any verified counterfactual widens into a certified box — "reduce
-  utilization to ≤ 0.40", not "to 0.3972" — with every point in the box provably in-target
+  utilization below 0.40", not "to 0.3972" — with every point in the box provably in-target
   and constraint-feasible; works with every backend.
-- **Decision thresholds are first-class.** Targets are intervals on the raw model output —
-  custom probability cutoffs, regression targets, and whole rating-grade ladders in one call.
-- **Real-world constraints.** Declarative layer for immutability, directionality, ranges,
-  one-hot consistency, and arbitrary linear inter-feature constraints such as
-  `max_dpd_30d <= max_dpd_12m` — compiled once, enforced by every backend.
-- **Missing values are values.** NaN can be a legitimate counterfactual state, with
-  per-feature opt-in and explicit transition costs.
-- **Constraint mining.** Candidate invariants are mined from data and presented for human
-  review — never auto-applied.
+- **Real constraints.** Immutability, directionality, ranges, one-hot consistency, linear
+  inter-feature rules such as `max_dpd_30d <= max_dpd_12m`, and NaN as a legitimate value
+  with its own transition cost — declared once, enforced by every backend.
+- **Menus, diverse plans, certificates.** `recourse_menu` solves every lever set up to a
+  size and says which combinations provably cannot work; `explain_diverse` returns the
+  cheapest plans with distinct lever sets; `certificate` turns any result into a
+  self-contained JSON record a validator re-checks later.
+
+On a 120-tree model and 100 declined rows, treecf's plans cost a seventh of DiCE's at a fifth
+of the time; NICE is four times faster per instance, and its plans cost 2.7 times more and
+cannot take constraints. The measured tables and the honest reading are on the
+[benchmarks page](https://wlazlod.github.io/treecf/concepts/backends/#against-other-cf-libraries).
+
+Not for you if: the model is not a tree ensemble; you want sets of plans diverse by distance
+rather than by the levers they use (DiCE does that); you need a proof over dozens of free
+levers at once without restricting them (see the [proof envelope](https://wlazlod.github.io/treecf/concepts/certification/#the-proof-envelope-measured));
+or you need a frozen API — treecf is in beta, see
+[API stability](https://wlazlod.github.io/treecf/api-stability/).
 
 ## Installation
 
 ```bash
-pip install treecf              # bundled Rust engine; numpy is the only Python dep
-pip install "treecf[xgboost]"   # model parsers as extras; JSON dumps work without them
-pip install "treecf[viz]"       # matplotlib plots
+pip install "treecf[xgboost,viz]"   # wheels for Linux, macOS, Windows; no Rust toolchain needed
 ```
+
+numpy is the only Python dependency; the extras add a parser for your training library and
+the plots. JSON model dumps parse without the training library, so explanations can be
+generated on a scoring host that has neither it nor a solver.
 
 ## Quick look
 
+`credit_demo()` returns a packaged credit model, background rows, and one declined
+applicant. It is new in this version; on an older installed package, substitute your own
+model, as the quickstart notebook does.
+
 ```python
-from treecf import Explainer, Target, constraint, Freeze
+from treecf import Explainer, Freeze, Monotone, Target
+from treecf.datasets import credit_demo
 
+model, X, x = credit_demo()
+target = Target.probability(range=(0.0, 0.05))
 exp = Explainer(
-    model="model.json",                       # native object or dump file
-    background=X_train_sample,
-    constraints=[
-        constraint("max_dpd_30d <= max_dpd_12m"),
-        Freeze("age_of_bureau_file"),
-    ],
+    model, background=X,
+    constraints=[Freeze("occupation"), Monotone("tenure_months", "increase")],
 )
-res = exp.explain(x, target=Target.probability(range=(0.0, 0.04)), seed=0)
 
-proved = exp.explain(x, target=t, backend="exact")      # proof="optimal", a certified "no", or a warned degrade
-boxed = exp.explain(x, target=t, region=True)            # res.region.describe() -> "utilization <= 0.4"
+res = exp.explain(x, target=target, seed=0)
+res.changes                          # {'income': (4678.0, 6932.4)}
+res.proof                            # 'heuristic'
+
+proved = exp.explain(x, target=target, backend="exact", region=True, seed=0)
+proved.proof                         # 'optimal'
+proved.region.describe()             # {'income': 'in [6.58e+03, 7.81e+03] (data-limited)',
+                                     #  'utilization': 'in [0.428, 0.541)', ...}
+
+menu = exp.recourse_menu(x, target=target, max_levers=2)
+menu.describe()["dpd_12m"]           # 'no acceptance is reachable by changing only dpd_12m'
 ```
 
-## Contributing
+## Learn more
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for dev setup, the test layers, and the
-project's hard invariants; report security issues privately per
-[SECURITY.md](SECURITY.md).
+- [How it works](https://wlazlod.github.io/treecf/how-it-works/) — the pipeline from objective to verified answer.
+- [Certification](https://wlazlod.github.io/treecf/concepts/certification/) — what a proof covers and where it stops.
+- [Credit-risk walkthrough](https://wlazlod.github.io/treecf/notebooks/02-credit-risk-tutorial/) — a batch workflow end to end.
+- [probcal integration](https://wlazlod.github.io/treecf/guide/probcal/) — recourse against calibrated cutoffs.
 
-## License
+## Cite
 
-MIT
+```bibtex
+@software{wlazlo_treecf,
+  author  = {Wlazło, Daniel},
+  title   = {treecf: constrained, threshold-aware counterfactual explanations for tree ensembles},
+  doi     = {10.5281/zenodo.22069503},
+  url     = {https://github.com/wlazlod/treecf},
+  license = {MIT}
+}
+```
+
+## Contributing and license
+
+MIT. See [CONTRIBUTING.md](CONTRIBUTING.md) for dev setup, the test layers, and the
+project's hard invariants; report security issues privately per [SECURITY.md](SECURITY.md).

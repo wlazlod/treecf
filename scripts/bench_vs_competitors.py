@@ -20,9 +20,19 @@ Protocol (identical for every method):
   NICE fit) happens outside the timer;
 - validity is re-checked against the model by this script, never taken from
   the library;
-- treecf runs WITHOUT constraints so no method solves a harder problem;
+- treecf's genetic and exact rows run WITHOUT constraints so no method solves
+  a harder problem; a third treecf row adds the scenario's constraints (and,
+  on the public table, an integer value policy for its integer-coded
+  columns) to show what they cost, since no competitor can express them;
 - the batch section measures whole-dataset throughput: treecf's parallel
-  ``explain_batch`` in one call vs looping each library row by row.
+  ``explain_batch`` in one call vs looping each library row by row;
+- DiCE's kdtree mode is skipped where its per-instance time runs to
+  minutes (the large and the public scenarios).
+
+Scenarios: two synthetic populations (credit-shaped, and wide) and one
+public dataset, the OpenML default-of-credit-card-clients table (30,000
+rows, 23 features), with its demographic columns frozen in the constrained
+row.
 
 Run:  uv run scripts/bench_vs_competitors.py [--json results.json]
 
@@ -83,18 +93,77 @@ def make_wide_data() -> tuple[np.ndarray, np.ndarray, list[str]]:
     return X, y, [f"f{j:02d}" for j in range(p)]
 
 
+PUBLIC_NAMES = [
+    "limit_bal", "sex", "education", "marriage", "age",
+    "pay_0", "pay_2", "pay_3", "pay_4", "pay_5", "pay_6",
+    "bill_amt1", "bill_amt2", "bill_amt3", "bill_amt4", "bill_amt5", "bill_amt6",
+    "pay_amt1", "pay_amt2", "pay_amt3", "pay_amt4", "pay_amt5", "pay_amt6",
+]
+
+
+def make_public_data() -> tuple[np.ndarray, np.ndarray, list[str]]:
+    """OpenML default-of-credit-card-clients: 30,000 rows, 23 numeric features."""
+    from sklearn.datasets import fetch_openml
+
+    bunch = fetch_openml("default-of-credit-card-clients", version=1, as_frame=True)
+    X = bunch.data.to_numpy(dtype=float)
+    y = bunch.target.astype(int).to_numpy()
+    return X, y, PUBLIC_NAMES
+
+
+def credit_constraints(names: list[str]) -> list[object]:
+    """Freeze age; max_dpd_30d <= max_dpd_12m (``names`` are the model's own)."""
+    from treecf import Freeze, constraint
+
+    age = names[CREDIT_NAMES.index("age")]
+    dpd_30d = names[CREDIT_NAMES.index("max_dpd_30d")]
+    dpd_12m = names[CREDIT_NAMES.index("max_dpd_12m")]
+    return [Freeze(age), constraint(f"{dpd_30d} <= {dpd_12m}")]
+
+
+def wide_constraints(names: list[str]) -> list[object]:
+    from treecf import Freeze, Monotone
+
+    return [Freeze(names[0]), Monotone(names[1], "increase")]
+
+
+def public_constraints(names: list[str]) -> list[object]:
+    """Freeze the demographic columns (sex, education, marriage, age)."""
+    from treecf import Freeze
+
+    return [Freeze(names[PUBLIC_NAMES.index(n)]) for n in ("sex", "education", "marriage", "age")]
+
+
+def public_policies(names: list[str]) -> dict[str, str]:
+    """Every column of this table is integer-valued (status codes, months,
+    NT-dollar amounts), and XGBoost places its splits exactly on observed
+    values, so an unconstrained plan may move a code by one float32 ulp; the
+    integer policy makes every change a whole unit."""
+    return dict.fromkeys(names, "integer")
+
+
 SCENARIOS = [
     {"name": "medium (120 trees, depth 4, 8 features)", "data": make_credit_data,
-     "n_estimators": 120, "max_depth": 4, "n_instances": 100, "n_batch": 500},
+     "n_estimators": 120, "max_depth": 4, "n_instances": 100, "n_batch": 500,
+     "constraints": credit_constraints, "kdtree": True},
     {"name": "large (300 trees, depth 6, 50 features)", "data": make_wide_data,
-     "n_estimators": 300, "max_depth": 6, "n_instances": 50, "n_batch": 200},
+     "n_estimators": 300, "max_depth": 6, "n_instances": 50, "n_batch": 200,
+     "constraints": wide_constraints, "kdtree": False},
+    {"name": "public (credit-card default, 200 trees, depth 5, 23 features)",
+     "data": make_public_data,
+     "n_estimators": 200, "max_depth": 5, "n_instances": 100, "n_batch": 500,
+     "constraints": public_constraints, "policies": public_policies, "kdtree": False},
 ]
 
 
 def evaluate_per_instance(
     name: str, clf: object, sigma: np.ndarray, rows: np.ndarray,
     runner: Callable[[np.ndarray], np.ndarray | None],
+    proofs: dict[str, int] | None = None,
 ) -> dict[str, object]:
+    """``proofs``, when given, is filled by a treecf runner that records the
+    proof of every result (see ``run_treecf_exact``); the row then carries a
+    ``proof_mix`` column so a reader can see how many rows were proved."""
     times: list[float] = []
     n_changed: list[int] = []
     l1: list[float] = []
@@ -114,7 +183,7 @@ def evaluate_per_instance(
             changed = ~np.isclose(cf, x, rtol=0, atol=1e-12)
             n_changed.append(int(changed.sum()))
             l1.append(float((np.abs(cf - x) / sigma).sum()))
-    return {
+    row = {
         "method": name,
         "valid": f"{valid}/{len(rows)}",
         "median_s": round(float(np.median(times)), 4),
@@ -122,17 +191,19 @@ def evaluate_per_instance(
         "mean_changed": round(float(np.mean(n_changed)), 2) if n_changed else None,
         "mean_L1_sigma": round(float(np.mean(l1)), 2) if l1 else None,
     }
+    if proofs is not None:
+        row["proof_mix"] = dict(sorted(proofs.items()))
+    return row
 
 
 Rows = list[dict[str, object]]
 
 
 def run_scenario(
-    spec: dict[str, object], checkpoint: Callable[[Rows, Rows], None]
+    spec: dict[str, object], checkpoint: Callable[[Rows, Rows], None],
+    treecf_only: bool = False,
 ) -> dict[str, object]:
-    import dice_ml
     import xgboost as xgb
-    from nice import NICE
 
     from treecf import Counterfactual, Explainer, Target
     from treecf.objective import fit_normalizers
@@ -148,12 +219,54 @@ def run_scenario(
     sigma = fit_normalizers(X)
 
     exp = Explainer(clf, background=X)
+    # the model names its features itself (f0, f1, ... for an array-trained
+    # booster); constraints are built on those names, by position
+    model_names = list(exp.ir.feature_names)
+    policies = spec.get("policies")
+    exp_constrained = Explainer(
+        clf, background=X, constraints=spec["constraints"](model_names),  # type: ignore[operator]
+        value_policy=None if policies is None else policies(model_names),  # type: ignore[operator]
+    )
     target = Target.probability(range=(0.0, CUTOFF))
     exp.explain(rows[0], target, seed=0)  # warm-up: marshaling + cell cache
+    exp_constrained.explain(rows[0], target, seed=0)
 
     def run_treecf(x: np.ndarray) -> np.ndarray | None:
         res = exp.explain(x, target, seed=0)
         return res.x_cf if isinstance(res, Counterfactual) else None
+
+    exact_proofs: dict[str, int] = {}
+
+    def run_treecf_exact(x: np.ndarray) -> np.ndarray | None:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = exp.explain(x, target, backend="exact", search="refine", seed=0)
+        exact_proofs[res.proof] = exact_proofs.get(res.proof, 0) + 1
+        return res.x_cf if isinstance(res, Counterfactual) else None
+
+    def run_treecf_constrained(x: np.ndarray) -> np.ndarray | None:
+        res = exp_constrained.explain(x, target, seed=0)
+        return res.x_cf if isinstance(res, Counterfactual) else None
+
+    if treecf_only:
+        # the treecf rows alone, against the code at this checkout; no competitor
+        # library is imported or timed
+        per_instance = []
+        for method_name, runner in (
+            ("treecf (genetic)", run_treecf),
+            ("treecf (exact, refine)", run_treecf_exact),
+            ("treecf (genetic, constrained)", run_treecf_constrained),
+        ):
+            proofs = exact_proofs if method_name == "treecf (exact, refine)" else None
+            row = evaluate_per_instance(method_name, clf, sigma, rows, runner, proofs)
+            print(row, flush=True)
+            per_instance.append(row)
+            checkpoint(per_instance, [])
+        return {"scenario": spec["name"], "n_instances": len(rows), "n_batch": 0,
+                "per_instance": per_instance, "batch_throughput": []}
+
+    import dice_ml
+    from nice import NICE
 
     frame = pd.DataFrame(X, columns=names)
     frame["outcome"] = y
@@ -184,15 +297,19 @@ def run_scenario(
         return nice_exp.explain(x.reshape(1, -1))
 
     runners: list[tuple[str, Callable[[np.ndarray], np.ndarray | None]]] = [
-        ("treecf", run_treecf),
+        ("treecf (genetic)", run_treecf),
+        ("treecf (exact, refine)", run_treecf_exact),
+        ("treecf (genetic, constrained)", run_treecf_constrained),
         ("DiCE (random)", dice_runner("random")),
         ("DiCE (genetic)", dice_runner("genetic")),
-        ("DiCE (kdtree)", dice_runner("kdtree")),
         ("NICE (sparsity)", run_nice),
     ]
+    if spec["kdtree"]:
+        runners.insert(5, ("DiCE (kdtree)", dice_runner("kdtree")))
     per_instance = []
     for method_name, runner in runners:
-        row = evaluate_per_instance(method_name, clf, sigma, rows, runner)
+        proofs = exact_proofs if method_name == "treecf (exact, refine)" else None
+        row = evaluate_per_instance(method_name, clf, sigma, rows, runner, proofs)
         print(row, flush=True)
         per_instance.append(row)
         checkpoint(per_instance, [])  # a killed run keeps every finished method
@@ -235,8 +352,10 @@ def run_scenario(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--json", default=None, help="write results to this path")
-    parser.add_argument("--only", default=None, choices=("medium", "large"),
+    parser.add_argument("--only", default=None, choices=("medium", "large", "public"),
                         help="run a single scenario")
+    parser.add_argument("--treecf-only", action="store_true",
+                        help="time only the treecf rows (no competitors, no throughput)")
     args = parser.parse_args()
 
     results: list[dict[str, object]] = []
@@ -260,7 +379,7 @@ def main() -> None:
             partial["batch_throughput"] = throughput
             dump()  # a killed run keeps everything finished so far
 
-        results[-1] = run_scenario(spec, checkpoint)
+        results[-1] = run_scenario(spec, checkpoint, treecf_only=args.treecf_only)
         dump()
 
     if args.json:

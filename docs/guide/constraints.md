@@ -1,5 +1,10 @@
 # Constrain the search
 
+!!! info "Shared objects"
+    Snippets on this page continue from the objects the [quickstart](../getting-started.md) builds with
+    `credit_demo()`: `exp`, `x`, `target`, `X_bg`, the solved `res` and `batch`, and `cal`,
+    a fitted monotone calibrator (see the [FAQ](../faq.md#how-do-i-target-a-calibrated-probability)).
+
 Constraints are what make a counterfactual a *plan* rather than an
 adversarial example: they encode what can change, in which direction, and
 what must remain consistent. They are declared once on the `Explainer` and
@@ -10,8 +15,8 @@ handling.
 
 ## Declaring
 
+<!-- docs: no-run -->
 ```python
-# docs: no-run — the catalog; feature names stand in for your own schema
 from treecf import (
     AllowedCategories, Equals, Freeze, Implies, Monotone, OneHot, Range, constraint,
 )
@@ -28,9 +33,8 @@ AllowedCategories("occupation", ["clerk", "manager"])   # categorical whitelist
 
 Pass them at construction:
 
+<!-- docs: no-run -->
 ```python
-# X_bg: the docs background matrix; model construction as in the models guide
-# docs: no-run — model.json stands in for your own dump file
 from treecf import Explainer, Freeze, Monotone
 
 exp = Explainer("model.json", background=X_bg,
@@ -60,7 +64,6 @@ and data-quality findings, and returns candidates you accept explicitly —
 mined rules are suggestions, never silently applied:
 
 ```python
-# exp, X_bg: the docs explainer and its background rows
 import treecf
 
 suggestions = treecf.suggest_constraints(X_bg, feature_names=exp.ir.feature_names)

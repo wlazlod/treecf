@@ -1,14 +1,25 @@
 # Run the search
 
+!!! info "Shared objects"
+    Snippets on this page continue from the objects the [quickstart](../getting-started.md) builds with
+    `credit_demo()`: `exp`, `x`, `target`, `X_bg`, the solved `res` and `batch`, and `cal`,
+    a fitted monotone calibrator (see the [FAQ](../faq.md#how-do-i-target-a-calibrated-probability)).
+
 With the [model](models.md), [target](targets.md), and
 [constraints](constraints.md) in place, this page is the middle of the
 workflow: producing plans — for one row, for alternatives per row, and for a
-whole dataset.
+whole dataset. Three calls produce more than one plan for a row; pick by
+what you want the plans to differ in:
+
+| You want | Call |
+|---|---|
+| `k` fast heuristic variants of one plan | `explain_batch(x[None], n_per_example=k, diversity=...)` |
+| One plan per group of levers you already know | `explain_coalitions(x, target, coalitions={...})` |
+| Plans with distinct lever sets, each with a proof, or the whole picture of which lever sets work | `explain_diverse` / `recourse_menu` |
 
 ## One row
 
 ```python
-# exp, x, target: the docs explainer, one rejected applicant, the target
 res = exp.explain(x, target=target, seed=0)
 res.changes    # {"feature": (from, to)} — only what changed
 res.distance   # the weighted cost of the plan
@@ -33,7 +44,6 @@ with noise:
   systematically.
 
 ```python
-# exp, x, target: the docs explainer, one rejected applicant, the target
 alts = exp.explain_batch(x[None], target=target,
                          n_per_example=3, diversity="lever-blocking", seed=0)
 [(rec.blocked_lever, rec.changes) for rec in alts.records if rec.feasible]
@@ -46,7 +56,6 @@ each group independently — the answer to "what can this applicant do through
 debt reduction alone?":
 
 ```python
-# exp, x, target: the docs explainer, one rejected applicant, the target
 plans = exp.explain_coalitions(
     x, target=target,
     coalitions={"repayment": ["utilization", "dpd_12m"],
@@ -65,7 +74,6 @@ returns the whole picture at once — which combinations of levers reach the
 target, at what cost, and which provably cannot:
 
 ```python
-# exp, x, target: the docs explainer, one rejected applicant, the target
 menu = exp.recourse_menu(x, target=target, max_levers=2, backend="exact", seed=0)
 menu.minimal              # the cheapest lever sets no smaller set can replace
 menu.certified_infeasible # sets no acceptance is reachable through, proved
@@ -91,7 +99,6 @@ here means distinct lever sets — two plans count as different ways to
 reach the target when they change different features — and nothing else:
 
 ```python
-# exp, x, target: the docs explainer, one rejected applicant, the target
 diverse = exp.explain_diverse(x, target=target, k=3, backend="exact", seed=0)
 list(diverse)        # plan keys, cheapest first
 diverse.jaccard      # pairwise distance between the plans' changed sets
@@ -110,7 +117,6 @@ returns a `BatchResult` with per-row records, portable JSON storage, and
 plotting hooks ([visualize](visualize.md)):
 
 ```python
-# exp, X_bg, target: the docs explainer, its background rows, the target
 batch = exp.explain_batch(X_bg[:20], target=target, seed=0)
 sum(r.feasible for r in batch.records)   # rows with a plan
 frame = batch.to_frame()                 # one row per (id, plan), pandas

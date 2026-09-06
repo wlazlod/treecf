@@ -94,17 +94,17 @@ class TestExactOnlyKwargs:
 
 
 class TestSearchMode:
-    def test_refine_with_other_backend_raises(self, exp: Explainer) -> None:
+    def test_classic_with_other_backend_raises(self, exp: Explainer) -> None:
         with pytest.raises(ValueError, match="only valid with backend='exact'"):
-            exp.explain(x0, Target.raw(op=">=", value=0.5), backend="genetic", search="refine")
+            exp.explain(x0, Target.raw(op=">=", value=0.5), backend="genetic", search="classic")
 
     def test_unknown_mode_raises(self, exp: Explainer) -> None:
         with pytest.raises(ValueError, match="search"):
             exp.explain(x0, Target.raw(op=">=", value=0.5), backend="exact", search="bogus")
 
-    def test_classic_is_accepted_explicitly_on_any_backend(self, exp: Explainer) -> None:
+    def test_the_default_mode_is_accepted_explicitly_on_any_backend(self, exp: Explainer) -> None:
         result = exp.explain(
-            x0, Target.raw(op=">=", value=0.5), backend="genetic", seed=0, search="classic"
+            x0, Target.raw(op=">=", value=0.5), backend="genetic", seed=0, search="refine"
         )
         assert isinstance(result, Counterfactual | Infeasible)
 
@@ -115,9 +115,14 @@ class TestSearchMode:
         assert isinstance(result, Counterfactual)
         assert result.solver_stats["search"] == "refine"
         assert result.proof == "optimal"
-        classic = exp.explain(x0, Target.raw(op=">=", value=0.9), backend="exact", seed=0)
+        classic = exp.explain(
+            x0, Target.raw(op=">=", value=0.9), backend="exact", seed=0, search="classic"
+        )
         assert isinstance(classic, Counterfactual)
         assert classic.solver_stats["search"] == "classic"
+        default = exp.explain(x0, Target.raw(op=">=", value=0.9), backend="exact", seed=0)
+        assert isinstance(default, Counterfactual)
+        assert default.solver_stats["search"] == "refine"
         assert result.distance == pytest.approx(classic.distance, rel=1e-12)
 
     def test_coalitions_and_batch_forward_the_mode(self, exp: Explainer) -> None:

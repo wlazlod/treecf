@@ -42,7 +42,7 @@ _MODES = ("minimal", "all")
 _CRITERIA = ("levers", "coalitions")
 _MENU_OPTIONS: dict[str, Any] = {
     "backend": "exact",
-    "search": "classic",
+    "search": "refine",
     "seed": None,
     "time_budget_s": None,
     "total_budget_s": None,

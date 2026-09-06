@@ -485,6 +485,11 @@ def build_certificate(
         declared["warm_start"] = warm_start
     if search is not None:
         declared["search"] = search
+    elif "search" in result.solver_stats:
+        # an exact solve reports which engine ran; record it, so a certificate
+        # never leaves the engine to be inferred from the issuing release's
+        # default
+        declared["search"] = str(result.solver_stats["search"])
     solve: dict[str, object] = {
         "backend": _backend_of(result.solver_stats),
         "proof": result.proof,

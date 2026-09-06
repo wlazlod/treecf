@@ -6,7 +6,7 @@ authors:
   - family-names: "Wlazło"
     given-names: "Daniel"
     email: "wlazlo.daniel@gmail.com"
-version: 0.3.1
+version: 0.3.2
 doi: 10.5281/zenodo.22069504
 date-released: 2026-09-06
 license: MIT
