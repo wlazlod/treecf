@@ -44,9 +44,13 @@ exp = Explainer(
 res = exp.explain(x, target=target, seed=0)
 ```
 
-**Need a proof?** `backend="exact"` returns `proof="optimal"` or a certified `Infeasible`;
-`region=True` widens the plan into a box every point of which is verified.
-→ [Certify and widen](guide/certify.md).
+**Need a proof?** `backend="exact"` returns `proof="optimal"` — cheapest under the declared
+objective, which is distance unless you weight `sparsity_weight` — or a certified
+`Infeasible`; `region=True` widens the plan into a box every point of which is verified. On
+a model with dozens of free levers, restrict them first (`Freeze`, coalitions, or a menu,
+with `search="refine"`); otherwise the search spends its budget and returns a `heuristic`
+plan with a warning.
+→ [Certify and widen](guide/certify.md), [the proof envelope](concepts/certification.md#the-proof-envelope-measured).
 
 ```python
 proved = exp.explain(x, target=target, backend="exact", region=True, seed=0)

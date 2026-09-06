@@ -103,6 +103,32 @@ coming back empty-handed (budget exhausted, a repair withdrawn, the genetic/pyth
 finding nothing) reports `proof="search_exhausted"`: a plan was not found, but nothing is proven
 about whether one exists.
 
+## What "optimal" means — and what it does not
+
+The objective every backend minimizes is the weighted, σ-normalized L1 distance of the plan,
+plus `sparsity_weight` per changed feature — and `sparsity_weight` defaults to `0.0`. A
+`proof="optimal"` is a statement about *that* objective: no feasible row on the search grid
+has a lower value of it. It is not a statement that the plan is the best recourse. A plan
+that moves five features a little can cost less distance than one that moves one feature a
+lot, and for an applicant who has to act, the one-feature plan is usually the better answer.
+
+This shows up in the measurements. The genetic backend carries a revert-to-factual mutation
+that drives sparsity beyond what the objective rewards, so on the medium competitor model
+its plans change 1.6 features at 1.0 σ while the exact refine search proves plans of 0.4 σ
+that change 3.0 features ([against other CF libraries](backends.md#against-other-cf-libraries)).
+The "gap" columns on the [benchmarks page](../benchmarks/comparison.md) measure distance
+only; part of what they call a gap is the heuristic doing something the objective does not
+ask for.
+
+Three ways to make the proof mean what you want:
+
+- Set `sparsity_weight > 0` and the objective — and the proof — value fewer changes; both
+  backends honour it.
+- Ask `recourse_menu(x, target, max_levers=k)` for the minimal frontier: every lever set up to
+  `k` solved exactly, so "the cheapest plan that touches only these levers" comes with its
+  own proof, and sets that cannot work come back certified.
+- Read `n_changed` next to `distance` and `proof`; the result carries all three.
+
 ## When the budget runs out
 
 Whenever the exact backend returns any result with `solver_stats["completed"] is False` —
@@ -234,21 +260,50 @@ Features an `Implies`, a `OneHot`, or an unsupported multi-feature `Linear` coul
 never widened at all — they stay pinned at the counterfactual's own value, conservatively, rather
 than trust an argument this release has not proven sound for those shapes.
 
-## Scaling guidance
+## The proof envelope, measured
 
 The exact search is a branch-and-bound over a per-feature candidate grid, and its worst case is
 exponential in the number of *influential* features — features the search actually branches on,
 because more than one candidate value survives constraint pruning — not in the model's total
-feature count. In practice:
+feature count. The [benchmarks page](../benchmarks/comparison.md) measures where that leaves
+certification on one 4-core machine with a 60 s budget per solve, and the honest summary is
+narrow: the classic search certifies models of up to 100 trees at depth 3 with 12 features, and
+8 features at depth 5; the refine search adds every 12-feature model at depth 5 up to 200 trees
+and one 20-feature model at depth 3; no engine certifies any 20-feature model at depth 5, nor
+the 300-tree, depth-6, 50-feature model. A search that does not finish spends its budget and
+returns the plan its warm start found, labelled `proof="heuristic"` with a warning — on the
+wide models in the competitor comparison that is what both exact modes did, after 12 to 20
+seconds each. Real credit-risk models with dozens of free features sit outside this envelope
+as long as every feature may move.
+
+What moves a model inside the envelope is the number of levers, not the number of trees:
 
 - `Freeze` and other constraints that pin a feature to one value remove it from branching
   entirely, so a heavily constrained problem searches a much smaller space than the raw feature
-  count suggests.
-- As a rule of thumb, keep the number of influential features to the low hundreds; well beyond
-  that, `node_budget` or `time_budget_s` is likely to cut the search short before it settles the
-  space (reported honestly as `proof="heuristic"` or `Infeasible.proof="search_exhausted"`,
-  never silently — see [When the budget runs out](#when-the-budget-runs-out) for the
-  `TreecfWarning` this always triggers on `explain`/`explain_batch`/`explain_coalitions`).
+  count suggests; `search_profile(x, target)` reports the influential-feature count and the
+  size of the space before anything runs.
+- A coalition solve (`explain_coalitions`) or a `recourse_menu` freezes everything outside a
+  small lever set, and that is where proofs on wide models come from. Measured on the
+  300-tree, depth-6, 50-feature model above, on the same machine: the full exact search runs
+  15 s and returns `heuristic`; with `search="refine"`, a coalition of one lever certifies in
+  0.07 s, of two in 0.1–0.2 s, and of three in 0.1–0.5 s, every one of them `optimal` or a
+  certified infeasibility. The classic search on the same coalitions needs 0.3 s for one
+  lever, 1.5–40 s for two, and runs out of a 60 s budget at three — pass `search="refine"`
+  when the levers are few and the trees are deep. For a wide model the practical route to a
+  proof is therefore a menu with the refine search: every small lever set solved exactly, the
+  impossible ones certified, the whole picture in one call. On the same wide model,
+  `recourse_menu(x, target, max_levers=1, search="refine")` settles all fifty levers in 7 s
+  (two proved workable, forty-eight certified impossible) and `max_levers=2` settles 1,178
+  lever sets in 62 s (thirty-six with a proved-optimal plan, the rest certified impossible),
+  both with `complete=True`.
+- Beyond that, `node_budget` or `time_budget_s` cuts the search short before it settles the
+  space, reported as `proof="heuristic"` or `Infeasible.proof="search_exhausted"`, never
+  silently — see [When the budget runs out](#when-the-budget-runs-out) for the
+  `TreecfWarning` this always triggers on `explain`/`explain_batch`/`explain_coalitions`.
+- One model's number is not another's: two models of the same shape can differ by an order of
+  magnitude in certification time, because the space depends on how many distinct thresholds
+  each feature carries, not on the shape alone. Treat the matrix as a map of what is possible,
+  not as a promise for your model; `search_profile` is the estimate that applies to yours.
 - `node_budget` (default 2,000,000 assignments) and `gap` (default `0.0`) are the two pressure
   valves: lowering `node_budget` bounds worst-case wall time at the cost of a less certain
   answer, and a `gap > 0` lets the search settle for — and honestly report, via

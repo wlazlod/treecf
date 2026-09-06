@@ -24,9 +24,12 @@ res.changes   # {'income': (4678.0, 6932.4)}
   Rust core, typically in milliseconds on 300-tree ensembles; every result is float-verified
   against the parsed model, and the parsers are conformance-tested against the native
   library ([how it works](how-it-works.md)).
-- **Proofs.** `backend="exact"` returns `proof="optimal"`, a certified infeasibility, or a
-  certified recourse region — a box every point of which is verified — with no external
-  solver ([certification](concepts/certification.md)).
+- **Proofs, inside a measured envelope.** `backend="exact"` returns `proof="optimal"` under
+  the declared objective, a certified infeasibility, or a certified recourse region — a box
+  every point of which is verified — with no external solver. Proofs scale with the levers
+  the search may move, not the model's width: wide models certify once the levers are
+  restricted, and a search that runs out of budget says so
+  ([the proof envelope](concepts/certification.md#the-proof-envelope-measured)).
 - **Declarative constraints.** `Freeze`, `Monotone`, `Range`, `OneHot`, and linear rules
   such as `max_dpd_30d <= max_dpd_12m`, compiled once for every engine
   ([constraints](concepts/constraints.md)).
@@ -34,9 +37,10 @@ res.changes   # {'income': (4678.0, 6932.4)}
   `check_certificate` years later, and a one-page portfolio report for a whole campaign
   ([auditability](guide/auditability.md)).
 
-On the same 120-tree model and declined rows, treecf's plans cost a fraction of what DiCE's
-do and take a small fraction of the time; the measured tables, and the honest reading of
-where NICE is faster, are on the [benchmarks page](concepts/backends.md#against-other-cf-libraries).
+On a 120-tree model and 100 declined rows, treecf's plans cost a seventh of DiCE's at a fifth
+of the time; NICE is four times faster per instance and its plans cost 2.7 times more. The
+measured tables and the honest reading are on the
+[benchmarks page](concepts/backends.md#against-other-cf-libraries).
 
 Use it if your model is a tree ensemble and you need plans that are feasible under real
 constraints, cheap, and provable. Look elsewhere if the model is not a tree ensemble, or

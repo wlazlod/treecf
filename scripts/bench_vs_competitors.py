@@ -21,8 +21,9 @@ Protocol (identical for every method):
 - validity is re-checked against the model by this script, never taken from
   the library;
 - treecf's genetic and exact rows run WITHOUT constraints so no method solves
-  a harder problem; a third treecf row adds the scenario's constraints to
-  show what they cost, since no competitor can express them;
+  a harder problem; a third treecf row adds the scenario's constraints (and,
+  on the public table, an integer value policy for its integer-coded
+  columns) to show what they cost, since no competitor can express them;
 - the batch section measures whole-dataset throughput: treecf's parallel
   ``explain_batch`` in one call vs looping each library row by row;
 - DiCE's kdtree mode is skipped where its per-instance time runs to
@@ -111,9 +112,13 @@ def make_public_data() -> tuple[np.ndarray, np.ndarray, list[str]]:
 
 
 def credit_constraints(names: list[str]) -> list[object]:
+    """Freeze age; max_dpd_30d <= max_dpd_12m (``names`` are the model's own)."""
     from treecf import Freeze, constraint
 
-    return [Freeze("age"), constraint("max_dpd_30d <= max_dpd_12m")]
+    age = names[CREDIT_NAMES.index("age")]
+    dpd_30d = names[CREDIT_NAMES.index("max_dpd_30d")]
+    dpd_12m = names[CREDIT_NAMES.index("max_dpd_12m")]
+    return [Freeze(age), constraint(f"{dpd_30d} <= {dpd_12m}")]
 
 
 def wide_constraints(names: list[str]) -> list[object]:
@@ -123,9 +128,18 @@ def wide_constraints(names: list[str]) -> list[object]:
 
 
 def public_constraints(names: list[str]) -> list[object]:
+    """Freeze the demographic columns (sex, education, marriage, age)."""
     from treecf import Freeze
 
-    return [Freeze(n) for n in ("sex", "education", "marriage", "age")]
+    return [Freeze(names[PUBLIC_NAMES.index(n)]) for n in ("sex", "education", "marriage", "age")]
+
+
+def public_policies(names: list[str]) -> dict[str, str]:
+    """Every column of this table is integer-valued (status codes, months,
+    NT-dollar amounts), and XGBoost places its splits exactly on observed
+    values, so an unconstrained plan may move a code by one float32 ulp; the
+    integer policy makes every change a whole unit."""
+    return dict.fromkeys(names, "integer")
 
 
 SCENARIOS = [
@@ -138,7 +152,7 @@ SCENARIOS = [
     {"name": "public (credit-card default, 200 trees, depth 5, 23 features)",
      "data": make_public_data,
      "n_estimators": 200, "max_depth": 5, "n_instances": 100, "n_batch": 500,
-     "constraints": public_constraints, "kdtree": False},
+     "constraints": public_constraints, "policies": public_policies, "kdtree": False},
 ]
 
 
@@ -199,8 +213,13 @@ def run_scenario(
     sigma = fit_normalizers(X)
 
     exp = Explainer(clf, background=X)
+    # the model names its features itself (f0, f1, ... for an array-trained
+    # booster); constraints are built on those names, by position
+    model_names = list(exp.ir.feature_names)
+    policies = spec.get("policies")
     exp_constrained = Explainer(
-        clf, background=X, constraints=spec["constraints"](names)  # type: ignore[operator]
+        clf, background=X, constraints=spec["constraints"](model_names),  # type: ignore[operator]
+        value_policy=None if policies is None else policies(model_names),  # type: ignore[operator]
     )
     target = Target.probability(range=(0.0, CUTOFF))
     exp.explain(rows[0], target, seed=0)  # warm-up: marshaling + cell cache

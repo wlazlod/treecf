@@ -22,10 +22,17 @@ scikit-learn tree ensembles — and can prove the answer is the cheapest, or tha
   search runs on a bundled Rust core, typically in milliseconds; every result is
   float-verified against the parsed model before it is returned, and the parsers are
   conformance-tested against the native library.
-- **Optional optimality proof.** `backend="exact"` branch-and-bounds the same candidate grid
-  and returns `proof="optimal"` when no cheaper plan exists. A completed exact search that
-  finds nothing returns `Infeasible(proof="certified")` — "no recourse exists within these
-  constraints" becomes a provable statement, not a shrug after a timeout.
+- **Optional proofs, inside a measured envelope.** `backend="exact"` returns
+  `proof="optimal"` when no cheaper plan exists under the declared objective (weighted
+  distance, plus a per-feature term only if you set `sparsity_weight`), and a completed
+  search that finds nothing returns `Infeasible(proof="certified")`. Proofs scale with the
+  number of levers the search may move, not with the model's width: on the measured matrix
+  the refine search certifies up to 200 trees with 12 free features inside 60 s and nothing
+  at 20 features and depth 5 — while on that 300-tree, 50-feature model a coalition of up to
+  three levers certifies in under half a second with `search="refine"`, so wide models get
+  proofs once the levers are restricted with `Freeze`, coalitions, or a `recourse_menu`. A
+  search that runs out of budget returns its best plan labelled `heuristic` and warns; it
+  never claims more.
 - **Recourse regions.** Any verified counterfactual widens into a certified box — "reduce
   utilization below 0.40", not "to 0.3972" — with every point in the box provably in-target
   and constraint-feasible; works with every backend.
@@ -37,14 +44,16 @@ scikit-learn tree ensembles — and can prove the answer is the cheapest, or tha
   cheapest plans with distinct lever sets; `certificate` turns any result into a
   self-contained JSON record a validator re-checks later.
 
-On the same 120-tree model and declined rows, treecf's plans cost a fraction of what DiCE's
-do and take a small fraction of the time; NICE is faster per instance but its plans cost
-more and it cannot take constraints. The measured tables and the honest reading are on the
+On a 120-tree model and 100 declined rows, treecf's plans cost a seventh of DiCE's at a fifth
+of the time; NICE is four times faster per instance, and its plans cost 2.7 times more and
+cannot take constraints. The measured tables and the honest reading are on the
 [benchmarks page](https://wlazlod.github.io/treecf/concepts/backends/#against-other-cf-libraries).
 
 Not for you if: the model is not a tree ensemble; you want sets of plans diverse by distance
-rather than by the levers they use (DiCE does that); or you need a frozen API — treecf is in
-beta, see [API stability](https://wlazlod.github.io/treecf/api-stability/).
+rather than by the levers they use (DiCE does that); you need a proof over dozens of free
+levers at once without restricting them (see the [proof envelope](https://wlazlod.github.io/treecf/concepts/certification/#the-proof-envelope-measured));
+or you need a frozen API — treecf is in beta, see
+[API stability](https://wlazlod.github.io/treecf/api-stability/).
 
 ## Installation
 

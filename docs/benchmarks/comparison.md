@@ -8,13 +8,16 @@ on the machine stamped here, by a run anyone can repeat.
 
 ## Exact versus genetic
 
-Same model, same target, same seeds; the genetic backend's *gap* is how
-much plan cost the heuristic leaves on the table relative to the proved
-optimum. Per-solve budgets: 5 s wall, 2,000,000 nodes. *classic* is the
+Same model, same target, same seeds; the genetic backend's *distance gap*
+is how far its plan sits from the proved minimum of the default objective
+(σ-normalized distance, `sparsity_weight=0`). It is not a quality gap: the
+heuristic's plans change fewer features, which that objective does not
+reward — see [what optimal means](../concepts/certification.md#what-optimal-means-and-what-it-does-not).
+Per-solve budgets: 5 s wall, 2,000,000 nodes. *classic* is the
 default exact engine (`search="classic"`); *refine* is the opt-in
 coarse-to-fine engine (`search="refine"`), timed on the same solves.
 
-| Scenario | genetic median | classic warm | classic cold | refine warm | refine cold | heuristic gap median | proof mix (classic) | proof mix (refine) |
+| Scenario | genetic median | classic warm | classic cold | refine warm | refine cold | distance gap median | proof mix (classic) | proof mix (refine) |
 |---|---|---|---|---|---|---|---|---|
 | small 30t/d4/8f [HEADLINE] | 0.005 s | 0.246 s | 0.239 s | 0.009 s | 0.004 s | 14.33% | optimal: 10 | optimal: 10 |
 | medium 60t/d5/12f | 0.008 s | 5.295 s | 5.288 s | 0.315 s | 0.293 s | 0.00% | heuristic: 10 | optimal: 10 |

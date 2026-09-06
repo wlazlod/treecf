@@ -89,6 +89,22 @@ could not repair. The row itself is still float-verified; only the
 "cheapest possible" claim is dropped. See
 [certification](concepts/certification.md#two-honesty-notes).
 
+**Why does the exact backend come back `heuristic` on my 30-feature model?**
+Because the search space is exponential in the number of levers that may move, and with
+every feature free a model that wide sits outside the measured envelope: the exact search
+spends its budget and returns the plan its warm start found, labelled honestly. Restrict
+the levers — `Freeze` what cannot change, or ask `recourse_menu(x, target, max_levers=2,
+search="refine")` for every small lever set solved exactly — and the same model certifies
+each set in a fraction of a second. See
+[the proof envelope](concepts/certification.md#the-proof-envelope-measured).
+
+**Why did the "optimal" plan change more features than the heuristic one?**
+Because the proof is about the objective, and the objective is distance: with the default
+`sparsity_weight=0`, five small moves can cost less than one large one. The genetic search
+favours fewer changes beyond what the objective rewards. Set `sparsity_weight > 0` to make
+the proof value sparsity, or ask a `recourse_menu` for the cheapest plan per lever set. See
+[what optimal means](concepts/certification.md#what-optimal-means-and-what-it-does-not).
+
 **How do float32 casts affect routing?**
 XGBoost, CatBoost, and scikit-learn round an input to float32 before
 comparing it with a split threshold, so a float64 value within half a
