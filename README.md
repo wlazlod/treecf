@@ -69,8 +69,8 @@ generated on a scoring host that has neither it nor a solver.
 ## Quick look
 
 `credit_demo()` returns a packaged credit model, background rows, and one declined
-applicant. It ships with the next release (or a checkout of `main`); on the released package
-substitute your own model, as the quickstart notebook does.
+applicant. It is new in this version; on an older installed package, substitute your own
+model, as the quickstart notebook does.
 
 ```python
 from treecf import Explainer, Freeze, Monotone, Target

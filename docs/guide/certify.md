@@ -157,8 +157,9 @@ from treecf.viz import plot_certification_trace
 
 with warnings.catch_warnings():
     warnings.simplefilter("ignore", TreecfWarning)   # a cut-off search warns, by design
-    cut = exp.explain(
-        x, target=target, backend="exact", seed=0, node_budget=50_000, warm_start=False
+    cut = exp.explain(   # the classic engine, cut off by a small node budget on purpose
+        x, target=target, backend="exact", search="classic", seed=0,
+        node_budget=50_000, warm_start=False,
     )
 plot_certification_trace(cut)   # incumbent stepping down, the bound below it, the outcome named
 ```

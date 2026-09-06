@@ -55,6 +55,20 @@ version, and `check_certificate` verifies such a file exactly as it would
 without the addition. Only removing a key, or changing what an existing key
 means, bumps `schema_version`.
 
+## Added in 0.3.2
+
+New public symbols in this release, as one running list:
+
+- `treecf.datasets.credit_demo()` and `treecf.datasets.OCCUPATIONS`: the
+  documentation's credit model shipped inside the package with a
+  deterministic background sample and one declined applicant, so every
+  example runs as written on a fresh install.
+- Certificates of exact solves always carry `solve.declared.search`, taken
+  from the result's own solver statistics when the caller does not pass it.
+- The exact backend's default search is now `"refine"`; `"classic"` stays
+  available. Same optimum and certificates; the returned row may be a
+  different argmin of the same cost.
+
 ## Added in 0.3.1
 
 New public symbols in this release, as one running list:

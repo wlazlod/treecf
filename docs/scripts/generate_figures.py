@@ -126,7 +126,8 @@ def main() -> None:
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", TreecfWarning)
         cut = exp.explain(
-            x, target=target, backend="exact", seed=0, node_budget=50_000, warm_start=False
+            x, target=target, backend="exact", search="classic", seed=0,
+            node_budget=50_000, warm_start=False,
         )
     _save("plot_certification_trace", _fig_of(plot_certification_trace(cut)))
 
