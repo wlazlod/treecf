@@ -96,7 +96,8 @@ def _required_packages(text: str) -> list[str]:
 def _extract_blocks(page: pathlib.Path) -> list[str]:
     text = page.read_text(encoding="utf-8")
     blocks = []
-    for raw in _CODE_BLOCK_RE.findall(text):
+    for match in _CODE_BLOCK_RE.finditer(text):
+        raw = match.group(1)
         lines = [line for line in raw.splitlines() if line.strip()]
         if not lines:
             continue
@@ -105,6 +106,11 @@ def _extract_blocks(page: pathlib.Path) -> list[str]:
         if lines[0].lstrip().startswith(">>>"):
             continue
         if _NO_RUN_MARKER in raw:
+            continue
+        # the marker may also sit just before the fence, as an HTML comment
+        # the reader never sees
+        preceding = text[: match.start()].rstrip("\n").rsplit("\n", 1)[-1].strip()
+        if preceding == f"<!-- {_NO_RUN_MARKER.lstrip('# ')} -->":
             continue
         blocks.append(raw)
     return blocks

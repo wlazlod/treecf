@@ -1,5 +1,10 @@
 # probcal: recourse on calibrated policies
 
+!!! info "Shared objects"
+    Snippets on this page continue from the objects the [quickstart](../getting-started.md) builds with
+    `credit_demo()`: `exp`, `x`, `target`, `X_bg`, the solved `res` and `batch`, and `cal`,
+    a fitted monotone calibrator (see the [FAQ](../faq.md#how-do-i-target-a-calibrated-probability)).
+
 <!-- docs: requires probcal -->
 
 [probcal](https://github.com/wlazlod/probcal) fits post-hoc probability
@@ -14,7 +19,6 @@ probcal at runtime; probcal's side of this integration is its own
 ## A calibrated cutoff, end to end
 
 ```python
-# exp, x, X_bg: the docs explainer, one rejected applicant, background rows
 import numpy as np
 from probcal import BetaCalibrator
 from treecf import Target

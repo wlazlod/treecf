@@ -3,179 +3,65 @@
 ## Install
 
 ```bash
-pip install treecf                       # bundled Rust search engine
-pip install "treecf[xgboost,viz]"        # parser extras, matplotlib plots
+pip install "treecf[xgboost,viz]"
 ```
 
-numpy is the only Python dependency; the genetic engine is a compiled Rust core
-shipped inside the wheel. Model parsers accept JSON dumps directly, so
-explanations can be generated on machines where the training framework (or any
-solver) is not installed. 32-bit Raspberry Pi wheels arrive via piwheels' other
-builders; the recurring Bookworm build failure there is an upstream toolchain
-issue, not a treecf packaging bug. All other platforms ship from CI as usual.
+numpy is the only Python dependency; the search engine is a Rust core inside the wheel.
+The extras add a parser for your training library and the plots — a JSON model dump
+parses without either.
 
 ## First counterfactual
 
-```python
-# docs: no-run — clf / X_train / y_train stand in for your own model and data
-import xgboost as xgb
-from treecf import Explainer, Target, Freeze, Monotone, constraint
-
-# a binary classifier trained on your data
-clf = xgb.XGBClassifier(n_estimators=100, max_depth=4).fit(X_train, y_train)
-
-exp = Explainer(
-    model=clf,                            # or "model.json", or a dump dict
-    background=X_train,                   # fits robust distance normalizers (MAD chain)
-    constraints=[
-        Freeze("age_of_bureau_file"),     # immutable
-        Monotone("age", "increase"),      # can only grow
-        constraint("max_dpd_30d <= max_dpd_12m"),   # inter-feature consistency
-    ],
-)
-```
-
-Once the explainer exists, asking for recourse is one call (`exp`, `x`, and
-`target` below are the docs vocabulary: a LightGBM credit model, one rejected
-applicant, and a probability-band target):
+Runnable as-is: `credit_demo()` returns a packaged credit model, background rows, and one
+declined applicant.
 
 ```python
-# exp, x, target: the docs explainer, one rejected applicant, the target
-from treecf import Counterfactual
+from treecf import Explainer, Freeze, Monotone, Target
+from treecf.datasets import credit_demo
+
+model, X, x = credit_demo()
+exp = Explainer(model, background=X)
+target = Target.probability(range=(0.0, 0.05))    # default probability at most 5%
 
 res = exp.explain(x, target=target, seed=0)
-
-if isinstance(res, Counterfactual):
-    print(res.changes)      # {"feature": (from, to), ...}
-else:
-    print(res.reason)       # Infeasible: why no plan was found
+res.changes       # {'income': (4678.0, 6932.4)}
+res.distance      # 2.33 — cost in σ-normalized units
+res.score_prob    # 0.0443 — the verified output at the plan
+res.proof         # 'heuristic' — fast search; see "Need a proof?"
 ```
 
-The search is heuristic (`proof="heuristic"`), feasibility-first, and
-seed-deterministic; on toy suites it brackets a brute-force optimum. It runs on
-the bundled Rust engine in milliseconds even on 300-tree models;
-`backend="python"` runs the reference numpy implementation of the same
-algorithm. [How it works](how-it-works.md) walks the whole pipeline.
+Read it: `changes` is what to move and where; `distance` is the cost; `score_prob` is the
+model's output at the plan, verified before it is returned. An `Infeasible` result carries
+a `reason` instead.
 
-## Calibrated models
-
-If your pipeline post-hoc calibrates the model's probabilities, express the
-target on the *calibrated* scale — `Target.probability` would silently target
-the uncalibrated output:
+Constrain it: constraints are declared once and every engine honours them.
 
 ```python
-# exp, x, cal: the docs explainer, one rejected applicant, a fitted calibrator
-from treecf import Target
-
-res = exp.explain(
-    x,
-    target=Target.calibrated(cal, range=(0.0, 0.04)),  # calibrated PD ≤ 4%
-    seed=0,
+exp = Explainer(
+    model, background=X,
+    constraints=[Freeze("occupation"), Monotone("tenure_months", "increase")],
 )
+res = exp.explain(x, target=target, seed=0)
 ```
 
-`cal` is any monotone calibrator exposing `interval_inverse` and
-`is_monotone_`; see the FAQ for the exact protocol and the `buffer_logit` robustness margin.
-
-## Read the result
-
-| Field | Meaning |
-|---|---|
-| `x_cf` | counterfactual instance (NaN where a missing state was chosen) |
-| `changes` | feature → (factual, counterfactual) for every changed feature |
-| `distance`, `n_changed` | weighted L1 distance and L0 count |
-| `score_raw`, `score_prob` | raw model output and its sigmoid when applicable |
-| `proof` | always `"heuristic"` — the search never claims optimality |
-| `snapped` | per-feature outcome of `value_policy` snapping |
-
-Every result is re-verified in float space against the IR before it is returned:
-the target and each constraint are checked on the actual returned values.
-
-## Visualize it
+**Need a proof?** `backend="exact"` returns `proof="optimal"` or a certified `Infeasible`;
+`region=True` widens the plan into a box every point of which is verified.
+→ [Certify and widen](guide/certify.md).
 
 ```python
-# exp, res, target: the docs explainer, its solved plan, and the target
-from treecf.viz import plot_changes, plot_waterfall, plot_effort
-
-plot_changes(res)                          # dumbbells: from -> to per feature
-plot_waterfall(exp, res, target=target)    # SHAP-style: exact score deltas, cutoff line
-plot_effort(exp, res)                      # where the applicant's effort goes (J split)
+proved = exp.explain(x, target=target, backend="exact", region=True, seed=0)
+proved.proof                      # 'optimal'
+proved.region.describe()["income"]   # 'in [6.58e+03, 7.81e+03] (data-limited)'
 ```
 
-## Alternatives for one instance
+**More than one plan?** `exp.explain_diverse(x, target, k=3)` returns the cheapest plans
+with distinct lever sets, each with its own proof. → [Run the search](guide/explain.md).
 
-One plan is rarely the whole story. Ask for several distinct plans for the same
-row and compare them side by side:
-
-```python
-# exp, x, target: the docs explainer, one rejected applicant, the target
-from treecf.viz import plot_alternatives, plot_tradeoff
-
-plans_batch = exp.explain_batch(x.reshape(1, -1), target=target, n_per_example=3, seed=0)
-plans = plans_batch.for_id(0)              # up to 3 distinct plans for this row
-
-plot_alternatives(plans, explainer=exp)    # every plan's changes, standardized to Δ/σ
-plot_tradeoff(plans, target=target)        # cost vs achieved score: which plan buys what
-```
-
-`diversity="lever-blocking"` instead re-solves with each plan's biggest lever
-frozen — and reports levers that turn out to be *essential*.
-
-For advice grouped by what a person controls together, ask for one plan per
-named feature group — see [Coalitions](concepts/coalitions.md):
-
-```python
-# exp, x, target: the docs explainer, one rejected applicant, the target
-result = exp.explain_coalitions(
-    x, target=target,
-    coalitions={"repayment": ["utilization", "dpd_12m"], "income": ["income"]},
-    include_full=True,          # adds the unrestricted "(all levers)" baseline
-)
-plot_alternatives(result, explainer=exp)   # coalition names label the plans
-```
-
-## When you need proof
-
-`explain` never claims optimality by default — for that, ask for the exact backend and a
-certified region around the answer:
-
-```python
-# exp, x, target: the docs explainer, one rejected applicant, the target
-res = exp.explain(x, target=target, backend="exact", region=True, seed=0)
-res.proof              # "optimal" | "optimal_within_gap" | "heuristic"
-res.region.describe()  # per-feature phrases; every point in the region is a valid plan
-```
-
-[Certification](concepts/certification.md) covers exactly what that proof does and does not
-guarantee.
-
-## Scale to a dataset
-
-```python
-# exp, X_bg, target: the docs explainer, its background rows, the target
-from treecf import BatchResult
-
-batch = exp.explain_batch(
-    X_bg[:20],                           # e.g. today's declined applications
-    target=target,
-    n_per_example=2,                     # counterfactuals per example
-    diversity="seeds",                   # or "lever-blocking" (also finds essential levers)
-    ids=[f"APP-{i:05d}" for i in range(20)],
-    seed=0,
-)
-batch.save("counterfactuals_today.json")     # compute once, store...
-stored = BatchResult.load("counterfactuals_today.json")
-stored.for_id("APP-00002")                   # ...look up any time
-```
-
-Solves run in parallel inside the Rust core. `treecf.viz_batch` plots the whole
-batch — lever usage, per-plan effort, cost/sparsity/feasibility — as shown in the
-[credit-risk walkthrough](notebooks/02-credit-risk-tutorial.ipynb).
+**A whole day's declines?** `exp.explain_batch(X_declined, target)` solves them in parallel.
+→ [Run the search](guide/explain.md#a-whole-dataset).
 
 ## Where next
 
-- [How it works](how-it-works.md) — the pipeline from objective to verified answer.
-- [Concepts](concepts/models.md) — one page per stage: models, targets, constraints,
-  missing values, plausibility, backends, certification.
-- [Tutorials](notebooks/01-quickstart.ipynb) — runnable notebooks.
+- [Deep dive: how it works](how-it-works.md) — the pipeline from objective to verified answer.
+- [Glossary](glossary.md) — plan, recourse, lever, cell, region, and the other words used here.
 - [API reference](api.md).

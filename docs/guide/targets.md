@@ -1,5 +1,10 @@
 # Set the target
 
+!!! info "Shared objects"
+    Snippets on this page continue from the objects the [quickstart](../getting-started.md) builds with
+    `credit_demo()`: `exp`, `x`, `target`, `X_bg`, the solved `res` and `batch`, and `cal`,
+    a fitted monotone calibrator (see the [FAQ](../faq.md#how-do-i-target-a-calibrated-probability)).
+
 A target is an interval on the model's output: the counterfactual is
 feasible when the model's raw score lands inside it. Everything else —
 probability cutoffs, rating ladders, calibrated policies — is a way of
@@ -28,7 +33,6 @@ rather than silently targeting the wrong scale.
 One call, one counterfactual (or certified infeasibility) per grade:
 
 ```python
-# exp, x: the docs explainer and one rejected applicant
 from treecf import Target
 
 ladder = exp.explain(x, target=Target.bands({
@@ -49,7 +53,6 @@ calibrator protocol (`is_monotone_`, `interval_inverse`; every
 [probcal](probcal.md) calibrator conforms):
 
 ```python
-# exp, x, cal: the docs explainer, one rejected applicant, a fitted calibrator
 import treecf
 
 res = exp.explain(x, target=treecf.Target.calibrated(cal, op="<=", value=0.02), seed=0)

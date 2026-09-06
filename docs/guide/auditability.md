@@ -1,5 +1,10 @@
 # Auditability
 
+!!! info "Shared objects"
+    Snippets on this page continue from the objects the [quickstart](../getting-started.md) builds with
+    `credit_demo()`: `exp`, `x`, `target`, `X_bg`, the solved `res` and `batch`, and `cal`,
+    a fitted monotone calibrator (see the [FAQ](../faq.md#how-do-i-target-a-calibrated-probability)).
+
 What a validator, an internal auditor, or a supervisor can check without
 trusting you, and the call that checks it. Nothing on this page is a new
 feature; it is the existing surface arranged around one question: *given
@@ -28,7 +33,6 @@ block below produces that pack and then verifies it the way a reviewer
 would — reload, fingerprint-match, re-verify:
 
 ```python
-# exp, x, target, res: the docs explainer, applicant, target, and solved plan
 import json
 
 cert = exp.certificate(x, res, target, seed=0)
@@ -77,8 +81,6 @@ page with every figure embedded and no external references, or as Markdown
 with the figures beside the file:
 
 ```python
-# exp, batch: the docs explainer and a batch solved from X_bg
-# X_bg: the docs background rows the batch was solved from
 from treecf.audit import portfolio_report
 
 groups = ["thin-file" if row[3] < 100 else "established" for row in X_bg[: len(batch)]]

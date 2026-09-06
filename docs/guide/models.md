@@ -1,5 +1,10 @@
 # Bring your model
 
+!!! info "Shared objects"
+    Snippets on this page continue from the objects the [quickstart](../getting-started.md) builds with
+    `credit_demo()`: `exp`, `x`, `target`, `X_bg`, the solved `res` and `batch`, and `cal`,
+    a fitted monotone calibrator (see the [FAQ](../faq.md#how-do-i-target-a-calibrated-probability)).
+
 The first step of every treecf workflow: hand `Explainer` a trained tree
 ensemble. treecf parses it into its own intermediate representation once, at
 construction, and never touches the native object again — so anything on this
@@ -22,8 +27,8 @@ environment that holds only the dump file and `treecf` (numpy-only) can
 explain the model. The docs' own explainer is built exactly that way, from a
 committed LightGBM dump:
 
+<!-- docs: no-run -->
 ```python
-# docs: no-run — model.json stands in for your own dump file
 from treecf import Explainer
 
 exp = Explainer(
@@ -34,7 +39,6 @@ exp = Explainer(
 ```
 
 ```python
-# exp: the docs explainer, itself built from a committed LightGBM dump
 sorted(exp.ir.categorical)   # feature indices with native categorical splits
 ```
 

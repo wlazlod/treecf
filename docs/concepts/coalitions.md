@@ -1,5 +1,10 @@
 # Coalitions
 
+!!! info "Shared objects"
+    Snippets on this page continue from the objects the [quickstart](../getting-started.md) builds with
+    `credit_demo()`: `exp`, `x`, `target`, `X_bg`, the solved `res` and `batch`, and `cal`,
+    a fitted monotone calibrator (see the [FAQ](../faq.md#how-do-i-target-a-calibrated-probability)).
+
 A single counterfactual can mix unrelated levers — asking one applicant to raise income,
 close credit lines, *and* wait for a delinquency to age out is technically one plan, but
 nobody acts on all three fronts at once. **Coalitions** split recourse by what the applicant
@@ -11,7 +16,6 @@ The mode is **opt-in and never the default** — plain `explain` behavior is unc
 ## One row
 
 ```python
-# exp, x, target: the docs explainer, one rejected applicant, the target
 result = exp.explain_coalitions(
     x,
     target=target,
@@ -34,7 +38,6 @@ that a mixed plan would have hidden inside one big change-set.
 ## A whole dataset
 
 ```python
-# exp, X_bg, target: the docs explainer, its background rows, the target
 coalition_batch = exp.explain_batch(
     X_bg[:10], target=target,
     diversity="coalitions",

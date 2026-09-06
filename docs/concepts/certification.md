@@ -1,11 +1,34 @@
 # Certification
 
+!!! info "Shared objects"
+    Snippets on this page continue from the objects the [quickstart](../getting-started.md) builds with
+    `credit_demo()`: `exp`, `x`, `target`, `X_bg`, the solved `res` and `batch`, and `cal`,
+    a fitted monotone calibrator (see the [FAQ](../faq.md#how-do-i-target-a-calibrated-probability)).
+
 Every backend float-verifies its own answer before returning it — that much is true of
 `"genetic"`, `"python"`, and `"exact"` alike (see [How it works — nothing ships
 unverified](../how-it-works.md#nothing-ships-unverified)). **Certification** is a stronger,
 separate claim that only `backend="exact"` and `Explainer.recourse_region` can make: not just
 "this row checks out" but "no cheaper row exists" or "every row in this box checks out". This
 page is about what that stronger claim covers, what it does not, and where it stops.
+
+!!! abstract "In one box"
+    **A certificate proves**, for this parsed model, these compiled constraints, this
+    plausibility bound and these value-policy domains: `proof="optimal"` — no cheaper
+    feasible row exists on the search grid; `Infeasible(proof="certified")` — no feasible row
+    exists at all; a region — every point of the box is in-target and constraint-feasible.
+
+    **It does not prove**: that the region is maximal (unless `region_mode="maximal"` proved
+    a side, and then only locally), that a narrower target gives a narrower region (regions
+    are not monotone in the target), that the plan is executable by a real person, or that
+    the IR matches the deployed model beyond what the conformance tests cover — plans are
+    verified against the parsed model, and the parsers are conformance-tested against the
+    native library.
+
+    **`check_certificate` re-verifies**: the model and constraint fingerprints against the
+    current explainer, the score and target membership of the plan, every constraint, the
+    plausibility bound, and the sampled region points — and reports mismatches rather than
+    raising.
 
 ## What a certificate covers
 
@@ -24,8 +47,9 @@ domains (if any) — at the moment the search ran. It is not a statement about t
 Within that scope the claim is exact: the search enumerates the same kind of candidate grid every
 backend shares — the model's cells, refined by the compiled constraints (see [How it works — the
 search space](../how-it-works.md#the-search-space-cells-not-real-numbers)) — and every row it
-returns is re-verified against the model in float space before you see it, the same as every
-other backend.
+returns is re-verified against the parsed model in float space before you see it, the same
+as every other backend; the parsers themselves are conformance-tested against the native
+library.
 
 ## Proof taxonomy
 
@@ -54,7 +78,6 @@ float-verified, and still the cheapest one the search happened to find — only 
 possible" claim is dropped. Read `proof`, not `x_cf`'s presence, to know which claim you got:
 
 ```python
-# exp, x, target: the docs explainer, one rejected applicant, the target
 from treecf import Counterfactual
 
 res = exp.explain(x, target=target, backend="exact", seed=0)
@@ -312,7 +335,6 @@ against *this* explainer, re-runs the verification block from the certificate's 
 factual/plan, and reports — it never raises on a mismatch:
 
 ```python
-# exp, x, target, res: the docs explainer, applicant, target, and solved plan
 import json
 
 cert = exp.certificate(x, res, target, seed=0, time_budget_s=10.0)

@@ -33,6 +33,8 @@ The public API is exactly the export lists below; anything prefixed with
 - `treecf.viz_batch.__all__` (extra `treecf[viz]`): `plot_batch_levers`,
   `plot_batch_matrix`, `plot_batch_summary`, `plot_batch_deltas`,
   `plot_recourse_burden`, `recourse_burden_table`.
+- `treecf.datasets.__all__`: `credit_demo`, `OCCUPATIONS` — the packaged
+  demo the documentation's examples start from.
 
 ## The artifact promise
 

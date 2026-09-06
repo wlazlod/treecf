@@ -1,5 +1,10 @@
 # Restricted environments
 
+!!! info "Shared objects"
+    Snippets on this page continue from the objects the [quickstart](../getting-started.md) builds with
+    `credit_demo()`: `exp`, `x`, `target`, `X_bg`, the solved `res` and `batch`, and `cal`,
+    a fitted monotone calibrator (see the [FAQ](../faq.md#how-do-i-target-a-calibrated-probability)).
+
 Model-validation and audit hosts often cannot install the training
 framework, a MILP solver, or anything beyond a frozen base image. treecf is
 built for that host: the core package depends on **numpy only**, parses
@@ -26,8 +31,8 @@ On the modelling side, ship the dump, not the framework
 `booster.dump_model()` for LightGBM, `save_model(format="json")` for
 CatBoost). On the audit host:
 
+<!-- docs: no-run -->
 ```python
-# docs: no-run — model.json / X_sample stand in for the shipped dump and data
 from treecf import Explainer, Target, constraint
 
 exp = Explainer("model.json", background=X_sample,
@@ -40,7 +45,6 @@ LightGBM dump, so every runnable block on this site is also a demonstration
 that no training library is needed:
 
 ```python
-# exp, x, target: the docs explainer, one rejected applicant, the target
 res = exp.explain(x, target=target, backend="exact", seed=0)
 res.proof   # a full optimality proof, no solver installed
 ```
