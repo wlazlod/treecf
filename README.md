@@ -10,7 +10,7 @@
 
 `treecf` answers the question: *"what is the minimal, feasible change to this instance such
 that the model's output lands in a target interval?"* — for XGBoost, LightGBM, CatBoost and
-scikit-learn tree ensembles — and can prove the answer is the cheapest, or that none exists.
+scikit-learn tree ensembles.
 
 ![Lever-set by feature matrix of a recourse menu: filled cells where a plan changes that lever, a square for a proved-optimal plan, a cross for a lever set certified unable to reach the target](https://raw.githubusercontent.com/wlazlod/treecf/main/docs/guide/img/plot_recourse_menu.png)
 
@@ -27,8 +27,9 @@ scikit-learn tree ensembles — and can prove the answer is the cheapest, or tha
   distance, plus a per-feature term only if you set `sparsity_weight`), and a completed
   search that finds nothing returns `Infeasible(proof="certified")`. Proofs scale with the
   number of levers the search may move, not with the model's width: on the measured matrix
-  the refine search certifies up to 200 trees with 12 free features inside 60 s and nothing
-  at 20 features and depth 5 — while on that 300-tree, 50-feature model a coalition of up to
+  the refine search certifies up to 200 trees with 12 free features inside 60 s and no
+  20-feature model beyond the smallest one (50 trees at depth 3) — while on the 300-tree,
+  50-feature model a coalition of up to
   three levers certifies in under half a second with `search="refine"`, so wide models get
   proofs once the levers are restricted with `Freeze`, coalitions, or a `recourse_menu`. A
   search that runs out of budget returns its best plan labelled `heuristic` and warns; it
@@ -67,8 +68,9 @@ generated on a scoring host that has neither it nor a solver.
 
 ## Quick look
 
-Runnable as-is: `credit_demo()` returns a packaged credit model, background rows, and one
-declined applicant.
+`credit_demo()` returns a packaged credit model, background rows, and one declined
+applicant. It ships with the next release (or a checkout of `main`); on the released package
+substitute your own model, as the quickstart notebook does.
 
 ```python
 from treecf import Explainer, Freeze, Monotone, Target

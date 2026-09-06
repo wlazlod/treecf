@@ -50,8 +50,8 @@ entirely it certifies infeasibility without expanding a single node
 
 ## Refine the search
 
-`search="refine"` (opt-in; the default `"classic"` is unchanged) runs the
-exact backend coarse-to-fine. Instead of trying one candidate value per
+`search="refine"` — the default; `search="classic"` selects the earlier
+engine — runs the exact backend coarse-to-fine. Instead of trying one candidate value per
 feature at a time, it first holds each numeric feature to a *range* of
 routing cells — at most eight per feature — and only splits a range where
 the score bound cannot decide the whole box. A box whose bracket lies inside

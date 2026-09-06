@@ -15,6 +15,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `treecf.datasets.credit_demo()`: the documentation's credit model, shipped inside the
+  package with a deterministic background sample and one declined applicant, so every
+  example in the documentation and the README runs as written on a fresh install.
+
+### Changed
+
+- **The exact backend's default search is the coarse-to-fine one** (`search="refine"`); the
+  earlier engine stays available as `search="classic"`. Both prove the same optimum and the
+  same infeasibility certificates, and the refine search certifies far more of the measured
+  matrix in the same budget — on a 300-tree, 50-feature model it settles a three-lever
+  coalition in under half a second where the classic search runs out of a 60 s budget. The
+  returned row may be a different argmin of the same cost.
+
+### Fixed
+
+- **The budget-exhaustion warning no longer costs seconds of its own.** Sizing the search
+  space for the warning's "≈ 10^N states" figure ran the presolve pass in Python — one
+  bracket walk through every tree per candidate state — after the budget had already ended,
+  which on a 300-tree, 50-feature model added 5 s to a 10 s budget. The figure is now the
+  un-presolved size, which costs a domain build.
+
 ## [0.3.1] - 2026-09-06
 
 The exact backend gains an opt-in coarse-to-fine search (`search="refine"`) that

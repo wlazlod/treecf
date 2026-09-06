@@ -12,8 +12,9 @@ parses without either.
 
 ## First counterfactual
 
-Runnable as-is: `credit_demo()` returns a packaged credit model, background rows, and one
-declined applicant.
+`credit_demo()` returns a packaged credit model, background rows, and one declined
+applicant; it ships with the next release (or a checkout of `main`), and on the released
+package you substitute your own model, as the quickstart notebook does.
 
 ```python
 from treecf import Explainer, Freeze, Monotone, Target

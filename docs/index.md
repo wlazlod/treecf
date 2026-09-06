@@ -4,7 +4,7 @@
 
 `treecf` answers: *"what is the minimal, feasible change to this instance such that the
 model's output lands in a target interval?"* — for XGBoost, LightGBM, CatBoost and
-scikit-learn tree ensembles — and can prove the answer is the cheapest, or that none exists.
+scikit-learn tree ensembles.
 
 ```python
 from treecf import Explainer, Target
@@ -43,8 +43,9 @@ measured tables and the honest reading are on the
 [benchmarks page](concepts/backends.md#against-other-cf-libraries).
 
 Use it if your model is a tree ensemble and you need plans that are feasible under real
-constraints, cheap, and provable. Look elsewhere if the model is not a tree ensemble, or
-if you want sets of plans diverse by distance rather than by the levers they use.
+constraints and cheap, with a proof when the levers are few. Look elsewhere if the model is
+not a tree ensemble, if you want sets of plans diverse by distance rather than by the levers
+they use, or if you need a proof over dozens of free levers without restricting them.
 
 Also in the box: missing values as first-class counterfactual values, plausibility as a
 hard constraint, batch production, coalitions, native categorical features, the probcal

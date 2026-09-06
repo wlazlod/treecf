@@ -221,7 +221,7 @@ def _calibrated_readout(target: Target, score_raw: float) -> float | None:
 _DEFAULT_WARM_START = True
 _DEFAULT_NODE_BUDGET = 2_000_000
 _DEFAULT_GAP = 0.0
-_DEFAULT_SEARCH = "classic"
+_DEFAULT_SEARCH = "refine"
 _DEFAULT_TIME_BUDGET_S = 10.0
 _SEARCH_MODES = ("classic", "refine")
 
@@ -574,12 +574,13 @@ class Explainer:
         additive rather than deducted from the budget. ``gap`` lets the exact
         search settle for a counterfactual within that relative fraction of
         the true optimum, reported through ``proof="optimal_within_gap"``.
-        ``search`` picks the exact engine: ``"classic"`` (the default)
-        assigns one candidate value per feature at a time; ``"refine"``
+        ``search`` picks the exact engine: ``"refine"`` (the default)
         first holds each numeric feature to a range of routing cells and
-        descends only where the score bound forces it, which proves the same
-        optimum and the same infeasibility certificates — often in far fewer
-        nodes on models with many thresholds per feature — though the row it
+        descends only where the score bound forces it; ``"classic"``
+        assigns one candidate value per feature at a time. Both prove the
+        same optimum and the same infeasibility certificates — the refine
+        search often in far fewer nodes on models with many thresholds per
+        feature, which is why it is the default — though the row the two
         returns may be a different argmin of the same cost.
 
         An exact search can return a feasible row with ``proof="heuristic"``
@@ -1196,11 +1197,13 @@ class Explainer:
         elapsed = time.monotonic() - start
 
         if res.stats["completed"] is False:
-            # the size of the space is computed only on this path: it costs a
-            # domain build, cheap next to an exhausted search
+            # the size of the space is computed only on this path, and without
+            # the presolve pass: sizing the presolved space means bracketing
+            # every candidate state through every tree in Python, which on a
+            # wide, deep model costs seconds after the budget already ended
             log10_states: float | None = None
             if cast(int, res.stats["nodes_expanded"]) >= node_budget or elapsed >= time_budget_s:
-                log10_states = cast(float, self._search_profile(x, interval)["log10_states"])
+                log10_states = cast(float, self._search_profile(x, None)["log10_states"])
             degradation = _degradation_for(
                 res, node_budget, time_budget_s, elapsed, seed, log10_states
             )
@@ -1453,7 +1456,7 @@ class Explainer:
         max_levers: int = 3,
         mode: str = "minimal",
         backend: str = "exact",
-        search: str = "classic",
+        search: str = "refine",
         seed: int | None = None,
         time_budget_s: float | None = None,
         total_budget_s: float | None = None,
@@ -1502,7 +1505,7 @@ class Explainer:
         backend
             ``"exact"`` (certifies) or ``"genetic"``.
         search
-            Exact search mode, ``"classic"`` or ``"refine"``.
+            Exact search mode, ``"refine"`` (the default) or ``"classic"``.
         seed
             Passed to every solve.
         time_budget_s

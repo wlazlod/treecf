@@ -112,10 +112,15 @@ cheaper, more actionable plan.
 
 treecf appears three times: the default genetic backend without constraints, so
 no method solves a harder problem; the exact backend in its refine search on
-the same problem, attempting a proof within a 10 s wall budget; and the genetic
+the same problem, attempting a proof within a 10 s wall budget, with the proof
+mix of its hundred (or fifty) results in the last column; and the genetic
 backend with the scenario's constraints, which no competitor can express. The
-version measured is the one published on PyPI on the run date (2026-09-06).
-DiCE's kdtree mode is skipped where its per-instance time runs to minutes.
+competitor rows and the throughput loops were measured on 2026-09-06 against
+the package published on PyPI that day; the treecf rows were re-timed on the
+same machine against the code in this repository, which no longer spends
+seconds sizing the search space for the budget warning after the budget has
+ended. DiCE's kdtree mode is skipped where its per-instance time runs to
+minutes.
 
 Three scenarios: two synthetic populations, and one public table — OpenML's
 default-of-credit-card-clients (30,000 rows, 23 features) — whose constrained
@@ -124,15 +129,15 @@ value policy.
 
 **medium (120 trees, depth 4, 8 features)** — 100 declined rows:
 
-| Method | Valid | Median / instance | p95 | Features changed | Distance (L1/σ) |
-|---|---|---|---|---|---|
-| treecf (genetic) | 100/100 | 0.021 s | 0.041 s | 1.6 | 1.0 |
-| treecf (exact, refine) | 100/100 | 0.034 s | 0.264 s | 3.0 | 0.4 |
-| treecf (genetic, constrained) | 100/100 | 0.018 s | 0.038 s | 1.7 | 1.2 |
-| DiCE (random) | 100/100 | 0.125 s | 0.189 s | 1.7 | 15.5 |
-| DiCE (genetic) | 100/100 | 0.105 s | 0.120 s | 5.1 | 7.5 |
-| DiCE (kdtree) | 100/100 | 0.207 s | 0.784 s | 5.3 | 8.4 |
-| NICE (sparsity) | 100/100 | 0.005 s | 0.010 s | 2.0 | 2.7 |
+| Method | Valid | Median / instance | p95 | Features changed | Distance (L1/σ) | Proof mix |
+|---|---|---|---|---|---|---|
+| treecf (genetic) | 100/100 | 0.017 s | 0.042 s | 1.6 | 1.0 | — |
+| treecf (exact, refine) | 100/100 | 0.032 s | 0.234 s | 3.0 | 0.4 | optimal 100 |
+| treecf (genetic, constrained) | 100/100 | 0.018 s | 0.035 s | 1.7 | 1.2 | — |
+| DiCE (random) | 100/100 | 0.125 s | 0.189 s | 1.7 | 15.5 | — |
+| DiCE (genetic) | 100/100 | 0.105 s | 0.120 s | 5.1 | 7.5 | — |
+| DiCE (kdtree) | 100/100 | 0.207 s | 0.784 s | 5.3 | 8.4 | — |
+| NICE (sparsity) | 100/100 | 0.005 s | 0.010 s | 2.0 | 2.7 | — |
 
 Batch throughput over 500 rows:
 
@@ -145,14 +150,14 @@ Batch throughput over 500 rows:
 
 **large (300 trees, depth 6, 50 features)** — 50 declined rows:
 
-| Method | Valid | Median / instance | p95 | Features changed | Distance (L1/σ) |
-|---|---|---|---|---|---|
-| treecf (genetic) | 50/50 | 0.072 s | 0.100 s | 1.4 | 3.0 |
-| treecf (exact, refine) | 50/50 | 14.822 s | 14.953 s | 1.4 | 3.0 |
-| treecf (genetic, constrained) | 50/50 | 0.069 s | 0.131 s | 2.3 | 5.3 |
-| DiCE (random) | 50/50 | 1.538 s | 1.601 s | 1.8 | 7.7 |
-| DiCE (genetic) | 50/50 | 0.712 s | 0.757 s | 50.0 | 62.4 |
-| NICE (sparsity) | 50/50 | 0.014 s | 0.019 s | 2.2 | 5.2 |
+| Method | Valid | Median / instance | p95 | Features changed | Distance (L1/σ) | Proof mix |
+|---|---|---|---|---|---|---|
+| treecf (genetic) | 50/50 | 0.073 s | 0.116 s | 1.4 | 3.0 | — |
+| treecf (exact, refine) | 50/50 | 10.130 s | 10.205 s | 1.4 | 3.0 | heuristic 50 |
+| treecf (genetic, constrained) | 50/50 | 0.072 s | 0.139 s | 2.3 | 5.3 | — |
+| DiCE (random) | 50/50 | 1.538 s | 1.601 s | 1.8 | 7.7 | — |
+| DiCE (genetic) | 50/50 | 0.712 s | 0.757 s | 50.0 | 62.4 | — |
+| NICE (sparsity) | 50/50 | 0.014 s | 0.019 s | 2.2 | 5.2 | — |
 
 Batch throughput over 200 rows:
 
@@ -165,14 +170,14 @@ Batch throughput over 200 rows:
 
 **public (credit-card default, 200 trees, depth 5, 23 features)** — 100 declined rows:
 
-| Method | Valid | Median / instance | p95 | Features changed | Distance (L1/σ) |
-|---|---|---|---|---|---|
-| treecf (genetic) | 100/100 | 0.035 s | 0.059 s | 0.9 | 0.2 |
-| treecf (exact, refine) | 100/100 | 0.117 s | 3.451 s | 1.3 | 0.0 |
-| treecf (genetic, constrained) | 100/100 | 0.054 s | 0.101 s | 1.2 | 0.8 |
-| DiCE (random) | 100/100 | 0.574 s | 0.825 s | 1.6 | 156.0 |
-| DiCE (genetic) | 99/100 | 0.580 s | 0.810 s | 14.2 | 20.0 |
-| NICE (sparsity) | 100/100 | 0.030 s | 0.071 s | 1.6 | 4.6 |
+| Method | Valid | Median / instance | p95 | Features changed | Distance (L1/σ) | Proof mix |
+|---|---|---|---|---|---|---|
+| treecf (genetic) | 100/100 | 0.029 s | 0.038 s | 0.9 | 0.2 | — |
+| treecf (exact, refine) | 100/100 | 0.090 s | 2.962 s | 1.3 | 0.0 | heuristic 4, optimal 96 |
+| treecf (genetic, constrained) | 100/100 | 0.036 s | 0.072 s | 1.2 | 0.8 | — |
+| DiCE (random) | 100/100 | 0.574 s | 0.825 s | 1.6 | 156.0 | — |
+| DiCE (genetic) | 99/100 | 0.580 s | 0.810 s | 14.2 | 20.0 | — |
+| NICE (sparsity) | 100/100 | 0.030 s | 0.071 s | 1.6 | 4.6 | — |
 
 Batch throughput over 500 rows:
 
@@ -187,7 +192,7 @@ Honest reading, per row.
 
 *The genetic backend* is the cheapest heuristic on every scenario: 1.0 σ on the medium
 model against 2.7 for NICE and 7.5–15.5 for DiCE, 3.0 against 5.2 and 7.7–62 on the large
-one, in 20–70 ms per instance with every plan valid. NICE is the faster engine per instance
+one, in 17–74 ms per instance with every plan valid. NICE is the faster engine per instance
 on all three scenarios (5–30 ms, a lean nearest-neighbour greedy that copies values from
 real training rows), and on the large model its loop beats treecf's batch mode too, because
 treecf's within-solve parallelism already saturates four cores on 50-feature populations;
@@ -197,23 +202,26 @@ probability-interval target, and no float verification. DiCE's genetic mode chan
 feature of the large model and fourteen of the public table's; its random mode is sparse but
 lands far from the factual.
 
-*The exact refine row* is where the envelope shows. On the medium model it proves plans of
-0.4 σ in 34 ms — but those plans change 3.0 features where the heuristic's change 1.6, because
-the objective is distance and nothing else ([what optimal means](certification.md#what-optimal-means-and-what-it-does-not)).
-On the large model it does not certify at all: every solve ran to its budget (15 s median
-against a 10 s wall budget, which is checked between node expansions) and returned the plan
-its genetic warm start had already found, labelled `heuristic`. On the public table it proves
-plans in 117 ms median with a 3.5 s tail. This is the [proof envelope](certification.md#the-proof-envelope-measured)
-in one table: proofs come cheaply at eight features and not at all at fifty with every
-feature free.
+*The exact refine row* is where the envelope shows, and the proof column says how much of
+each row is proof. On the medium model it proves all 100 rows optimal in 32 ms median — but
+those plans change 3.0 features where the heuristic's change 1.6, because the objective is
+distance and nothing else ([what optimal means](certification.md#what-optimal-means-and-what-it-does-not)).
+On the large model it proves nothing: all 50 solves run to the 10 s wall budget (10.1 s
+median, the budget honoured to a tenth of a second) and return the plan the genetic warm
+start had already found, labelled `heuristic`. On the public table it reports 96 proofs in
+90 ms median with a 3 s tail, and those proofs are cheap for the same reason the
+unconstrained plans are: with a distance objective, the optimum is a one-ulp move across a
+split XGBoost placed on an observed integer value (0.03 σ), so the proof certifies something
+nobody would act on. This is the [proof envelope](certification.md#the-proof-envelope-measured)
+in one column: proofs come cheaply at eight features, trivially on a table of integer codes,
+and not at all at fifty features with every feature free.
 
 *The constrained row* is the one to read for the public table. Unconstrained, treecf's plans
-there move an integer-coded column by one float32 ulp — XGBoost places its splits exactly on
-observed integer values, so a hair below `2.0` crosses a split and satisfies the model at
-almost no distance; valid, and useless to a person. With the demographic columns frozen and
-an integer value policy on every column, the constrained row changes 1.2 features by whole
-units at 0.8 σ, in 54 ms, all valid — still a fifth of NICE's cost. On the synthetic
-scenarios the constraints cost little time and some distance, as constraints should.
+there move an integer-coded column by one float32 ulp — valid for the model, and useless to a
+person. With the demographic columns frozen and an integer value policy on every column, the
+constrained row changes 1.2 features by whole units at 0.8 σ, in 36 ms, all valid — still a
+fifth of NICE's cost. On the synthetic scenarios the constraints cost little time and some
+distance, as constraints should.
 
 alibi's `CounterfactualProto`, measured separately in an earlier run (it needs
 TensorFlow and is therefore not in the script), ran in black-box mode with
@@ -226,7 +234,8 @@ Caveats: one machine (4 cores, otherwise idle), default competitor settings,
 pure-Python libraries against a compiled core, and a 10 s per-solve budget for
 the exact row. Reproduce with `uv run scripts/bench_vs_competitors.py` — its
 inline metadata pulls dice-ml and NICEx automatically and downloads the public
-table through scikit-learn.
+table through scikit-learn; `--treecf-only` re-times the treecf rows alone
+against a checkout.
 
 ## History
 

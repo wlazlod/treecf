@@ -269,11 +269,12 @@ feature count. The [benchmarks page](../benchmarks/comparison.md) measures where
 certification on one 4-core machine with a 60 s budget per solve, and the honest summary is
 narrow: the classic search certifies models of up to 100 trees at depth 3 with 12 features, and
 8 features at depth 5; the refine search adds every 12-feature model at depth 5 up to 200 trees
-and one 20-feature model at depth 3; no engine certifies any 20-feature model at depth 5, nor
-the 300-tree, depth-6, 50-feature model. A search that does not finish spends its budget and
+and one 20-feature model at depth 3; no engine certifies a 20-feature model beyond that
+smallest one (50 trees at depth 3), nor the 300-tree, depth-6, 50-feature model. A search that does not finish spends its budget and
 returns the plan its warm start found, labelled `proof="heuristic"` with a warning — on the
-wide models in the competitor comparison that is what both exact modes did, after 12 to 20
-seconds each. Real credit-risk models with dozens of free features sit outside this envelope
+300-tree, 50-feature model in the competitor comparison that is what both exact modes did.
+The wall time of one call is the warm start (at most a quarter of the budget, capped at
+2 s) plus the budget itself; nothing else is charged outside it. Real credit-risk models with dozens of free features sit outside this envelope
 as long as every feature may move.
 
 What moves a model inside the envelope is the number of levers, not the number of trees:

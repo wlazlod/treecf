@@ -145,9 +145,9 @@ def render(exact: dict, competitors: list[dict] | None) -> str:
         "(σ-normalized distance, `sparsity_weight=0`). It is not a quality gap: the",
         "heuristic's plans change fewer features, which that objective does not",
         "reward — see [what optimal means](../concepts/certification.md#what-optimal-means-and-what-it-does-not).",
-        "Per-solve budgets: 5 s wall, 2,000,000 nodes. *classic* is the",
-        "default exact engine (`search=\"classic\"`); *refine* is the opt-in",
-        "coarse-to-fine engine (`search=\"refine\"`), timed on the same solves.",
+        "Per-solve budgets: 5 s wall, 2,000,000 nodes. *refine* is the",
+        "default exact engine (`search=\"refine\"`); *classic* is the earlier",
+        "one (`search=\"classic\"`), timed on the same solves.",
         "",
         _scenario_rows(results),
     ]

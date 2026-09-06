@@ -112,7 +112,7 @@ class TestStrictJsonRoundTrip:
         assert isinstance(trace, list) and trace
         assert all(isinstance(sample, list) and len(sample) == 3 for sample in trace)
         assert trace[-1][0] == restored["solve"]["solver_stats"]["nodes_expanded"]
-        assert restored["solve"]["solver_stats"]["search"] == "classic"
+        assert restored["solve"]["solver_stats"]["search"] == "refine"
 
     def test_fast_region_certificate_carries_no_maximality_keys(self, exp: Explainer) -> None:
         x = np.zeros(3)

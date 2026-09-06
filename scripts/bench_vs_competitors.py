@@ -159,7 +159,11 @@ SCENARIOS = [
 def evaluate_per_instance(
     name: str, clf: object, sigma: np.ndarray, rows: np.ndarray,
     runner: Callable[[np.ndarray], np.ndarray | None],
+    proofs: dict[str, int] | None = None,
 ) -> dict[str, object]:
+    """``proofs``, when given, is filled by a treecf runner that records the
+    proof of every result (see ``run_treecf_exact``); the row then carries a
+    ``proof_mix`` column so a reader can see how many rows were proved."""
     times: list[float] = []
     n_changed: list[int] = []
     l1: list[float] = []
@@ -179,7 +183,7 @@ def evaluate_per_instance(
             changed = ~np.isclose(cf, x, rtol=0, atol=1e-12)
             n_changed.append(int(changed.sum()))
             l1.append(float((np.abs(cf - x) / sigma).sum()))
-    return {
+    row = {
         "method": name,
         "valid": f"{valid}/{len(rows)}",
         "median_s": round(float(np.median(times)), 4),
@@ -187,17 +191,19 @@ def evaluate_per_instance(
         "mean_changed": round(float(np.mean(n_changed)), 2) if n_changed else None,
         "mean_L1_sigma": round(float(np.mean(l1)), 2) if l1 else None,
     }
+    if proofs is not None:
+        row["proof_mix"] = dict(sorted(proofs.items()))
+    return row
 
 
 Rows = list[dict[str, object]]
 
 
 def run_scenario(
-    spec: dict[str, object], checkpoint: Callable[[Rows, Rows], None]
+    spec: dict[str, object], checkpoint: Callable[[Rows, Rows], None],
+    treecf_only: bool = False,
 ) -> dict[str, object]:
-    import dice_ml
     import xgboost as xgb
-    from nice import NICE
 
     from treecf import Counterfactual, Explainer, Target
     from treecf.objective import fit_normalizers
@@ -229,15 +235,38 @@ def run_scenario(
         res = exp.explain(x, target, seed=0)
         return res.x_cf if isinstance(res, Counterfactual) else None
 
+    exact_proofs: dict[str, int] = {}
+
     def run_treecf_exact(x: np.ndarray) -> np.ndarray | None:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             res = exp.explain(x, target, backend="exact", search="refine", seed=0)
+        exact_proofs[res.proof] = exact_proofs.get(res.proof, 0) + 1
         return res.x_cf if isinstance(res, Counterfactual) else None
 
     def run_treecf_constrained(x: np.ndarray) -> np.ndarray | None:
         res = exp_constrained.explain(x, target, seed=0)
         return res.x_cf if isinstance(res, Counterfactual) else None
+
+    if treecf_only:
+        # the treecf rows alone, against the code at this checkout; no competitor
+        # library is imported or timed
+        per_instance = []
+        for method_name, runner in (
+            ("treecf (genetic)", run_treecf),
+            ("treecf (exact, refine)", run_treecf_exact),
+            ("treecf (genetic, constrained)", run_treecf_constrained),
+        ):
+            proofs = exact_proofs if method_name == "treecf (exact, refine)" else None
+            row = evaluate_per_instance(method_name, clf, sigma, rows, runner, proofs)
+            print(row, flush=True)
+            per_instance.append(row)
+            checkpoint(per_instance, [])
+        return {"scenario": spec["name"], "n_instances": len(rows), "n_batch": 0,
+                "per_instance": per_instance, "batch_throughput": []}
+
+    import dice_ml
+    from nice import NICE
 
     frame = pd.DataFrame(X, columns=names)
     frame["outcome"] = y
@@ -279,7 +308,8 @@ def run_scenario(
         runners.insert(5, ("DiCE (kdtree)", dice_runner("kdtree")))
     per_instance = []
     for method_name, runner in runners:
-        row = evaluate_per_instance(method_name, clf, sigma, rows, runner)
+        proofs = exact_proofs if method_name == "treecf (exact, refine)" else None
+        row = evaluate_per_instance(method_name, clf, sigma, rows, runner, proofs)
         print(row, flush=True)
         per_instance.append(row)
         checkpoint(per_instance, [])  # a killed run keeps every finished method
@@ -324,6 +354,8 @@ def main() -> None:
     parser.add_argument("--json", default=None, help="write results to this path")
     parser.add_argument("--only", default=None, choices=("medium", "large", "public"),
                         help="run a single scenario")
+    parser.add_argument("--treecf-only", action="store_true",
+                        help="time only the treecf rows (no competitors, no throughput)")
     args = parser.parse_args()
 
     results: list[dict[str, object]] = []
@@ -347,7 +379,7 @@ def main() -> None:
             partial["batch_throughput"] = throughput
             dump()  # a killed run keeps everything finished so far
 
-        results[-1] = run_scenario(spec, checkpoint)
+        results[-1] = run_scenario(spec, checkpoint, treecf_only=args.treecf_only)
         dump()
 
     if args.json:
