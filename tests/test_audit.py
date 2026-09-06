@@ -170,6 +170,7 @@ class TestStrictJsonRoundTrip:
         assert declared == {
             "seed": 7, "node_budget": 2_000_000, "gap": 0.0,
             "time_budget_s": 5.0, "warm_start": True,
+            "search": "refine",  # from the result's own solver statistics
         }
 
 
@@ -395,3 +396,29 @@ class TestSchemaVersions:
         report = exp.check_certificate(cert)
         assert report["verification_ok"] is False
         assert any("schema_version" in m for m in report["mismatches"])
+
+
+class TestCertificateRecordsTheEngine:
+    """An exact result's certificate names the engine that ran, whether or not
+    the caller passed ``search=``; a genetic result carries no such key."""
+
+    def test_exact_solve_records_its_engine_without_being_told(self, exp: Explainer) -> None:
+        x = np.zeros(3)
+        result = exp.explain(x, TARGET, backend="exact", seed=0)
+        cert = exp.certificate(x, result, TARGET)
+        assert cert["solve"]["declared"]["search"] == "refine"
+        classic = exp.explain(x, TARGET, backend="exact", seed=0, search="classic")
+        cert = exp.certificate(x, classic, TARGET)
+        assert cert["solve"]["declared"]["search"] == "classic"
+
+    def test_an_explicit_search_argument_is_recorded_as_given(self, exp: Explainer) -> None:
+        x = np.zeros(3)
+        result = exp.explain(x, TARGET, backend="exact", seed=0, search="classic")
+        cert = exp.certificate(x, result, TARGET, search="classic")
+        assert cert["solve"]["declared"]["search"] == "classic"
+
+    def test_a_genetic_result_carries_no_engine_key(self, exp: Explainer) -> None:
+        x = np.zeros(3)
+        result = exp.explain(x, TARGET, seed=0)
+        cert = exp.certificate(x, result, TARGET)
+        assert "search" not in cert["solve"].get("declared", {})

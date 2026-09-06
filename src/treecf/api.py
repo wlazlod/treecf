@@ -1736,7 +1736,11 @@ class Explainer:
         ``seed``/``node_budget``/``gap``/``time_budget_s``/``warm_start``/
         ``search`` are recorded under ``solve.declared`` when given: the
         result object does not carry them, so they are caller-supplied, and
-        the block's name makes that provenance explicit.
+        the block's name makes that provenance explicit. ``search`` is the one
+        exception: an exact result reports the engine that ran in its own
+        ``solver_stats``, so it is recorded there even when not given, and a
+        certificate never depends on the default of the release that issued
+        it.
 
         Parameters
         ----------
@@ -1761,7 +1765,7 @@ class Explainer:
             The warm-start setting the solve ran with, likewise.
         search
             The exact search mode (``"classic"`` or ``"refine"``) the solve
-            ran with, likewise.
+            ran with; taken from the result's ``solver_stats`` when omitted.
 
         Returns
         -------

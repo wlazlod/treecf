@@ -60,9 +60,10 @@ means, bumps `schema_version`.
 New public symbols in this release, as one running list:
 
 - `explain(..., search="refine")` / `explain_batch` / `explain_coalitions`:
-  the coarse-to-fine exact search; `"classic"` stays the default and is
-  unchanged. `Explainer.certificate(..., search=)` records the choice under
-  `declared`.
+  the coarse-to-fine exact search; `"classic"` was the default in this
+  release and is unchanged (the coarse-to-fine search became the default in
+  the next one — see the changelog). `Explainer.certificate(..., search=)`
+  records the choice under `declared`.
 - `explain(..., region_mode="maximal", region_budget=)` and
   `Explainer.recourse_region(mode=, budget=, keep_witnesses=)`: budgeted
   proof that a region side cannot grow, with witness points on request.
