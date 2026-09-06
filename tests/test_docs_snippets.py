@@ -31,24 +31,6 @@ _NO_RUN_MARKER = "# docs: no-run"
 _CODE_BLOCK_RE = re.compile(r"```python\n(.*?)```", re.S)
 _REQUIRES_RE = re.compile(r"<!--\s*docs:\s*requires\s+([^>]*?)\s*-->")
 
-_MODEL_PATH = pathlib.Path(__file__).parent / "fixtures" / "docs_model.json"
-OCCUPATIONS = ("student", "clerk", "manager", "retired")
-
-
-def docs_background(n: int = 400, seed: int = 7) -> np.ndarray:
-    """The fixed docs data recipe (documented in docs/README.md)."""
-    rng = np.random.default_rng(seed)
-    return np.column_stack(
-        [
-            rng.normal(loc=4200.0, scale=1600.0, size=n),  # income
-            np.clip(rng.beta(2.0, 3.5, size=n), 0.0, 1.0),  # utilization
-            np.floor(rng.exponential(scale=6.0, size=n)),  # dpd_12m
-            np.floor(rng.uniform(3, 240, size=n)),  # tenure_months
-            rng.integers(0, 4, size=n).astype(np.float64),  # occupation codes
-        ]
-    )
-
-
 class StubCalibrator:
     """A calibrator satisfying the duck protocol without any probcal import:
     a fixed logit shift, monotone by construction."""
@@ -78,13 +60,13 @@ class StubCalibrator:
 
 
 def _make_vocabulary() -> dict:
-    """The fixed vocabulary documented in docs/README.md."""
-    X_bg = docs_background()
-    exp = Explainer(
-        str(_MODEL_PATH), background=X_bg, categories={"occupation": OCCUPATIONS}
-    )
+    """The fixed vocabulary documented in docs/README.md: exactly what the
+    quickstart builds from ``credit_demo()``."""
+    from treecf.datasets import OCCUPATIONS, credit_demo
+
+    model, X_bg, x = credit_demo()
+    exp = Explainer(model, background=X_bg)
     target = Target.probability(range=(0.0, 0.05))
-    x = X_bg[1]
     res = exp.explain(x, target=target, seed=0)
     batch = exp.explain_batch(X_bg[:20], target=target)
     return {
