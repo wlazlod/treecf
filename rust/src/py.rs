@@ -6,12 +6,14 @@ use numpy::{
 };
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 
 use crate::constraints::{Constraints, LinearC};
-use crate::exact::{ExactParams, ValuePolicy};
+use crate::exact::{ExactParams, SearchMode, ValuePolicy};
 use crate::ga::GaParams;
 use crate::interrupt::SearchOutcome;
 use crate::ir::{Ensemble, Link};
+use crate::regions::RegionMode;
 
 /// Per-feature value-policy flat encoding: `0=raw` (`None`), `1=integer`,
 /// `2=grid` (reads `step`/`anchor`) — the marshaled form of
@@ -511,12 +513,14 @@ fn solve_genetic_batch_raw<'py>(
 }
 
 /// Full exact-backend solve — port of `treecf.backends.exact.solve_exact`.
-/// Returns `(x_cf | None, distance | None, proof, stats, snapped)`: `stats` is
-/// the 9-tuple `(nodes_expanded, nodes_pruned_score, nodes_pruned_cost,
-/// lower_bound, gap, completed, warm_start_used, presolve_removed,
-/// presolve_certified)`; `snapped` is the winning
-/// row's snapped feature indices, in search order — `exact_rust.py` maps them
-/// back to names to rebuild `ExactResult` losslessly. A `PyValueError`
+/// Returns `(x_cf | None, distance | None, proof, stats, snapped, trace)`:
+/// `stats` is the 12-tuple `(nodes_expanded, nodes_pruned_score,
+/// nodes_pruned_cost, lower_bound, gap, completed, warm_start_used,
+/// presolve_removed, presolve_certified, search, coarse_accepts,
+/// refinements)`; `snapped` is the winning row's snapped feature indices, in
+/// search order — `exact_rust.py` maps them back to names to rebuild
+/// `ExactResult` losslessly; `trace` is three parallel arrays (node counts,
+/// incumbent costs with NaN standing for "no row yet", lower bounds). A `PyValueError`
 /// mirrors Python's `ConstraintValidationError` for a multi-feature Linear
 /// outside the canonical order-pair shape (from `solve_exact`'s own
 /// `validate`); `exact_rust.py` re-raises that type rather than comparing
@@ -534,7 +538,7 @@ fn solve_genetic_batch_raw<'py>(
                     policy_code, policy_step, policy_anchor,
                     if_ensemble=None, min_total_path=None,
                     node_budget=2_000_000, gap=0.0, time_budget_s=10.0,
-                    incumbent_cost=None, incumbent_row=None))]
+                    incumbent_cost=None, incumbent_row=None, search="classic"))]
 fn solve_exact_raw<'py>(
     py: Python<'py>,
     ensemble: &RustEnsemble,
@@ -555,13 +559,43 @@ fn solve_exact_raw<'py>(
     time_budget_s: f64,
     incumbent_cost: Option<f64>,
     incumbent_row: Option<PyReadonlyArray1<f64>>,
+    search: &str,
 ) -> PyResult<(
     Option<Bound<'py, PyArray1<f64>>>,
     Option<f64>,
     &'static str,
-    (u64, u64, u64, f64, f64, bool, bool, u64, bool),
+    (
+        u64,
+        u64,
+        u64,
+        f64,
+        f64,
+        bool,
+        bool,
+        u64,
+        bool,
+        &'static str,
+        u64,
+        u64,
+    ),
     Bound<'py, PyArray1<u64>>,
+    (
+        Bound<'py, PyArray1<u64>>,
+        Bound<'py, PyArray1<f64>>,
+        Bound<'py, PyArray1<f64>>,
+    ),
 )> {
+    let search_mode = match search {
+        "classic" => SearchMode::Classic,
+        "refine" => SearchMode::Refine,
+        // an unrecognized mode is a marshaling bug: the Python side validates
+        // the public argument before it ever reaches this boundary
+        other => {
+            return Err(PyRuntimeError::new_err(format!(
+                "unknown search mode {other:?}"
+            )))
+        }
+    };
     let x_own = x.as_slice()?.to_vec();
     let sigma_own = sigma.as_slice()?.to_vec();
     let weights_own = weights.as_slice()?.to_vec();
@@ -598,6 +632,7 @@ fn solve_exact_raw<'py>(
         node_budget,
         gap,
         time_budget_s,
+        search: search_mode,
     };
     let mut pending: Option<PyErr> = None;
     let outcome = py
@@ -650,14 +685,29 @@ fn solve_exact_raw<'py>(
         stats.warm_start_used,
         stats.presolve_removed,
         stats.presolve_certified,
+        stats.search.name(),
+        stats.coarse_accepts,
+        stats.refinements,
     );
     let snapped: Vec<u64> = result.snapped.iter().map(|&i| i as u64).collect();
+    let trace_nodes: Vec<u64> = result.trace.iter().map(|s| s.nodes).collect();
+    let trace_incumbent: Vec<f64> = result
+        .trace
+        .iter()
+        .map(|s| s.incumbent.unwrap_or(f64::NAN))
+        .collect();
+    let trace_bound: Vec<f64> = result.trace.iter().map(|s| s.bound).collect();
     Ok((
         result.x_cf.map(|v| v.into_pyarray(py)),
         result.distance,
         result.proof,
         stats_tuple,
         snapped.into_pyarray(py),
+        (
+            trace_nodes.into_pyarray(py),
+            trace_incumbent.into_pyarray(py),
+            trace_bound.into_pyarray(py),
+        ),
     ))
 }
 
@@ -756,10 +806,15 @@ fn debug_domains_raw<'py>(
 }
 
 /// Certified recourse-region growth — port of `treecf.regions._recourse_region`.
-/// Returns `(lo, hi)` per-feature arrays (degenerate coordinates equal
-/// `x_cf` there); `regions_rust.py` builds the `RecourseRegion` dataclass
-/// from them (`feature_intervals`/`certified` are presentation, not search
-/// state, so they stay on the Python side).
+/// Returns a dict of arrays: `lo`/`hi` per feature (degenerate coordinates
+/// equal `x_cf` there), the grown category sets as a CSR pair, and the
+/// maximal mode's findings (`maximal_lo`/`maximal_hi` per feature,
+/// `maximal_cat` per open categorical feature, the `used_*` node counts,
+/// and the witnesses as parallel `witness_features`/`witness_sides`/
+/// `witness_points` arrays); `regions_rust.py` builds the `RecourseRegion`
+/// dataclass from them (`feature_intervals`/`certified` are presentation,
+/// not search state, so they stay on the Python side). `maximal`/`budget`
+/// select the growth mode.
 ///
 /// `missing_defined`/`if_missing_defined` carry the `node.missing_left is
 /// not None` bit that `RustEnsemble`'s own flat `missing_left: bool`
@@ -777,7 +832,7 @@ fn debug_domains_raw<'py>(
                     lo_b, hi_b, open_set,
                     if_ensemble=None, if_missing_defined=None, min_total_path=None,
                     cat_open=None, cat_feat_offsets=None, cat_block_offsets=None,
-                    cat_members=None))]
+                    cat_members=None, maximal=false, budget=100_000))]
 fn compute_region_raw<'py>(
     py: Python<'py>,
     ensemble: &RustEnsemble,
@@ -796,12 +851,14 @@ fn compute_region_raw<'py>(
     cat_feat_offsets: Option<PyReadonlyArray1<u32>>,
     cat_block_offsets: Option<PyReadonlyArray1<u32>>,
     cat_members: Option<PyReadonlyArray1<u32>>,
-) -> PyResult<(
-    Bound<'py, PyArray1<f64>>,
-    Bound<'py, PyArray1<f64>>,
-    Bound<'py, PyArray1<u32>>,
-    Bound<'py, PyArray1<u32>>,
-)> {
+    maximal: bool,
+    budget: u64,
+) -> PyResult<Bound<'py, PyDict>> {
+    let mode = if maximal {
+        RegionMode::Maximal { budget }
+    } else {
+        RegionMode::Fast
+    };
     let x_cf_own = x_cf.as_slice()?.to_vec();
     let lo_b_own = lo_b.as_slice()?.to_vec();
     let hi_b_own = hi_b.as_slice()?.to_vec();
@@ -869,6 +926,7 @@ fn compute_region_raw<'py>(
             min_total_path.unwrap_or(0.0),
             &cat_open_own,
             &cat_blocks_own,
+            mode,
             &mut probe,
         )
     });
@@ -892,12 +950,31 @@ fn compute_region_raw<'py>(
         grown_members.extend_from_slice(members);
         grown_offsets.push(grown_members.len() as u32);
     }
-    Ok((
-        result.lo.into_pyarray(py),
-        result.hi.into_pyarray(py),
-        grown_offsets.into_pyarray(py),
-        grown_members.into_pyarray(py),
-    ))
+    let flags = |v: &[bool]| -> Vec<u8> { v.iter().map(|&b| u8::from(b)).collect() };
+    let n_w = result.witnesses.len();
+    let mut witness_features: Vec<u32> = Vec::with_capacity(n_w);
+    let mut witness_sides: Vec<u8> = Vec::with_capacity(n_w);
+    let mut witness_points: Vec<f64> = Vec::with_capacity(n_w * x_cf_own.len());
+    for (j, side, point) in &result.witnesses {
+        witness_features.push(*j);
+        witness_sides.push(*side);
+        witness_points.extend_from_slice(point);
+    }
+    let out = PyDict::new(py);
+    out.set_item("lo", result.lo.into_pyarray(py))?;
+    out.set_item("hi", result.hi.into_pyarray(py))?;
+    out.set_item("grown_offsets", grown_offsets.into_pyarray(py))?;
+    out.set_item("grown_members", grown_members.into_pyarray(py))?;
+    out.set_item("maximal_lo", flags(&result.maximal_lo).into_pyarray(py))?;
+    out.set_item("maximal_hi", flags(&result.maximal_hi).into_pyarray(py))?;
+    out.set_item("maximal_cat", flags(&result.maximal_cat).into_pyarray(py))?;
+    out.set_item("used_lo", result.used_lo.into_pyarray(py))?;
+    out.set_item("used_hi", result.used_hi.into_pyarray(py))?;
+    out.set_item("used_cat", result.used_cat.into_pyarray(py))?;
+    out.set_item("witness_features", witness_features.into_pyarray(py))?;
+    out.set_item("witness_sides", witness_sides.into_pyarray(py))?;
+    out.set_item("witness_points", witness_points.into_pyarray(py))?;
+    Ok(out)
 }
 
 #[pymodule]

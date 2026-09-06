@@ -82,6 +82,67 @@ def test_scenario_builders_cover_the_expected_fixture_ids() -> None:
 
 
 # --------------------------------------------------------------------------
+# Coarse-to-fine fixtures: the same scenarios under search="refine", plus
+# the shapes only that engine exercises.
+# --------------------------------------------------------------------------
+
+REFINE_FIXTURES = fixture_utils.refine_fixture_paths()
+
+EXPECTED_REFINE_FIXTURE_IDS = EXPECTED_FIXTURE_IDS | frozenset(
+    {
+        "15-wide-staircase",
+        "16-wide-order-pair",
+        "17-wide-trigger-implies",
+        "18-refine-budget-limited",
+    }
+)
+
+
+@pytest.mark.parametrize("path", REFINE_FIXTURES, ids=[p.stem for p in REFINE_FIXTURES])
+def test_refine_search_matches_golden_fixture(path: Path) -> None:
+    fixture = fixture_utils.load_fixture(path)
+    assert fixture.search == "refine"
+    result = fixture_utils.run_fixture(fixture)
+    assert result.stats["search"] == "refine"
+    problems = fixture_utils.diff_golden(fixture, result)
+    assert not problems, f"{fixture.name}:\n" + "\n".join(problems)
+
+
+def test_refine_fixture_set_matches_expected_scenarios() -> None:
+    assert {p.stem for p in REFINE_FIXTURES} == EXPECTED_REFINE_FIXTURE_IDS
+
+
+def test_refine_fixture_generation_is_deterministic() -> None:
+    for build in gen_exact_fixtures.REFINE_SCENARIO_BUILDERS:
+        first = build()
+        second = build()
+        assert first == second, f"{first.get('name', build.__name__)}: not deterministic"
+
+
+def test_refine_scenario_builders_cover_the_expected_fixture_ids() -> None:
+    names = {build()["name"] for build in gen_exact_fixtures.REFINE_SCENARIO_BUILDERS}
+    assert names == EXPECTED_REFINE_FIXTURE_IDS
+
+
+def test_refine_replays_agree_with_classic_on_cost() -> None:
+    """On every classic scenario, the coarse-to-fine fixture pins the same
+    optimal cost (or the same certified infeasibility) as the classic one —
+    the argmin may differ, the cost may not."""
+    classic = {p.stem: fixture_utils.load_fixture(p) for p in FIXTURES}
+    for path in REFINE_FIXTURES:
+        refine = fixture_utils.load_fixture(path)
+        if refine.name not in classic:
+            continue
+        base = classic[refine.name]
+        if not base.golden_completed or not refine.golden_completed:
+            continue
+        assert (base.golden_x_cf is None) == (refine.golden_x_cf is None), refine.name
+        if base.golden_distance is not None and refine.golden_distance is not None:
+            tol = 1e-12 * max(1.0, base.golden_distance)
+            assert abs(base.golden_distance - refine.golden_distance) <= tol, refine.name
+
+
+# --------------------------------------------------------------------------
 # Region fixtures: the pure-Python growth loop's own golden freeze.
 # --------------------------------------------------------------------------
 
@@ -105,13 +166,58 @@ def test_region_growth_matches_golden_fixture(path: Path) -> None:
     vs-golden three ways at once, the same split ``test_exact_golden.py`` /
     ``test_exact_parity.py`` keep for the exact backend."""
     fixture = fixture_utils.load_region_fixture(path)
-    lo, hi, cat_sets = fixture_utils.run_region_fixture(fixture)
+    lo, hi, cat_sets, extras = fixture_utils.run_region_fixture(fixture)
     problems = fixture_utils.diff_region_golden(fixture, lo, hi, cat_sets)
     assert not problems, f"{fixture.name}:\n" + "\n".join(problems)
+    # the fast mode claims nothing about maximality
+    assert not any(extras.maximal_lo) and not any(extras.maximal_hi)
+    assert extras.witnesses == []
 
 
 def test_region_fixture_set_matches_expected_scenarios() -> None:
     assert {p.stem for p in REGION_FIXTURES} == EXPECTED_REGION_FIXTURE_IDS
+
+
+REGION_MAXIMAL_FIXTURES = fixture_utils.region_maximal_fixture_paths()
+
+EXPECTED_REGION_MAXIMAL_FIXTURE_IDS = frozenset(
+    {
+        "maximal-01-xor-coupling",
+        "maximal-02-target-witness",
+        "maximal-03-plausibility-witness",
+        "maximal-04-order-pair-corner",
+        "maximal-05-categorical-block-witness",
+        "maximal-06-budget-exhausted",
+        "maximal-07-random",
+    }
+)
+
+
+@pytest.mark.parametrize(
+    "path", REGION_MAXIMAL_FIXTURES, ids=[p.stem for p in REGION_MAXIMAL_FIXTURES]
+)
+def test_maximal_region_growth_matches_golden_fixture(path: Path) -> None:
+    fixture = fixture_utils.load_region_fixture(path)
+    assert fixture.mode == "maximal"
+    lo, hi, cat_sets, extras = fixture_utils.run_region_fixture(fixture)
+    problems = fixture_utils.diff_region_golden(fixture, lo, hi, cat_sets, extras)
+    assert not problems, f"{fixture.name}:\n" + "\n".join(problems)
+
+
+def test_maximal_region_fixture_set_matches_expected_scenarios() -> None:
+    assert {p.stem for p in REGION_MAXIMAL_FIXTURES} == EXPECTED_REGION_MAXIMAL_FIXTURE_IDS
+
+
+def test_maximal_region_fixture_generation_is_deterministic() -> None:
+    for build in gen_exact_fixtures.REGION_MAXIMAL_SCENARIO_BUILDERS:
+        first = build()
+        second = build()
+        assert first == second, f"{first.get('name', build.__name__)}: not deterministic"
+
+
+def test_maximal_region_scenario_builders_cover_the_expected_fixture_ids() -> None:
+    names = {build()["name"] for build in gen_exact_fixtures.REGION_MAXIMAL_SCENARIO_BUILDERS}
+    assert names == EXPECTED_REGION_MAXIMAL_FIXTURE_IDS
 
 
 def test_region_fixture_generation_is_deterministic() -> None:

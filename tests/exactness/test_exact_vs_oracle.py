@@ -288,7 +288,7 @@ def _draw_case(seed: int) -> _Case:
     )
 
 
-def _solve(case: _Case) -> ExactResult:
+def _solve(case: _Case, search: str = "classic") -> ExactResult:
     return solve_exact(
         case.ir,
         case.x,
@@ -300,6 +300,7 @@ def _solve(case: _Case) -> ExactResult:
         value_policies=case.value_policies,
         plausibility=case.plausibility,
         time_budget_s=1e9,  # fixtures must never be decided by the wall clock
+        search=search,
     )
 
 
@@ -344,7 +345,8 @@ def _binary_valued(case: _Case, row: FloatArray | None) -> bool:
 
 
 class TestExactVersusOracle:
-    def test_verdicts_and_objectives_agree_on_every_seed(self) -> None:
+    @pytest.mark.parametrize("search", ["classic", "refine"])
+    def test_verdicts_and_objectives_agree_on_every_seed(self, search: str) -> None:
         problems: list[str] = []
         feasible = 0
         for seed in SEEDS:
@@ -360,18 +362,7 @@ class TestExactVersusOracle:
                 plausibility=case.plausibility,
                 value_policies=case.value_policies,
             )
-            result = solve_exact(
-                case.ir,
-                case.x,
-                case.interval,
-                case.compiled,
-                case.sigma,
-                case.weights,
-                case.lam,
-                value_policies=case.value_policies,
-                plausibility=case.plausibility,
-                time_budget_s=1e9,
-            )
+            result = _solve(case, search)
             feasible += int(oracle.feasible)
 
             if result.stats["completed"] is not True and not _may_leave_the_space_unsettled(
@@ -435,15 +426,49 @@ class TestExactVersusOracle:
         assert 5 <= feasible <= len(SEEDS) - 5, f"{feasible}/{len(SEEDS)} feasible"
 
 
+class TestRefineAgainstClassic:
+    """The coarse-to-fine search reaches the same verdict and the same
+    optimal cost as the classic one; the argmin may differ, so costs are
+    compared, never rows, and each row is verified on its own."""
+
+    def test_costs_agree_on_every_seed(self) -> None:
+        problems: list[str] = []
+        for seed in SEEDS:
+            case = _draw_case(seed)
+            classic = _solve(case, "classic")
+            refine = _solve(case, "refine")
+            assert refine.stats["search"] == "refine"
+            if refine.x_cf is not None:
+                problems.extend(f"seed {seed} (refine): {p}" for p in _verify(case, refine.x_cf))
+            if classic.stats["completed"] is not True:
+                continue  # classic left the space unsettled: nothing to compare against
+            if (classic.x_cf is None) != (refine.x_cf is None):
+                problems.append(
+                    f"seed {seed}: classic feasible={classic.x_cf is not None} "
+                    f"refine feasible={refine.x_cf is not None}"
+                )
+                continue
+            if classic.distance is not None and refine.distance is not None:
+                tol = 1e-12 * max(1.0, classic.distance)
+                if abs(classic.distance - refine.distance) > tol:
+                    problems.append(
+                        f"seed {seed}: classic {classic.distance!r} vs refine {refine.distance!r}"
+                    )
+        assert not problems, "\n".join(problems)
+
+
 class TestSolverDeterminism:
     # one seed per draw kind: 0 and 3 plain, 39 an order pair, 22 a chain of
     # two, 1 a one-hot group crossed by an order pair, 12 a plain one-hot
     # group, 11 an implication crossed by an order pair, 18 a plain implication
     @pytest.mark.parametrize("seed", [0, 3, 39, 22, 1, 12, 11, 18])
-    def test_same_inputs_twice_give_the_same_row_and_node_count(self, seed: int) -> None:
+    @pytest.mark.parametrize("search", ["classic", "refine"])
+    def test_same_inputs_twice_give_the_same_row_and_node_count(
+        self, seed: int, search: str
+    ) -> None:
         case = _draw_case(seed)
-        first = _solve(case)
-        second = _solve(case)
+        first = _solve(case, search)
+        second = _solve(case, search)
         if first.x_cf is None:
             assert second.x_cf is None
         else:
@@ -484,12 +509,13 @@ class TestCategoricalAgainstOracle:
         return ir, x, compiled, (target_lo, math.inf)
 
     @pytest.mark.parametrize("seed", range(12))
-    def test_matches_the_oracle(self, seed: int) -> None:
+    @pytest.mark.parametrize("search", ["classic", "refine"])
+    def test_matches_the_oracle(self, seed: int, search: str) -> None:
         from .brute_force import solve_brute_force
 
         ir, x, compiled, interval = self._problem(seed)
         sigma, weights = np.ones(4), np.ones(4)
-        result = solve_exact(ir, x, interval, compiled, sigma, weights, 0.05)
+        result = solve_exact(ir, x, interval, compiled, sigma, weights, 0.05, search=search)
         oracle = solve_brute_force(
             ir, x, interval, compiled, sigma, weights, lam=0.05
         )

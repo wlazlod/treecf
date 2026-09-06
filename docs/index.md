@@ -35,12 +35,17 @@ res.changes   # {"utilization": (0.71, 0.419), "max_dpd_12m": (9.0, 3.0)}
 - **Batch production** — thousands of rows solved in parallel inside the Rust core, with
   portable storage and batch-level plots ([tutorial](notebooks/02-credit-risk-tutorial.ipynb)).
 - **Coalitions** — recourse restricted to named feature groups, solved per group
-  ([coalitions](concepts/coalitions.md)).
+  ([coalitions](concepts/coalitions.md)) — and a certified recourse **menu** of every
+  lever set up to a size, with lever-diverse plans read off it
+  ([run the search](guide/explain.md#recourse-menus-and-diverse-plans)).
 - **An exact backend** that proves optimality or **certified infeasibility**, widens plans
-  into certified recourse **regions**, and needs no external solver
+  into certified recourse **regions** — with an opt-in coarse-to-fine **refine** search, a
+  **maximal** region mode that proves each boundary with a witness, and a certification
+  **trace** of every proof — and needs no external solver
   ([certification](concepts/certification.md)).
 - **Audit certificates** — self-contained JSON records a validator re-checks years later
-  with `check_certificate` ([auditability](guide/auditability.md)).
+  with `check_certificate` ([auditability](guide/auditability.md)) — and a
+  **portfolio report** that turns a whole campaign into one self-contained page.
 - **probcal integration** — recourse against calibrated cutoffs and masterscale bands
   through one duck-typed protocol ([probcal](guide/probcal.md)).
 

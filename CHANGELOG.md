@@ -15,7 +15,132 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-09-06
+
+The exact backend gains an opt-in coarse-to-fine search (`search="refine"`) that
+certifies far larger models in the same time, a maximal region mode that proves where a
+certified box ends, a certification trace you can plot, and a search profile that sizes a
+solve before it runs. Auditors get a one-page portfolio report; analysts get certified
+recourse menus over lever sets and lever-diverse plans. Two correctness fixes reach every
+user: XGBoost and CatBoost models now route float64 inputs exactly as the native model
+does, and a value policy no longer withdraws an exact certificate up front. Regions stop at
+the observed data range instead of running to infinity, and region phrases never overstate
+the box. Everything else is byte-identical to 0.3.0.
+
+<details markdown="1">
+<summary>Details</summary>
+
+### Added
+
+- **Branch-and-refine exact search.** `explain(..., backend="exact", search="refine")` holds
+  each numeric feature to a range of routing cells first and descends only where the score
+  bound forces it, accepting whole boxes at their true minimum cost; it proves the same optimum
+  and the same certified infeasibility as the classic engine (the returned row may be a
+  different argmin of the same cost). `solver_stats` gains `search`, `coarse_accepts`, and
+  `refinements`; the Python and Rust engines agree byte for byte on a new fixture set. On the
+  measured [benchmark matrix](https://wlazlod.github.io/treecf/benchmarks/comparison/) it
+  certifies 13 of the 18 model-scale cells within 60 s where the classic engine certifies 6,
+  adding 50 trees at depth 3 with 20 features, every 12-feature cell at depth 5, 200 trees at
+  depth 3 with 12 features, and the depth-5 8-feature cells at 100 and 200 trees; the
+  remaining 20-feature cells stay out of reach for both engines within that budget. The
+  default `search="classic"` is unchanged.
+- **Maximal recourse regions.** `explain(..., region=True, region_mode="maximal",
+  region_budget=...)` and `Explainer.recourse_region(..., mode="maximal", budget=,
+  keep_witnesses=)` settle every side the fast growth stops with a budgeted search for a
+  violating point in the next routing cell: an empty search extends the side, a witness
+  proves it maximal, a spent budget leaves it unproven. `RecourseRegion.maximal`,
+  `maximal_categories`, and `witnesses` carry the findings; batch files round-trip them and
+  certificates store the flags as additive keys under schema version 2. `plot_region` draws a
+  proved side as a filled square and shows the "not necessarily maximal" caveat only while a
+  side is unproven. The default `region_mode="fast"` is unchanged.
+- **Portfolio report.** `treecf.audit.portfolio_report(batch, groups, ...)` summarizes a
+  campaign as a strict-JSON artifact — population and proof mix, recourse burden per segment,
+  dominant levers, missing-value transitions, fingerprints — and renders it on request as one
+  self-contained HTML page or as Markdown with figures beside the file. Disparity ratios are
+  off by default and framed by one fixed sentence when enabled.
+- **Certification trace.** Every exact solve records `solver_stats["trace"]` — the incumbent
+  cost and the sound lower bound sampled at every incumbent update and every power-of-two node
+  count, capped at 256 entries — and `plot_certification_trace` draws it with the outcome named.
+- **Search profile.** `Explainer.search_profile(x, target=None)` sizes the classic search
+  before it runs (atomic cells, domain sizes, influential features, `log10_states`, and the
+  presolve-filtered sizes with a target); the budget-exhaustion warning quotes the figure.
+- **Conformance hardening.** A parser fuzz leg with a committed corpus of once-crashing dumps,
+  and a CatBoost category-hashing property leg over drawn strings, both in CI's slow leg.
+- **Commit hygiene.** A pull-request CI job checks that commit subjects and bodies describe
+  behavior, mirrored by a CONTRIBUTING checklist item; the narration test covers Rust and
+  Markdown sources too.
+- **Certified recourse menus over lever sets (`recourse_menu`), lever-diverse plans
+  (`explain_diverse`), and the menu matrix plot.** Every lever set up to a size is solved as
+  its own coalition; the menu lists the minimal frontier, the sets proved unable to reach the
+  target, and whether every set was settled with a certificate. `explain_diverse` returns the
+  cheapest plans with distinct lever sets, or climbs declared coalitions and their unions;
+  `plot_recourse_menu` draws the matrix with a proof glyph per row.
+
+### Changed
+
+- **Regions stop at the data range where no constraint bounds them.** A side without a
+  `Range` used to grow to infinity, so an unconstrained count read `"≤ 1"` over an implicit
+  minus infinity. An explainer with `background` data now grows such a side no further than
+  the observed range (widened to include the counterfactual itself); the box is a sound
+  sub-box of the old one, `RecourseRegion.data_limited` names the sides that stopped there,
+  `describe()` marks them `"(data-limited)"`, and `plot_region` draws them with a diamond
+  cap. In the maximal mode a data-limited side counts as settled, like a `Range` bound. An
+  explainer built from `normalizers` alone is unchanged.
+
+### Fixed
+
+- **XGBoost and CatBoost route float64 inputs as the native model does.** Both libraries cast
+  inputs to float32 before comparing against a split, so a float64 value within half a float32
+  ulp of a threshold used to route one way natively and the other way in the IR — enough to
+  flip leaves on a fraction of real training rows and to hand back counterfactuals whose
+  verified score the native model did not reproduce. The parsers now store the float64
+  boundary of that cast (the mechanism the sklearn parser already used), and the conformance
+  suites probe unquantized float64 neighbours of every threshold for all three libraries.
+- **`RecourseRegion.describe()` never overstates the box.** An endpoint that rounds to a value
+  outside the interval is phrased strictly (`"< 1"`, `"in [0, 1)"`) instead of rounding a
+  boundary one float32 ulp below 1 up to `"≤ 1"`; features under an `"integer"` value policy
+  are phrased on the integers the box contains (`"= 0"`, `"≤ 0"`, `"in [2, 4]"`), recorded in
+  the new `RecourseRegion.integer_features` field, which batch files round-trip.
+- **A value policy no longer withdraws the exact certificate up front.** With an order pair
+  over a policy-bound feature the search used to give up its optimality claim before
+  expanding a single node. It now withdraws only when a completion actually breaks such a
+  pair on values its cells could still have ordered; a policy run that never meets one reports
+  `proof="optimal"` as the documentation promised. Declaring the same order pair twice no
+  longer withdraws either.
+- **Parser errors are normalized.** A malformed model dump now raises `ParserError` naming the
+  format and the cause where it used to leak a bare `KeyError`, `IndexError`, `TypeError`,
+  `ValueError`, or `ZeroDivisionError` — a scalar at the top level, a missing key, a truncated
+  parallel array, a probability base score of exactly one, a LightGBM category token that is
+  not an integer, a CatBoost `scale_and_bias` of the wrong shape or a split on a float feature
+  the model does not declare, a negative feature count, a child pointer outside the tree, and a
+  threshold that overflows float32 (some of which only failed once the model was scored). Every
+  parsed ensemble is now structurally validated before it is returned.
+- The certification concept page described the certificate schema as version 1 and the
+  calibrator block as a bare string; both now match what `certificate` writes.
+
+### Invariants
+
+- Default behavior is byte-identical to the previous release, with one deliberate exception —
+  regions grown by an explainer that has background data stop at the data range (see
+  *Changed*): the classic exact fixtures, the fast region fixtures, the genetic parity
+  fixtures, and the committed certificate goldens are untouched, and every other new behavior
+  sits behind a flag or a new function.
+- The Python and Rust engines remain byte-identical on every solve, now including the refine
+  search, the maximal region mode, and the certification trace.
+
+</details>
+
 ## [0.3.0] - 2026-08-31
+
+Native categorical splits parse exactly for LightGBM, XGBoost, scikit-learn
+HistGradientBoosting, and CatBoost, and every backend searches them over category blocks,
+so cardinality is not the cost driver. Regions certify category sets and certificates store
+them as schema version 2; the exact backend gains a presolve pass; `plot_region` and the
+recourse-burden views arrive; the docs are rebuilt around workflows with every snippet
+executed in CI. Numeric-model results are byte-identical to 0.2.4.
+
+<details markdown="1">
+<summary>Details</summary>
 
 ### Added
 
@@ -83,7 +208,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Python and Rust engines remain byte-identical on every solve, domain, and region,
   including the new categorical paths.
 
+</details>
+
 ## [0.2.4] - 2026-08-23
+
+Calibrator provenance: certificates and batch records carry the calibrator's
+fingerprint and a calibrated-probability read-out, `check_certificate(calibrator=)` can
+re-check it, and a probcal test matrix pins the duck-typed protocol. Strictly additive.
+
+<details markdown="1">
+<summary>Details</summary>
 
 ### Added
 
@@ -118,7 +252,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   produces byte-identical reports to 0.2.3. Calibrators missing optional duck members
   (`fingerprint`, `predict_proba`) degrade to `null`/`None`, never an error.
 
+</details>
+
 ## [0.2.3] - 2026-08-23
+
+A correctness fix for scikit-learn tree ensembles: their float32 input cast could
+route a counterfactual sitting on a split boundary differently from the model itself, so
+an "optimal" plan could miss its target. Thresholds are now stored as the exact float64
+boundary of that cast.
+
+<details markdown="1">
+<summary>Details</summary>
 
 ### Fixed
 
@@ -147,7 +291,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   epilogue (behavior-identical) — clippy 1.98's `needless_late_init` began rejecting
   the old form under `-D warnings` on the freshly installed stable toolchain in CI.
 
+</details>
+
 ## [0.2.2] - 2026-08-19
+
+Audit certificates: `Explainer.certificate` turns any result into a self-contained
+JSON record with model and constraint fingerprints and a fresh verification, and
+`check_certificate` re-checks one later. Batch records gain `proof` and `solver_stats`. No
+solver behavior changes.
+
+<details markdown="1">
+<summary>Details</summary>
 
 ### Added
 
@@ -186,7 +340,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - No solver behavior changes; no fixtures touched; no Rust source changes (only the mirrored
   version in `rust/Cargo.toml`/`Cargo.lock`).
 
+</details>
+
 ## [0.2.1] - 2026-08-15
+
+Ctrl-C now interrupts an exact search, a region growth, or a batch solve promptly.
+Every degraded exact result warns and says whether the budget ran out or a conservative
+repair withdrew the certificate, and exact batches become opt-in behind
+`allow_exact_batch=True`. No result of any completed call changes.
+
+<details markdown="1">
+<summary>Details</summary>
 
 ### Added
 
@@ -241,7 +405,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `proof="optimal"` and a certified "no"; new [Certification](https://wlazlod.github.io/treecf/concepts/certification/)
   sections cover interruption and the always-on degraded-result warning.
 
+</details>
+
 ## [0.2.0] - 2026-08-14
+
+The exact backend: a branch-and-bound search over the routing cells that reports
+`proof="optimal"`, certifies infeasibility, and widens plans into recourse regions —
+certified boxes around a plan — plus the recourse map plot. The Rust core's random-number
+library was upgraded, so seeded genetic results may differ from 0.1.x.
+
+<details markdown="1">
+<summary>Details</summary>
 
 ### Added
 
@@ -287,7 +461,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   constraint itself admits (previously possible with very small or very large
   coefficients).
 
+</details>
+
 ## [0.1.1] - 2026-08-08
+
+A factual that violates its own constraints now warns; single-feature linear
+constraints lower into bounds and other linears get a projection repair, which ends
+spurious infeasibility; wheels are smoke-tested before upload. Seeded results that
+involve non-canonical linear constraints changed.
+
+<details markdown="1">
+<summary>Details</summary>
 
 ### Added
 
@@ -326,7 +510,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   regenerated byte-identical; a new `11-linear-projection` fixture pins the
   projection behavior.
 
+</details>
+
 ## [0.1.0] - 2026-07-23
+
+Calibrated targets through a duck-typed calibrator protocol, post-solve pruning of
+changes that verification proves unnecessary, and a published benchmark against DiCE and
+NICE; a band-target field-propagation bug is fixed.
+
+<details markdown="1">
+<summary>Details</summary>
 
 ### Added
 
@@ -367,11 +560,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - PyPI keywords no longer mention the removed CP-SAT backend; README/docs
   state the published version (0.0.1) consistently.
 
+</details>
+
 ## [0.0.1] - 2026-07-13
+
+The genetic backend runs on a Rust core, batch production
+runs in parallel inside it, coalitions mode and the batch plots arrive, and the CP-SAT
+exact backend is removed.
 
 First published release (PyPI). Version deliberately resets BELOW 0.1.0 (which
 was never published): the Rust-backed rebuild supersedes the prior pure-Python
 implementation outright and restarts the version line.
+
+<details markdown="1">
+<summary>Details</summary>
 
 ### Changed
 
@@ -470,7 +672,14 @@ implementation outright and restarts the version line.
   could route such values opposite to the IR. Both engines changed
   identically; parity fixtures regenerated.
 
-## unreleased
+</details>
+
+## Before 0.0.1 (unpublished)
+
+The pure-Python line the Rust rebuild superseded; kept for the record.
+
+<details markdown="1">
+<summary>Details</summary>
 
 ### Added
 
@@ -504,3 +713,5 @@ implementation outright and restarts the version line.
   benchmark suite); planned v0.2 optimization via table-constraint encoding.
 - Plausibility cannot combine with AllowMissing/NaN factuals.
 - `n_counterfactuals > 1` requires the CP-SAT backend.
+
+</details>

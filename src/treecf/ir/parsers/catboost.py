@@ -20,7 +20,9 @@ Because categories are identified by a hash of their string form, ``categories``
 (the caller's code -> name lists) is required whenever native categorical
 features are present. The search core only ever sees set-membership nodes.
 
-Borders are float32-quantized (cast back through float32, as with XGBoost).
+Borders are float32-quantized (cast back through float32, as with XGBoost) and
+then re-expressed as the float64 boundary of the float32 cast CatBoost applies
+to its inputs, so float64 inputs route as the native model routes them.
 NaN routing on float splits: nan_value_treatment "AsFalse"/"AsIs" -> bit 0
 (missing_left=True), "AsTrue" -> bit 1. CatBoost rejects NaN categorical
 inputs, so set-membership nodes route NaN right (never a member).
@@ -42,6 +44,7 @@ import numpy as np
 from treecf._errors import ParserError, UnsupportedModelError
 from treecf.ir.model import CategoricalFeature, EnsembleIR, Link, Node, SplitOp, Tree
 from treecf.ir.parsers._catboost_cat import calc_ctr_bucket, cat_feature_hash, signed32
+from treecf.ir.parsers._float32 import effective_le_threshold
 
 _LOSS_LINKS = {
     "Logloss": Link.SIGMOID,
@@ -306,6 +309,8 @@ def _expand_oblivious(
     splits = tree["splits"] or []
     leaf_values = tree["leaf_values"]
     depth = len(splits)
+    if depth > 16:  # CatBoost's own ceiling; deeper claims cannot be genuine
+        raise ParserError(f"oblivious tree depth {depth} exceeds the format's maximum")
     if len(leaf_values) != 2**depth:
         raise UnsupportedModelError("oblivious tree leaf count does not match its depth")
 
@@ -327,7 +332,7 @@ def _expand_oblivious(
             nodes[node_id] = Node(
                 node_id=node_id,
                 feature=int(flat_of[feature_index]),
-                threshold=float(np.float32(split["border"])),
+                threshold=effective_le_threshold(float(np.float32(split["border"]))),
                 op=SplitOp.LE,
                 missing_left=missing_left_of[feature_index],
                 left=bit0,  # bit 0: x <= border

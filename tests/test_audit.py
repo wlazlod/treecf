@@ -102,6 +102,50 @@ class TestStrictJsonRoundTrip:
         points = restored["verification"]["region_points"]
         assert points and all(p["ok"] for p in points)
 
+    def test_exact_trace_serializes_as_a_list_of_samples(self, exp: Explainer) -> None:
+        x = np.zeros(3)
+        result = exp.explain(x, TARGET, backend="exact", seed=0)
+        assert isinstance(result, Counterfactual)
+        cert = exp.certificate(x, result, TARGET)
+        restored = json.loads(_dumps(cert))
+        trace = restored["solve"]["solver_stats"]["trace"]
+        assert isinstance(trace, list) and trace
+        assert all(isinstance(sample, list) and len(sample) == 3 for sample in trace)
+        assert trace[-1][0] == restored["solve"]["solver_stats"]["nodes_expanded"]
+        assert restored["solve"]["solver_stats"]["search"] == "classic"
+
+    def test_fast_region_certificate_carries_no_maximality_keys(self, exp: Explainer) -> None:
+        x = np.zeros(3)
+        result = exp.explain(x, TARGET, seed=0, region=True)
+        assert isinstance(result, Counterfactual)
+        cert = exp.certificate(x, result, TARGET)
+        plan = cert["plan"]
+        assert isinstance(plan, dict)
+        assert "region_maximal" not in plan and "region_maximal_categories" not in plan
+
+    def test_certificate_with_added_region_keys_still_verifies(self, exp: Explainer) -> None:
+        """Readers tolerate keys they do not know: a schema-2 certificate that
+        carries the region maximality flags verifies unchanged from a fresh
+        explainer, since adding keys never bumps the schema version."""
+        x = np.zeros(3)
+        result = exp.explain(x, TARGET, seed=0, region=True)
+        assert isinstance(result, Counterfactual) and result.region is not None
+        cert = exp.certificate(x, result, TARGET)
+        plan = cert["plan"]
+        assert isinstance(plan, dict)
+        plan["region_maximal"] = {
+            name: [True, False] for name in result.region.feature_intervals
+        }
+        plan["region_maximal_categories"] = {}
+        restored = json.loads(_dumps(cert))
+        assert restored["schema_version"] == 2
+        fresh = Explainer(_ir(), normalizers=np.ones(3))
+        report = fresh.check_certificate(restored)
+        assert report["model_match"] is True
+        assert report["constraints_match"] is True
+        assert report["verification_ok"] is True
+        assert report["mismatches"] == []
+
     def test_certified_infeasible(self, exp: Explainer) -> None:
         x = np.zeros(3)
         unreachable = Target.raw(op=">=", value=10.0)  # max raw score is 2.4

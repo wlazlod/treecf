@@ -38,9 +38,11 @@ jobs:
       - name: Run tests
         run: uv run pytest
 
-      - name: Docs snippet and structure tests
+      - name: Docs harnesses and slow conformance legs
         if: matrix.python-version == '3.12'
-        run: uv run pytest -m slow tests/test_docs_snippets.py tests/test_docs_structure.py
+        run: >-
+          uv run pytest -m slow tests/test_docs_snippets.py tests/test_docs_structure.py
+          tests/ir/test_parser_fuzz.py tests/ir/test_catboost_hash_property.py
 
   conformance:
     name: conformance ${{ matrix.library }}
@@ -115,6 +117,23 @@ jobs:
       # featureless crate is what defines the MSRV surface
       - name: Test on MSRV
         run: cargo test --manifest-path rust/Cargo.toml
+
+  commit-hygiene:
+    name: commit message hygiene
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # Message text only, never hashes or diffs: every commit on the PR must
+      # describe behavior, not planning documents or work-item shorthand.
+      - name: Check commit subjects and bodies
+        run: >-
+          python scripts/check_commit_messages.py
+          ${{ github.event.pull_request.base.sha }}
+          ${{ github.event.pull_request.head.sha }}
 
   probcal-matrix:
     name: probcal matrix

@@ -15,6 +15,7 @@ from treecf import (
     Infeasible,
     Linear,
     OneHot,
+    Range,
     RecourseRegion,
     Target,
     TreecfError,
@@ -53,7 +54,7 @@ def exp() -> Explainer:
     return Explainer(_ir(), normalizers=np.ones(3))
 
 
-X0 = np.zeros(3)
+x0 = np.zeros(3)
 TARGET = Target.raw(op=">=", value=0.9)  # needs "a" alone; b, c never matter for the score
 
 
@@ -94,6 +95,155 @@ class TestDescribe:
         )
         assert set(region.describe()) == {"b"}
 
+    def test_an_endpoint_that_rounds_outside_the_box_is_shown_as_strict(self) -> None:
+        # a box ending one float32 ulp below 1 must not read as "1 is fine"
+        just_below = float(np.nextafter(np.float32(1.0), np.float32(0.0)))
+        just_above = float(np.nextafter(np.float32(2.0), np.float32(3.0)))
+        region = RecourseRegion(
+            lo=np.array([0.0, -math.inf, just_above, just_above]),
+            hi=np.array([just_below, just_below, math.inf, 5.0]),
+            feature_intervals={
+                "two_sided": (0.0, just_below),
+                "upper": (-math.inf, just_below),
+                "lower": (just_above, math.inf),
+                "both_strict": (just_above, 5.0),
+            },
+            certified=True,
+        )
+        assert region.describe() == {
+            "two_sided": "in [0, 1)",
+            "upper": "< 1",
+            "lower": "> 2",
+            "both_strict": "in (2, 5]",
+        }
+
+    def test_integer_features_are_described_on_the_integers(self) -> None:
+        just_below = float(np.nextafter(np.float32(1.0), np.float32(0.0)))
+        region = RecourseRegion(
+            lo=np.array([0.0, -math.inf, 1.5, 2.0]),
+            hi=np.array([just_below, just_below, math.inf, 4.7]),
+            feature_intervals={
+                "single": (0.0, just_below),
+                "upper": (-math.inf, just_below),
+                "lower": (1.5, math.inf),
+                "span": (2.0, 4.7),
+            },
+            certified=True,
+            integer_features=("single", "upper", "lower", "span"),
+        )
+        assert region.describe() == {
+            "single": "= 0",
+            "upper": "≤ 0",
+            "lower": "≥ 2",
+            "span": "in [2, 4]",
+        }
+
+    def test_explain_marks_integer_policy_features(self) -> None:
+        exp = Explainer(_ir(), normalizers=np.ones(3), value_policy={"b": "integer"})
+        # a must move to 1; b must stay below its split or the score overshoots
+        res = exp.explain(x0, Target.raw(range=(0.9, 1.5)), seed=0, region=True)
+        assert isinstance(res, Counterfactual) and res.region is not None
+        assert res.region.integer_features == ("b",)
+        described = res.region.describe()
+        assert described["b"] == "≤ 0"
+        assert described["c"] == "< 1"
+
+
+class TestMaximalityFields:
+    def test_defaults_claim_nothing(self) -> None:
+        region = RecourseRegion(
+            lo=np.array([1.0]), hi=np.array([math.inf]),
+            feature_intervals={"a": (1.0, math.inf)}, certified=True,
+        )
+        assert region.maximal == {}
+        assert region.maximal_categories == {}
+        assert region.witnesses is None
+
+    def test_describe_marks_fully_proved_features(self) -> None:
+        region = RecourseRegion(
+            lo=np.array([1.0, 2.0, 0.0]), hi=np.array([3.0, 5.0, 0.0]),
+            feature_intervals={"a": (1.0, 3.0), "b": (2.0, 5.0)},
+            certified=True,
+            feature_categories={"c": (0, 1)},
+            cat_sets={2: (0, 1)},
+            maximal={"a": (True, True), "b": (True, False)},
+            maximal_categories={"c": True},
+        )
+        described = region.describe()
+        assert described["a"] == "in [1, 3] (maximal)"
+        assert described["b"] == "in [2, 5]"
+        assert described["c"] == "∈ {0, 1} (maximal)"
+
+    def test_describe_names_data_limited_sides(self) -> None:
+        region = RecourseRegion(
+            lo=np.array([1.0, 0.0]), hi=np.array([3.0, 2.0]),
+            feature_intervals={"a": (1.0, 3.0), "b": (0.0, 2.0)},
+            certified=True,
+            maximal={"a": (True, True)},
+            data_limited={"a": (False, True), "b": (True, False)},
+        )
+        described = region.describe()
+        assert described["a"] == "in [1, 3] (maximal, data-limited)"
+        assert described["b"] == "in [0, 2] (data-limited)"
+
+
+class TestDataBounds:
+    """Without a Range on a feature, growth stops at the observed range of the
+    explainer's background data instead of running to infinity."""
+
+    @staticmethod
+    def _background() -> np.ndarray:
+        rng = np.random.default_rng(0)
+        bg = np.column_stack([
+            rng.uniform(0.0, 5.0, size=50),
+            rng.uniform(0.0, 3.0, size=50),
+            rng.uniform(-2.0, 2.0, size=50),
+        ])
+        bg[0] = [0.0, 0.0, -2.0]
+        bg[1] = [5.0, 3.0, 2.0]
+        return bg
+
+    def test_sides_without_a_constraint_stop_at_the_data_range(self) -> None:
+        exp = Explainer(_ir(), background=self._background())
+        res = exp.explain(x0, TARGET, seed=0, region=True)
+        assert isinstance(res, Counterfactual) and res.region is not None
+        region = res.region
+        assert region.feature_intervals["a"] == (1.0, 5.0)  # lower side: the model's split
+        assert region.feature_intervals["b"] == (0.0, 3.0)
+        assert region.feature_intervals["c"] == (-2.0, 2.0)
+        assert region.data_limited == {
+            "a": (False, True), "b": (True, True), "c": (True, True),
+        }
+        described = region.describe()
+        assert described["a"] == "in [1, 5] (data-limited)"
+        assert described["b"] == "in [0, 3] (data-limited)"
+
+    def test_a_range_constraint_wins_over_the_data(self) -> None:
+        exp = Explainer(
+            _ir(), background=self._background(), constraints=[Range("b", 0.0, 10.0)]
+        )
+        res = exp.explain(x0, TARGET, seed=0, region=True)
+        assert isinstance(res, Counterfactual) and res.region is not None
+        assert res.region.feature_intervals["b"] == (0.0, 10.0)
+        assert "b" not in res.region.data_limited
+
+    def test_a_counterfactual_outside_the_data_still_lies_in_its_box(self) -> None:
+        bg = self._background()
+        bg[:, 1] += 10.0  # b observed in [10, 13]; the counterfactual keeps b at 0
+        exp = Explainer(_ir(), background=bg)
+        res = exp.explain(x0, Target.raw(range=(0.9, 1.5)), seed=0, region=True)
+        assert isinstance(res, Counterfactual) and res.region is not None
+        lo, hi = res.region.feature_intervals["b"]
+        assert lo == 0.0 and hi < 1.0
+        assert res.region.data_limited["b"] == (True, False)
+        assert res.region.contains(res.x_cf)
+
+    def test_without_background_nothing_changes(self, exp: Explainer) -> None:
+        res = exp.explain(x0, TARGET, seed=0, region=True)
+        assert isinstance(res, Counterfactual) and res.region is not None
+        assert res.region.feature_intervals["b"] == (-math.inf, math.inf)
+        assert res.region.data_limited == {}
+
 
 class TestContains:
     def test_closed_box_membership(self) -> None:
@@ -125,17 +275,17 @@ class TestRecourseRegionMethod:
     def test_rejects_unverified_counterfactual(self, exp: Explainer) -> None:
         unverified = np.zeros(3)  # score 0.0 does not reach the >= 0.9 target
         with pytest.raises(TreecfError, match="unverified"):
-            exp.recourse_region(X0, unverified, TARGET)
+            exp.recourse_region(x0, unverified, TARGET)
 
     def test_rejects_bands_target(self, exp: Explainer) -> None:
         bands = Target.bands({"grade": (0.0, 1.0)}, space="raw")
         with pytest.raises(TreecfError, match="bands"):
-            exp.recourse_region(X0, X0, bands)
+            exp.recourse_region(x0, x0, bands)
 
     def test_matches_region_true_convenience_flag(self, exp: Explainer) -> None:
-        result = exp.explain(X0, TARGET, backend="genetic", seed=0)
+        result = exp.explain(x0, TARGET, backend="genetic", seed=0)
         assert isinstance(result, Counterfactual)
-        region = exp.recourse_region(X0, result.x_cf, TARGET)
+        region = exp.recourse_region(x0, result.x_cf, TARGET)
         assert region.contains(result.x_cf)
         assert region.feature_intervals["a"][0] == 1.0
 
@@ -168,12 +318,71 @@ class TestRecourseRegionMethod:
 # --------------------------------------------------------------------------
 
 
+class TestMaximalModeApi:
+    """The public surface of the maximal mode: the explain flags, the
+    post-hoc method, and the batch path."""
+
+    def test_explain_region_mode_maximal_reports_flags(self, exp: Explainer) -> None:
+        result = exp.explain(x0, TARGET, seed=0, region=True, region_mode="maximal")
+        assert isinstance(result, Counterfactual) and result.region is not None
+        assert set(result.region.maximal) == set(result.region.feature_intervals)
+        assert result.region.witnesses is None  # explain never keeps witnesses
+
+    def test_region_mode_without_region_raises(self, exp: Explainer) -> None:
+        with pytest.raises(ValueError, match="region=True"):
+            exp.explain(x0, TARGET, seed=0, region_mode="maximal")
+        with pytest.raises(ValueError, match="region=True"):
+            exp.explain(x0, TARGET, seed=0, region_budget=10)
+
+    def test_defaults_are_accepted_without_region(self, exp: Explainer) -> None:
+        result = exp.explain(x0, TARGET, seed=0, region_mode="fast", region_budget=100_000)
+        assert isinstance(result, Counterfactual)
+
+    def test_unknown_mode_and_bad_budget_are_rejected(self, exp: Explainer) -> None:
+        with pytest.raises(TreecfError, match="mode"):
+            exp.explain(x0, TARGET, seed=0, region=True, region_mode="sloppy")
+        with pytest.raises(ValueError, match="budget"):
+            exp.explain(x0, TARGET, seed=0, region=True, region_budget=0)
+
+    def test_recourse_region_keeps_witnesses_on_request(self, exp: Explainer) -> None:
+        result = exp.explain(x0, TARGET, seed=0)
+        assert isinstance(result, Counterfactual)
+        region = exp.recourse_region(
+            x0, result.x_cf, TARGET, mode="maximal", budget=500, keep_witnesses=True
+        )
+        assert region.witnesses is not None
+        assert set(region.maximal) == set(region.feature_intervals)
+        plain = exp.recourse_region(x0, result.x_cf, TARGET, mode="maximal")
+        assert plain.witnesses is None
+        assert plain.maximal == region.maximal
+
+    def test_batch_records_carry_flags_but_never_witnesses(self, exp: Explainer) -> None:
+        X = np.zeros((2, 3))
+        batch = exp.explain_batch(X, TARGET, seed=0, region=True, region_mode="maximal")
+        regions = [r.region for r in batch if r.region is not None]
+        assert regions
+        for region in regions:
+            assert set(region.maximal) == set(region.feature_intervals)
+            assert region.witnesses is None
+        with pytest.raises(ValueError, match="region=True"):
+            exp.explain_batch(X, TARGET, seed=0, region_mode="maximal")
+
+    def test_coalitions_forward_the_mode(self, exp: Explainer) -> None:
+        by_group = exp.explain_coalitions(
+            x0, TARGET, {"first": ["a"], "rest": ["b", "c"]}, seed=0, region=True,
+            region_mode="maximal",
+        )
+        for result in by_group.values():
+            if isinstance(result, Counterfactual) and result.region is not None:
+                assert set(result.region.maximal) == set(result.region.feature_intervals)
+
+
 class TestRegionTrueEndToEnd:
     @pytest.mark.parametrize("backend", ["genetic", "exact"])
     def test_produces_a_region_containing_its_own_counterfactual(
         self, exp: Explainer, backend: str
     ) -> None:
-        result = exp.explain(X0, TARGET, backend=backend, seed=0, region=True)
+        result = exp.explain(x0, TARGET, backend=backend, seed=0, region=True)
         assert isinstance(result, Counterfactual)
         assert isinstance(result.region, RecourseRegion)
         assert result.region.contains(result.x_cf)
@@ -183,13 +392,13 @@ class TestRegionTrueEndToEnd:
         assert "c" in result.region.feature_intervals
 
     def test_region_false_by_default(self, exp: Explainer) -> None:
-        result = exp.explain(X0, TARGET, backend="genetic", seed=0)
+        result = exp.explain(x0, TARGET, backend="genetic", seed=0)
         assert isinstance(result, Counterfactual)
         assert result.region is None
 
     def test_bands_target_regions_use_their_own_band_interval(self, exp: Explainer) -> None:
         bands = Target.bands({"reachable": (0.9, 1.0), "unreachable": (3.0, 10.0)}, space="raw")
-        result = exp.explain(X0, bands, backend="exact", seed=0, region=True)
+        result = exp.explain(x0, bands, backend="exact", seed=0, region=True)
         assert isinstance(result, dict)
         reachable = result["reachable"]
         assert isinstance(reachable, Counterfactual)
@@ -207,7 +416,7 @@ class TestRegionTrueEndToEnd:
 class TestDegenerateFeaturesArePinned:
     def test_frozen_feature_is_excluded(self) -> None:
         exp = Explainer(_ir(), normalizers=np.ones(3), constraints=[Freeze("c")])
-        result = exp.explain(X0, TARGET, backend="exact", seed=0, region=True)
+        result = exp.explain(x0, TARGET, backend="exact", seed=0, region=True)
         assert isinstance(result, Counterfactual)
         assert result.region is not None
         assert "c" not in result.region.feature_intervals
@@ -376,11 +585,112 @@ class TestBatchRegion:
             assert record.region is None
 
 
+class TestMaximalMode:
+    """The maximal mode settles every side the conservative bound stops:
+    extends it when a budgeted search finds no violating point, proves it
+    with a witness otherwise, and reports a side it could not decide."""
+
+    @staticmethod
+    def _xor_ir() -> EnsembleIR:
+        """Score 0 on the diagonal cells (a<1, b<1) and (a>=1, b>=1), 1 off it."""
+        tree3 = Tree(
+            nodes=(
+                Node(0, 0, 1.0, SplitOp.LT, True, 1, 2, None),
+                _leaf(1, 0.0),
+                Node(2, 1, 1.0, SplitOp.LT, True, 3, 4, None),
+                _leaf(3, 0.0),
+                _leaf(4, -2.0),
+            )
+        )
+        return EnsembleIR(
+            trees=(_stump(0, 1.0, 1.0), _stump(1, 1.0, 1.0), tree3),
+            base_score=0.0,
+            link=Link.IDENTITY,
+            n_features=2,
+            feature_names=("a", "b"),
+            meta={},
+        )
+
+    def _region(self, interval, mode="maximal", budget=100_000, keep_witnesses=True,
+                constraints=()):
+        from treecf.constraints.compile import compile_constraints
+        from treecf.regions import _recourse_region
+
+        ir = self._xor_ir()
+        compiled = compile_constraints(constraints, ir.feature_names)
+        x_cf = np.zeros(2)
+        return _recourse_region(
+            ir, x_cf, x_cf, interval, compiled, None, 0.0,
+            mode=mode, budget=budget, keep_witnesses=keep_witnesses,
+        )
+
+    def test_fast_mode_stops_where_the_bound_fails(self) -> None:
+        region = self._region((-0.5, 1.5), mode="fast")
+        assert region.feature_intervals["a"] == (-math.inf, math.inf)
+        assert region.feature_intervals["b"][1] < 1.0
+        assert region.maximal == {} and region.witnesses is None
+
+    def test_search_extends_a_side_the_bound_rejected(self) -> None:
+        region = self._region((-0.5, 1.5))
+        assert region.feature_intervals == {
+            "a": (-math.inf, math.inf), "b": (-math.inf, math.inf),
+        }
+        assert region.maximal == {"a": (True, True), "b": (True, True)}
+        assert region.witnesses == {}
+
+    def test_witnesses_prove_the_sides_that_cannot_extend(self) -> None:
+        region = self._region((-0.5, 0.5))
+        assert region.feature_intervals["a"][1] < 1.0
+        assert region.feature_intervals["b"][1] < 1.0
+        assert region.maximal == {"a": (True, True), "b": (True, True)}
+        assert region.witnesses is not None
+        assert set(region.witnesses) == {"a:hi", "b:hi"}
+        np.testing.assert_array_equal(region.witnesses["a:hi"], [1.0, 0.0])
+        np.testing.assert_array_equal(region.witnesses["b:hi"], [0.0, 1.0])
+        for point in region.witnesses.values():
+            assert not region.contains(point)
+
+    def test_witnesses_are_dropped_unless_asked_for(self) -> None:
+        region = self._region((-0.5, 0.5), keep_witnesses=False)
+        assert region.witnesses is None
+        assert region.maximal == {"a": (True, True), "b": (True, True)}
+
+    def test_budget_leaves_a_side_unproven(self) -> None:
+        tight = self._region((-0.5, 1.5), budget=2)
+        assert tight.maximal["b"] == (True, False)
+        assert tight.feature_intervals["b"][1] < 1.0
+        enough = self._region((-0.5, 1.5), budget=3)
+        assert enough.maximal["b"] == (True, True)
+
+    def test_order_pair_corner_is_a_witness_without_any_search(self) -> None:
+        from treecf.constraints import Linear
+
+        region = self._region(
+            (-0.5, 0.5), constraints=[Linear({"a": 1.0, "b": -1.0}, "<=", 0.0)],
+        )
+        # the corner that breaks a <= b: a just past its factual, b unchanged
+        assert region.feature_intervals["a"] == (-math.inf, 0.0)
+        assert region.maximal["a"] == (True, True)
+        assert region.witnesses is not None
+        witness = region.witnesses["a:hi"]
+        assert witness[0] > witness[1] == 0.0 and witness[0] < 1.0
+
+    def test_describe_marks_the_proved_features(self) -> None:
+        region = self._region((-0.5, 0.5))
+        assert all(phrase.endswith("(maximal)") for phrase in region.describe().values())
+
+    def test_unknown_mode_and_bad_budget_are_rejected(self) -> None:
+        with pytest.raises(TreecfError, match="mode"):
+            self._region((-0.5, 0.5), mode="sloppy")
+        with pytest.raises(ValueError, match="budget"):
+            self._region((-0.5, 0.5), budget=0)
+
+
 class TestCategoricalRegions:
     """Category sets are grown, rendered, and honored by membership checks."""
 
     @staticmethod
-    def _region(constraints=(), interval_width=0.4):
+    def _region(constraints=(), interval_width=0.4, mode="fast"):
         from treecf.constraints.compile import compile_constraints
         from treecf.ir.evaluate import raw_score
         from treecf.ir.model import CategoricalFeature, EnsembleIR, Link, Node, Tree
@@ -411,7 +721,9 @@ class TestCategoricalRegions:
         x = np.array([2.0])
         score = raw_score(ir, x)
         interval = (score - interval_width, score + interval_width)
-        return _recourse_region(ir, x, x, interval, compiled, None, 0.0)
+        return _recourse_region(
+            ir, x, x, interval, compiled, None, 0.0, mode=mode, keep_witnesses=True
+        )
 
     def test_grows_the_routing_equivalent_codes(self) -> None:
         # codes 2 and 3 share a block (both in the split set): the whole block
@@ -442,3 +754,17 @@ class TestCategoricalRegions:
     def test_describe_renders_names(self) -> None:
         region = self._region(interval_width=0.4)
         assert region.describe()["occupation"] == "∈ {nurse, smith}"
+
+    def test_maximal_mode_proves_the_excluded_block_with_a_witness(self) -> None:
+        region = self._region(interval_width=0.4, mode="maximal")
+        assert region.feature_categories == {"occupation": (2, 3)}
+        assert region.maximal_categories == {"occupation": True}
+        assert region.witnesses is not None
+        np.testing.assert_array_equal(region.witnesses["occupation:cat"], [0.0])
+        assert region.describe()["occupation"] == "∈ {nurse, smith} (maximal)"
+
+    def test_maximal_mode_with_every_block_admitted(self) -> None:
+        region = self._region(interval_width=2.0, mode="maximal")
+        assert region.feature_categories == {"occupation": (0, 1, 2, 3, 4)}
+        assert region.maximal_categories == {"occupation": True}
+        assert region.witnesses == {}

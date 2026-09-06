@@ -57,6 +57,11 @@ CAPABILITIES = [
     "certificate",
     "categorical",
     "probcal",
+    "refine",
+    "maximal",
+    "trace",
+    "portfolio report",
+    "menu",
 ]
 
 # Every public plot function must appear as a committed, alt-texted figure
@@ -68,9 +73,11 @@ PLOT_FUNCTIONS = [
     "plot_alternatives",
     "plot_tradeoff",
     "plot_recourse_map",
+    "plot_recourse_menu",
     "plot_waterfall",
     "plot_effort",
     "plot_region",
+    "plot_certification_trace",
     "plot_batch_levers",
     "plot_batch_matrix",
     "plot_batch_summary",

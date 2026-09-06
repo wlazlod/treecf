@@ -45,8 +45,9 @@ and keeps its claim when the answer it did find is already that cheap.
 
 The one feature the repair leaves alone is one carrying a value policy: only
 one point per cell is on the policy's grid to begin with, so there is nowhere
-legal to move it, and a search over such a pair never claims to have settled
-the space.
+legal to move it. A completion that breaks a pair over such a feature is set
+aside unrepaired, which withdraws the claim exactly as any other failed repair
+does; a search that never meets one keeps its certificate.
 
 The other rule is propagation: assigning a feature can settle other features
 outright (the trigger side of an implication, or the last free member of a
@@ -72,14 +73,14 @@ from __future__ import annotations
 
 import math
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 import numpy as np
 
 from treecf.aim.cells import Cell, category_blocks
 from treecf.api import ValuePolicy
-from treecf.backends._exact_bounds import _EnsembleBounds
+from treecf.backends._exact_bounds import _EnsembleBounds, _RangeIv
 from treecf.backends._exact_domains import (
     FloatArray,
     _build_domains,
@@ -98,6 +99,14 @@ from treecf.backends._exact_orderpairs import (
     _intersect_cell,
 )
 from treecf.backends._exact_propagation import _Propagation, _PropFrame
+from treecf.backends._exact_refine import (
+    _Hier,
+    _Ledger,
+    _RefineCtx,
+    build_hierarchy,
+    run_refine,
+)
+from treecf.backends._exact_trace import TraceSample, _Trace
 from treecf.constraints.compile import CompiledConstraints
 from treecf.ir.evaluate import raw_score
 from treecf.ir.model import EnsembleIR
@@ -146,6 +155,7 @@ def solve_exact(
     gap: float = 0.0,
     time_budget_s: float = 10.0,
     incumbent: tuple[float, FloatArray] | None = None,
+    search: str = "classic",
 ) -> ExactResult:
     """Search the cell grid depth-first for the cheapest counterfactual.
 
@@ -206,6 +216,13 @@ def solve_exact(
         already costed by the caller on the same objective. The caller must
         also have verified the row: the search takes its feasibility on
         trust, prunes against its cost, and may hand it straight back.
+    search
+        ``"classic"`` assigns one candidate state per feature at a time.
+        ``"refine"`` first holds each numeric feature to a range of cells
+        and descends only where the score bound forces it (see
+        ``_exact_refine``); it proves the same optimum and the same
+        infeasibility certificates, though the row it returns may be a
+        different argmin of the same cost.
 
     Returns
     -------
@@ -226,6 +243,8 @@ def solve_exact(
     policy.
     """
     start = time.monotonic()
+    if search not in ("classic", "refine"):
+        raise ValueError(f"search must be 'classic' or 'refine', got {search!r}")
     order_pairs = _validate(compiled, value_policies)
     lo_t, hi_t = interval
     categorical = frozenset(ir.categorical)
@@ -246,7 +265,7 @@ def solve_exact(
         return ExactResult(
             x_cf=x.copy(),
             proof="optimal",
-            stats=_stats(0, 0, 0, 0.0, gap, True, False),
+            stats=_stats(0, 0, 0, 0.0, gap, True, False, search=search, trace=[(0, 0.0, 0.0)]),
             snapped={},
             distance=0.0,
         )
@@ -265,15 +284,25 @@ def solve_exact(
         return ExactResult(
             x_cf=None,
             proof="optimal",
-            stats=_stats(0, 0, 0, math.inf, gap, True, False),
+            stats=_stats(
+                0, 0, 0, math.inf, gap, True, False, search=search, trace=[(0, None, math.inf)]
+            ),
             snapped={},
             distance=None,
         )
     assigned = [False] * len(x)
     values = [0.0] * len(x)
+    # the state index each assigned feature currently sits on; a feature held
+    # to a whole interval (the coarse-to-fine search only) has its interval in
+    # ``ranges`` and the interval's achievable span in ``range_span``
+    picked = [0] * len(x)
+    ranges: list[_RangeIv | None] = [None] * len(x)
+    range_span: list[tuple[float, float] | None] = [None] * len(x)
     assigned_mask = 0
-    model_bounds = _EnsembleBounds(ir, assigned, values)
-    if_bounds = _EnsembleBounds(if_ir, assigned, values) if if_ir is not None else None
+    model_bounds = _EnsembleBounds(ir, assigned, values, ranges)
+    if_bounds = (
+        _EnsembleBounds(if_ir, assigned, values, ranges) if if_ir is not None else None
+    )
 
     presolve_removed = _presolve_domains(
         order, domains, model_bounds, if_bounds, min_total_path, lo_t, hi_t,
@@ -285,14 +314,16 @@ def solve_exact(
         return ExactResult(
             x_cf=None,
             proof="optimal",
-            stats=_stats(0, 0, 0, math.inf, gap, True, False, presolve_removed, True),
+            stats=_stats(
+                0, 0, 0, math.inf, gap, True, False, presolve_removed, True,
+                search=search, trace=[(0, None, math.inf)],
+            ),
             snapped={},
             distance=None,
         )
 
     h_suffix = _h_suffix(order, domains)
 
-    level_of = {f: level for level, f in enumerate(order)}
     # Every feature an implication, a one-hot group or an order pair mentions is
     # constraint-referenced, and _feature_order keeps all of those, so the search
     # really does get to decide each of them.
@@ -331,7 +362,6 @@ def solve_exact(
     repairable_pairs = frozenset(
         (a, b) for a, b in order_pairs if not any(policy_active(f) for f in (a, b))
     )
-    policy_bound = bool(order_pairs) and len(repairable_pairs) < len(order_pairs)
     onehot_members = {f for group in compiled.onehot_groups for f in group}
     demanded_values = _demanded_values(compiled)
     entangled_pairs = frozenset(
@@ -359,7 +389,7 @@ def solve_exact(
         )
     )
 
-    propagation = _Propagation(compiled, domains, assigned, values)
+    propagation = _Propagation(compiled, domains, assigned, values, ranges)
 
     incumbent_cost = math.inf
     incumbent_row: FloatArray | None = None
@@ -378,16 +408,40 @@ def solve_exact(
     nodes_pruned_cost = 0
     gap_prune_fired = False
     completed = True
-    # cheapest committed cost among the completions the repair had to set aside;
-    # nothing derived from one of those can cost less than this, so once the
-    # incumbent is at least as cheap, setting them aside changed nothing
-    dropped_floor = -math.inf if policy_bound else math.inf
+    ledger = _Ledger(dropped_floor=math.inf)
 
     stack: list[int] = []  # state index chosen at each assigned level
     frames: list[_Frame] = []
     g_stack = [0.0]  # cost committed before the level of the same index
     g = 0.0
     next_state = 0
+    trace = _Trace()
+
+    def frontier_bound() -> float:
+        """Cheapest cost any completion still ahead of the search could reach:
+        at every level, the next untried state (states are cost-sorted, so
+        it is the cheapest one left there) plus the cheapest remainder."""
+        bound = math.inf
+        for level, chosen in enumerate(stack):
+            states_at = domains[order[level]]
+            if chosen + 1 < len(states_at):
+                bound = min(
+                    bound, g_stack[level] + states_at[chosen + 1].cost + h_suffix[level + 1]
+                )
+        k = len(stack)
+        if k < len(order) and next_state < len(domains[order[k]]):
+            bound = min(bound, g_stack[k] + domains[order[k]][next_state].cost + h_suffix[k + 1])
+        return bound
+
+    def sample(is_incumbent: bool) -> None:
+        """One trace sample: the sound lower bound as the search knows it now."""
+        bound = frontier_bound()
+        if gap > 0.0:
+            bound = min(bound, incumbent_cost / (1.0 + gap))
+        set_aside_view = 0.0 if ledger.dropped_floor == -math.inf else ledger.dropped_floor
+        bound = min(bound, set_aside_view, incumbent_cost)
+        cost = None if incumbent_row is None else incumbent_cost
+        trace.record(nodes_expanded, cost, bound, is_incumbent=is_incumbent)
 
     def undo(frame: _Frame) -> None:
         nonlocal g, assigned_mask
@@ -411,31 +465,39 @@ def solve_exact(
         """
         if not assigned[f]:
             return spans[f]
+        span = range_span[f]
+        if span is not None:
+            # held to an interval: every state inside lies within its span,
+            # so the span stands in whether or not the pair can be repaired
+            return span
         if not movable:
             return values[f], values[f]
-        level = level_of[f]
-        chosen = stack[level] if level < len(stack) else next_state
-        return state_spans[f][chosen]
+        return state_spans[f][picked[f]]
 
     def unorderable() -> bool:
         """True when some pair ``a <= b`` is already out of reach: the lowest
-        value ``a`` can still hold is above the highest ``b`` can."""
+        value ``a`` can still hold is above the highest ``b`` can.
+
+        A pair no repair may touch is judged on the values its features were
+        given. When their cells could still have been ordered, the cut leaves
+        a completion the search never settled, and the ledger says so.
+        """
         for pair in bounded_pairs:
             a, b = pair
             movable = pair in repairable_pairs
             if reach(a, movable)[0] > reach(b, movable)[1]:
+                if not movable and reach(a, True)[0] <= reach(b, True)[1]:
+                    ledger.dropped_floor = -math.inf
                 return True
         return False
 
     def intersected_cell(f: int) -> Cell | None:
         """The cell the current assignment puts ``f`` in, narrowed to its
         constraint bounds; ``None`` when ``f`` is currently missing."""
-        level = level_of[f]
-        chosen = stack[level] if level < len(stack) else next_state
-        picked = domains[f][chosen]
-        if picked.is_nan:
+        state = domains[f][picked[f]]
+        if state.is_nan:
             return None
-        return _intersect_cell(grids[f][picked.cell_idx], float(bounds_lo[f]), float(bounds_hi[f]))
+        return _intersect_cell(grids[f][state.cell_idx], float(bounds_lo[f]), float(bounds_hi[f]))
 
     def demanded_for(a: int, b: int) -> list[float]:
         """Exact values a repair of this pair may have to land on: what an
@@ -473,7 +535,7 @@ def solve_exact(
             and float(row[a]) - float(row[b]) > _LINEAR_SLACK
         ]
 
-    def set_aside(pairs: list[tuple[int, int]]) -> None:
+    def set_aside(pairs: list[tuple[int, int]], g_now: float) -> None:
         """Remember a completion the repair could not settle.
 
         Every repair that comes to nothing goes through here, whatever the
@@ -483,13 +545,12 @@ def solve_exact(
         could have become for the pairs listed in ``g_floor_pairs``, and
         nothing at all can be said about any other, so those withdraw outright.
         """
-        nonlocal dropped_floor
         if all(pair in g_floor_pairs for pair in pairs):
-            dropped_floor = min(dropped_floor, g)
+            ledger.dropped_floor = min(ledger.dropped_floor, g_now)
         else:
-            dropped_floor = -math.inf
+            ledger.dropped_floor = -math.inf
 
-    def finish(row: FloatArray) -> FloatArray | None:
+    def finish(row: FloatArray, g_now: float) -> FloatArray | None:
         """The row to weigh against the incumbent, or ``None`` if there is none.
 
         A completed assignment usually goes straight to the arbiter. When it
@@ -509,7 +570,10 @@ def solve_exact(
         if not violated:
             return row if accepts(row) else None
         if any(pair not in repairable_pairs for pair in violated):
-            return None  # a policy-bound pair; the arbiter rejects the row anyway
+            # a policy-bound pair: nothing legal to move, so the completion is
+            # dropped unrepaired, and the ledger records that it was
+            set_aside(violated, g_now)
+            return None
         if len(violated) == 1:
             a, b = violated[0]
             best_row: FloatArray | None = None
@@ -525,7 +589,7 @@ def solve_exact(
                     best_cost = cost
                     best_row = variant
             if best_row is None:
-                set_aside(violated)
+                set_aside(violated, g_now)
             return best_row
         repaired = row.copy()
         for a, b in violated:
@@ -542,14 +606,78 @@ def solve_exact(
                     best_cost = cost
                     best_t = t
             if best_t is None:
-                set_aside(violated)
+                set_aside(violated, g_now)
                 return None
             repaired[a] = best_t
             repaired[b] = best_t
         if broken(repaired, order_pairs) or not accepts(repaired):
-            set_aside(violated)
+            set_aside(violated, g_now)
             return None
         return repaired
+
+    if search == "refine":
+        hiers: list[_Hier | None] = [None] * len(x)
+        for j in order:
+            if j in categorical or j in onehot_members:
+                continue  # blocks are coarse already; one-hot members hold 0/1
+            hiers[j] = build_hierarchy(
+                domains[j], grids[j], float(bounds_lo[j]), float(bounds_hi[j])
+            )
+        outcome = run_refine(
+            _RefineCtx(
+                x=x,
+                order=order,
+                domains=domains,
+                hiers=hiers,
+                h_suffix=h_suffix,
+                lo_t=lo_t,
+                hi_t=hi_t,
+                min_total_path=min_total_path,
+                gap=gap,
+                node_budget=node_budget,
+                time_budget_s=time_budget_s,
+                start=start,
+                assigned=assigned,
+                values=values,
+                ranges=ranges,
+                range_span=range_span,
+                picked=picked,
+                model_bounds=model_bounds,
+                if_bounds=if_bounds,
+                propagation=propagation,
+                ledger=ledger,
+                bounded_pairs=bounded_pairs,
+                accepts=accepts,
+                finish=finish,
+                unorderable=unorderable,
+                cost_of=lambda row: _cost_of_row(
+                    x, row, sigma, weights, lam, compiled.allow_missing, categorical
+                ),
+                incumbent=incumbent,
+            )
+        )
+        return ExactResult(
+            x_cf=outcome.incumbent_row,
+            proof=outcome.proof,
+            stats=_stats(
+                outcome.nodes_expanded,
+                outcome.nodes_pruned_score,
+                outcome.nodes_pruned_cost,
+                outcome.lower_bound,
+                gap,
+                outcome.completed,
+                outcome.warm_start_used,
+                presolve_removed,
+                search="refine",
+                coarse_accepts=outcome.coarse_accepts,
+                refinements=outcome.refinements,
+                trace=outcome.trace,
+            ),
+            snapped=_snapped_names(
+                order, outcome.incumbent_states, outcome.incumbent_row, x, compiled.feature_names
+            ),
+            distance=None if outcome.incumbent_row is None else outcome.incumbent_cost,
+        )
 
     while order:
         k = len(stack)
@@ -566,11 +694,14 @@ def solve_exact(
             break
 
         nodes_expanded += 1
+        if nodes_expanded & (nodes_expanded - 1) == 0:
+            sample(False)
         state = states[next_state]
         j = order[k]
         prop_frame, conflict = propagation.apply(j, state.value)
         assigned[j] = True
         values[j] = state.value
+        picked[j] = next_state
         assigned_mask |= 1 << j
         frame: _Frame = (
             j,
@@ -613,7 +744,7 @@ def solve_exact(
             for level, chosen in enumerate(stack):
                 row[order[level]] = domains[order[level]][chosen].value
             row[j] = state.value
-            accepted = finish(row)
+            accepted = finish(row, g)
             if accepted is not None:
                 cost = _cost_of_row(
                     x, accepted, sigma, weights, lam, compiled.allow_missing, categorical
@@ -625,6 +756,7 @@ def solve_exact(
                         domains[order[level]][chosen] for level, chosen in enumerate(stack)
                     ]
                     incumbent_states.append(state)
+                    sample(True)
             undo(frame)
             next_state += 1
             continue
@@ -634,7 +766,7 @@ def solve_exact(
         g_stack.append(g)
         next_state = 0
 
-    completed = completed and dropped_floor >= incumbent_cost
+    completed = completed and ledger.dropped_floor >= incumbent_cost
     if completed:
         lower_bound = math.inf
         if incumbent_row is not None:
@@ -647,19 +779,17 @@ def solve_exact(
         # a completion the repair set aside is worth at least its committed
         # cost, or — where even that does not hold — at least nothing, since
         # the objective is a sum of non-negative terms
-        set_aside_view = 0.0 if dropped_floor == -math.inf else dropped_floor
+        set_aside_view = 0.0 if ledger.dropped_floor == -math.inf else ledger.dropped_floor
         lower_bound = min(open_view, incumbent_cost, set_aside_view)
         proof = "heuristic"
+    trace.record(
+        nodes_expanded,
+        None if incumbent_row is None else incumbent_cost,
+        lower_bound,
+        is_incumbent=False,
+    )
 
-    snapped: dict[str, bool] = {}
-    for level, chosen_state in enumerate(incumbent_states or []):
-        f = order[level]
-        # a feature an order-pair repair moved no longer holds the value the
-        # policy produced, so it is not reported as snapped either
-        if incumbent_row is not None and incumbent_row[f] != chosen_state.value:
-            continue
-        if chosen_state.snapped and chosen_state.value != x[f]:
-            snapped[compiled.feature_names[f]] = True
+    snapped = _snapped_names(order, incumbent_states, incumbent_row, x, compiled.feature_names)
 
     return ExactResult(
         x_cf=incumbent_row,
@@ -673,10 +803,31 @@ def solve_exact(
             completed,
             warm_start_used,
             presolve_removed,
+            trace=trace.samples(),
         ),
         snapped=snapped,
         distance=None if incumbent_row is None else incumbent_cost,
     )
+
+
+def _snapped_names(
+    order: list[int],
+    incumbent_states: list[_State] | None,
+    incumbent_row: FloatArray | None,
+    x: FloatArray,
+    names: Sequence[str],
+) -> dict[str, bool]:
+    """Which features of the winning row were moved onto a policy grid."""
+    snapped: dict[str, bool] = {}
+    for level, chosen_state in enumerate(incumbent_states or []):
+        f = order[level]
+        # a feature an order-pair repair moved no longer holds the value the
+        # policy produced, so it is not reported as snapped either
+        if incumbent_row is not None and incumbent_row[f] != chosen_state.value:
+            continue
+        if chosen_state.snapped and chosen_state.value != x[f]:
+            snapped[names[f]] = True
+    return snapped
 
 
 def _presolve_domains(
@@ -734,6 +885,11 @@ def _stats(
     warm_start_used: bool,
     presolve_removed: int = 0,
     presolve_certified: bool = False,
+    *,
+    search: str = "classic",
+    coarse_accepts: int = 0,
+    refinements: int = 0,
+    trace: Sequence[TraceSample] = (),
 ) -> dict[str, object]:
     """The exact set of counters ``solve_exact`` reports.
 
@@ -745,6 +901,11 @@ def _stats(
     group, or an order pair whose two features can no longer be ordered. A
     mirror of this search has to file those feasibility cuts the same way,
     since the counter set itself is fixed.
+
+    ``search`` names the engine that ran; ``coarse_accepts`` and
+    ``refinements`` count the range-level acceptances and the range splits of
+    a coarse-to-fine search, and stay zero for the classic one. ``trace`` is
+    the bounded certification trace (``_exact_trace``).
     """
     return {
         "nodes_expanded": nodes_expanded,
@@ -756,4 +917,8 @@ def _stats(
         "warm_start_used": warm_start_used,
         "presolve_removed": presolve_removed,
         "presolve_certified": presolve_certified,
+        "search": search,
+        "coarse_accepts": coarse_accepts,
+        "refinements": refinements,
+        "trace": list(trace),
     }

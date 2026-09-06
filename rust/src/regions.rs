@@ -29,12 +29,18 @@
 //!   `None` instead, which `box_feasible` reads as a flat rejection of the
 //!   whole box — see `treecf.regions._tree_interval_bracket`'s own doc
 //!   comment for the full argument.
+//!
+//! The maximal mode (`RegionMode::Maximal`) settles every side the fast
+//! growth stops with the budgeted emptiness search in `crate::region_slab`,
+//! exactly as `treecf.regions._grow_box` does: extend on an empty search,
+//! prove with a witness, or leave the side unproven when the budget is spent.
 
 use crate::cells::{cell_index, Cell};
 use crate::constraints::{py_max, py_min, Constraints, LinearC, LIN_GE, LIN_LE, POLICY_SATISFIED};
 use crate::exact::orderpairs::{achievable_bounds, intersect_cell};
 use crate::interrupt::{InterruptProbe, SearchOutcome};
 use crate::ir::Ensemble;
+use crate::region_slab::{search_slab, SlabOutcome, SlabProblem};
 
 const LINEAR_SLACK: f64 = 1e-9; // matches Explainer._verify / CompiledConstraints.check_matrix
 
@@ -53,13 +59,35 @@ pub struct RegionBox {
     /// Certified category sets, aligned with the caller's open categorical
     /// features (ascending member codes); empty when none were requested.
     pub cat_sets: Vec<Vec<u32>>,
+    /// Per feature, whether the lower / upper side was proved impossible to
+    /// extend (maximal mode only; all false in fast mode).
+    pub maximal_lo: Vec<bool>,
+    pub maximal_hi: Vec<bool>,
+    /// Per open categorical feature, whether every excluded block was proved.
+    pub maximal_cat: Vec<bool>,
+    /// Search nodes each side spent, and each open categorical feature.
+    pub used_lo: Vec<u64>,
+    pub used_hi: Vec<u64>,
+    pub used_cat: Vec<u64>,
+    /// `(feature, side 0/1/2 for lo/hi/cat, point)` for every proved side
+    /// that has a violating point, in the order they were found.
+    pub witnesses: Vec<(u32, u8, Vec<f64>)>,
+}
+
+/// How a region is grown: the fast conservative-bound growth, or the maximal
+/// mode with its per-side emptiness-search budget.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RegionMode {
+    Fast,
+    Maximal { budget: u64 },
 }
 
 // --------------------------------------------------------------- oracle ---
 
 /// `[min, max]` leaf value reachable from tree node `node` over the box, or
 /// `None` if the box cannot be soundly bracketed at all (see the module doc).
-fn tree_interval_bracket(
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn tree_interval_bracket(
     ens: &Ensemble,
     missing_defined: &[bool],
     node: u32,
@@ -67,6 +95,7 @@ fn tree_interval_bracket(
     hi: &[f64],
     is_nan: &[bool],
     cat_sets: &[Vec<u32>],
+    mut straddles: Option<&mut [u64]>,
 ) -> Option<(f64, f64)> {
     let i = node as usize;
     if ens.feature[i] < 0 {
@@ -83,7 +112,16 @@ fn tree_interval_bracket(
         } else {
             ens.right[i]
         };
-        return tree_interval_bracket(ens, missing_defined, child, lo, hi, is_nan, cat_sets);
+        return tree_interval_bracket(
+            ens,
+            missing_defined,
+            child,
+            lo,
+            hi,
+            is_nan,
+            cat_sets,
+            straddles,
+        );
     }
     // a categorical coordinate holds a SET of codes, not an interval: route
     // each member and take a side only when every member agrees; a set split
@@ -124,15 +162,52 @@ fn tree_interval_bracket(
         }
     };
     if all_left {
-        return tree_interval_bracket(ens, missing_defined, ens.left[i], lo, hi, is_nan, cat_sets);
+        return tree_interval_bracket(
+            ens,
+            missing_defined,
+            ens.left[i],
+            lo,
+            hi,
+            is_nan,
+            cat_sets,
+            straddles,
+        );
     }
     if all_right {
-        return tree_interval_bracket(ens, missing_defined, ens.right[i], lo, hi, is_nan, cat_sets);
+        return tree_interval_bracket(
+            ens,
+            missing_defined,
+            ens.right[i],
+            lo,
+            hi,
+            is_nan,
+            cat_sets,
+            straddles,
+        );
     }
-    let (lmin, lmax) =
-        tree_interval_bracket(ens, missing_defined, ens.left[i], lo, hi, is_nan, cat_sets)?;
-    let (rmin, rmax) =
-        tree_interval_bracket(ens, missing_defined, ens.right[i], lo, hi, is_nan, cat_sets)?;
+    if let Some(counts) = straddles.as_deref_mut() {
+        counts[f] += 1;
+    }
+    let (lmin, lmax) = tree_interval_bracket(
+        ens,
+        missing_defined,
+        ens.left[i],
+        lo,
+        hi,
+        is_nan,
+        cat_sets,
+        straddles.as_deref_mut(),
+    )?;
+    let (rmin, rmax) = tree_interval_bracket(
+        ens,
+        missing_defined,
+        ens.right[i],
+        lo,
+        hi,
+        is_nan,
+        cat_sets,
+        straddles,
+    )?;
     Some((py_min(lmin, rmin), py_max(lmax, rmax)))
 }
 
@@ -152,7 +227,7 @@ fn ensemble_bracket(
     let mut total_max = ens.base_score;
     for &root in &ens.tree_roots {
         let (tmin, tmax) =
-            tree_interval_bracket(ens, missing_defined, root, lo, hi, is_nan, cat_sets)?;
+            tree_interval_bracket(ens, missing_defined, root, lo, hi, is_nan, cat_sets, None)?;
         total_min += tmin;
         total_max += tmax;
     }
@@ -246,7 +321,7 @@ impl BracketCache {
             .tree_roots
             .iter()
             .map(|&root| {
-                tree_interval_bracket(ens, missing_defined, root, lo, hi, is_nan, cat_sets)
+                tree_interval_bracket(ens, missing_defined, root, lo, hi, is_nan, cat_sets, None)
             })
             .collect();
         let n_trees = ens.tree_roots.len();
@@ -298,6 +373,7 @@ impl BracketCache {
                 hi,
                 is_nan,
                 cat_sets,
+                None,
             );
         }
         saved
@@ -327,7 +403,13 @@ impl BracketCache {
 /// Finishes the cell `value` is already inside first, if it has not yet
 /// reached that cell's own achievable edge; once it has, claims the whole
 /// next cell. Clamped to the instance bounds throughout.
-fn next_edge(cells: &[Cell], value: f64, lo_b: f64, hi_b: f64, upper: bool) -> Option<f64> {
+fn next_edge(
+    cells: &[Cell],
+    value: f64,
+    lo_b: f64,
+    hi_b: f64,
+    upper: bool,
+) -> Option<(f64, usize)> {
     if value.is_infinite() {
         return None;
     }
@@ -337,20 +419,21 @@ fn next_edge(cells: &[Cell], value: f64, lo_b: f64, hi_b: f64, upper: bool) -> O
     let (cur_lo, cur_hi) = achievable_bounds(&iv);
     if upper {
         if cur_hi > value {
-            return Some(cur_hi);
+            return Some((cur_hi, idx));
         }
         if idx + 1 >= cells.len() {
             return None;
         }
-        return intersect_cell(&cells[idx + 1], lo_b, hi_b).map(|c| achievable_bounds(&c).1);
+        return intersect_cell(&cells[idx + 1], lo_b, hi_b)
+            .map(|c| (achievable_bounds(&c).1, idx + 1));
     }
     if cur_lo < value {
-        return Some(cur_lo);
+        return Some((cur_lo, idx));
     }
     if idx == 0 {
         return None;
     }
-    intersect_cell(&cells[idx - 1], lo_b, hi_b).map(|c| achievable_bounds(&c).0)
+    intersect_cell(&cells[idx - 1], lo_b, hi_b).map(|c| (achievable_bounds(&c).0, idx - 1))
 }
 
 /// Attempt one cell of growth on feature `j` in one direction. Mutates
@@ -378,7 +461,7 @@ fn try_grow(
     if_cache: &mut Option<BracketCache>,
 ) -> bool {
     let current = if upper { box_hi[j] } else { box_lo[j] };
-    let Some(candidate) = next_edge(cells, current, lo_b, hi_b, upper) else {
+    let Some((candidate, _claimed)) = next_edge(cells, current, lo_b, hi_b, upper) else {
         return false;
     };
     if upper {
@@ -433,6 +516,257 @@ fn try_grow(
     false
 }
 
+/// The conservative oracle over the cached brackets and the box.
+#[allow(clippy::too_many_arguments)]
+fn check(
+    ens: &Ensemble,
+    if_pair: Option<(&Ensemble, &[bool])>,
+    min_total_path: f64,
+    interval: (f64, f64),
+    linears: &[LinearC],
+    x_cf: &[f64],
+    box_lo: &[f64],
+    box_hi: &[f64],
+    model_cache: &BracketCache,
+    if_cache: &Option<BracketCache>,
+) -> bool {
+    let Some((score_min, score_max)) = model_cache.total(ens.base_score) else {
+        return false;
+    };
+    if score_min < interval.0 || score_max > interval.1 {
+        return false;
+    }
+    if let (Some((if_ens, _)), Some(cache)) = (if_pair, if_cache.as_ref()) {
+        let Some((if_min, _if_max)) = cache.total(if_ens.base_score) else {
+            return false;
+        };
+        if if_min < min_total_path {
+            return false;
+        }
+    }
+    linears
+        .iter()
+        .all(|lin| linear_holds(lin, x_cf, box_lo, box_hi))
+}
+
+/// The worst corner of the first Linear the box breaks: a point in the box
+/// that violates it, so a witness without any search — mirror of Python's
+/// `failing_corner`.
+fn failing_corner(
+    linears: &[LinearC],
+    x_cf: &[f64],
+    box_lo: &[f64],
+    box_hi: &[f64],
+) -> Option<Vec<f64>> {
+    for lin in linears {
+        if linear_holds(lin, x_cf, box_lo, box_hi) {
+            continue;
+        }
+        let mut hi_sum = 0.0;
+        for (k, &j) in lin.indices.iter().enumerate() {
+            let j = j as usize;
+            hi_sum += py_max(lin.coefs[k] * box_lo[j], lin.coefs[k] * box_hi[j]);
+        }
+        let maximize = lin.op == LIN_LE || (lin.op != LIN_GE && hi_sum > lin.rhs + LINEAR_SLACK);
+        let mut point = x_cf.to_vec();
+        for (k, &j) in lin.indices.iter().enumerate() {
+            let j = j as usize;
+            let high = (lin.coefs[k] > 0.0) == maximize;
+            point[j] = if high { box_hi[j] } else { box_lo[j] };
+        }
+        return Some(point);
+    }
+    None
+}
+
+/// Everything the maximal mode's per-side step reads — mirror of the closure
+/// environment `_grow_box` gives `try_grow_maximal`.
+struct Growth<'a> {
+    ens: &'a Ensemble,
+    missing_defined: &'a [bool],
+    if_pair: Option<(&'a Ensemble, &'a [bool])>,
+    min_total_path: f64,
+    interval: (f64, f64),
+    linears: &'a [LinearC],
+    x_cf: &'a [f64],
+    is_nan: &'a [bool],
+    grids: &'a [Vec<Cell>],
+    degenerate: &'a [bool],
+    cat_blocks_by_feature: &'a [Vec<Vec<u32>>],
+    budget: u64,
+}
+
+/// What a side step in the maximal mode concluded.
+enum SideOutcome {
+    Grew,
+    Closed,
+    Interrupted,
+}
+
+impl Growth<'_> {
+    fn slab_problem(
+        &self,
+        slab_lo: Vec<f64>,
+        slab_hi: Vec<f64>,
+        cat_sets: &[Vec<u32>],
+        fixed_cat: Option<usize>,
+        fixed_members: &[u32],
+    ) -> SlabProblem<'_> {
+        let mut sets = cat_sets.to_vec();
+        if let Some(c) = fixed_cat {
+            sets[c] = fixed_members.to_vec();
+        }
+        let n = self.x_cf.len();
+        let free: Vec<usize> = (0..n)
+            .filter(|&k| !self.degenerate[k] && slab_lo[k] < slab_hi[k])
+            .collect();
+        let free_cats: Vec<usize> = (0..n)
+            .filter(|&c| Some(c) != fixed_cat && sets[c].len() > 1)
+            .collect();
+        SlabProblem {
+            ens: self.ens,
+            missing_defined: self.missing_defined,
+            if_pair: self.if_pair,
+            min_total_path: self.min_total_path,
+            interval: self.interval,
+            grids: self.grids,
+            x_cf: self.x_cf,
+            is_nan: self.is_nan,
+            lo: slab_lo,
+            hi: slab_hi,
+            cat_sets: sets,
+            free,
+            free_cats,
+            blocks: self.cat_blocks_by_feature,
+        }
+    }
+
+    /// One side of one feature in the maximal mode — mirror of Python's
+    /// `try_grow_maximal`. `proved`/`used`/`closed` are the side's own slots.
+    #[allow(clippy::too_many_arguments)]
+    fn try_grow_maximal(
+        &self,
+        j: usize,
+        upper: bool,
+        box_lo: &mut [f64],
+        box_hi: &mut [f64],
+        lo_b: f64,
+        hi_b: f64,
+        cat_sets: &[Vec<u32>],
+        model_cache: &mut BracketCache,
+        if_cache: &mut Option<BracketCache>,
+        proved: &mut bool,
+        used: &mut u64,
+        closed: &mut bool,
+        witnesses: &mut Vec<(u32, u8, Vec<f64>)>,
+        probe: InterruptProbe<'_>,
+    ) -> SideOutcome {
+        let cells = &self.grids[j];
+        let current = if upper { box_hi[j] } else { box_lo[j] };
+        let side: u8 = if upper { 1 } else { 0 };
+        *closed = true;
+        let Some((candidate, claimed)) = next_edge(cells, current, lo_b, hi_b, upper) else {
+            *proved = true; // an instance bound or infinity: nothing lies beyond
+            return SideOutcome::Closed;
+        };
+        if upper {
+            box_hi[j] = candidate;
+        } else {
+            box_lo[j] = candidate;
+        }
+        let saved = model_cache.update(
+            self.ens,
+            self.missing_defined,
+            j,
+            box_lo,
+            box_hi,
+            self.is_nan,
+            cat_sets,
+        );
+        let mut saved_if: Vec<(usize, Option<(f64, f64)>)> = Vec::new();
+        if let (Some((if_ens, if_missing_defined)), Some(cache)) = (self.if_pair, if_cache.as_mut())
+        {
+            saved_if = cache.update(
+                if_ens,
+                if_missing_defined,
+                j,
+                box_lo,
+                box_hi,
+                self.is_nan,
+                cat_sets,
+            );
+        }
+        let retract = |box_lo: &mut [f64],
+                       box_hi: &mut [f64],
+                       model_cache: &mut BracketCache,
+                       if_cache: &mut Option<BracketCache>| {
+            model_cache.restore(&saved);
+            if let Some(cache) = if_cache.as_mut() {
+                cache.restore(&saved_if);
+            }
+            if upper {
+                box_hi[j] = current;
+            } else {
+                box_lo[j] = current;
+            }
+        };
+        if check(
+            self.ens,
+            self.if_pair,
+            self.min_total_path,
+            self.interval,
+            self.linears,
+            self.x_cf,
+            box_lo,
+            box_hi,
+            model_cache,
+            if_cache,
+        ) {
+            *closed = false;
+            return SideOutcome::Grew;
+        }
+        if let Some(corner) = failing_corner(self.linears, self.x_cf, box_lo, box_hi) {
+            retract(box_lo, box_hi, model_cache, if_cache);
+            *proved = true;
+            witnesses.push((j as u32, side, corner));
+            return SideOutcome::Closed;
+        }
+        if claimed == cell_index(cells, current) {
+            // finishing the cell `current` sits in: every added point routes
+            // exactly as a certified point does, and the Linears just passed
+            *closed = false;
+            return SideOutcome::Grew;
+        }
+        let slab_cell = intersect_cell(&cells[claimed], lo_b, hi_b)
+            .expect("the edge came from this very intersection");
+        let (slab_ach_lo, slab_ach_hi) = achievable_bounds(&slab_cell);
+        let mut slab_lo = box_lo.to_vec();
+        let mut slab_hi = box_hi.to_vec();
+        slab_lo[j] = slab_ach_lo;
+        slab_hi[j] = slab_ach_hi;
+        let problem = self.slab_problem(slab_lo, slab_hi, cat_sets, None, &[]);
+        let (outcome, nodes) = search_slab(&problem, self.budget.saturating_sub(*used), probe);
+        *used += nodes;
+        match outcome {
+            SlabOutcome::Empty => {
+                *closed = false;
+                SideOutcome::Grew
+            }
+            SlabOutcome::Interrupted => SideOutcome::Interrupted,
+            SlabOutcome::Witness(point) => {
+                retract(box_lo, box_hi, model_cache, if_cache);
+                *proved = true;
+                witnesses.push((j as u32, side, point));
+                SideOutcome::Closed
+            }
+            SlabOutcome::Unknown => {
+                retract(box_lo, box_hi, model_cache, if_cache);
+                SideOutcome::Closed
+            }
+        }
+    }
+}
+
 /// Grow a certified box around the verified counterfactual `x_cf`. `open_set`
 /// is the ascending, deduplicated list of feature indices `_degenerate_features`
 /// (Python) did not exclude — the only features growth may touch; every other
@@ -445,9 +779,14 @@ fn try_grow(
 /// full round accepts nothing. No step reads from hash-map iteration order,
 /// so the result is bit-deterministic.
 ///
-/// `probe` is asked every `SIGNAL_CHECK_INTERVAL` growth attempts whether to
-/// stop. Answering yes drops the partly grown box and returns
-/// `SearchOutcome::Interrupted` — a box is only ever handed back whole.
+/// `probe` is asked every `SIGNAL_CHECK_INTERVAL` growth attempts (and
+/// periodically inside an emptiness search) whether to stop. Answering yes
+/// drops the partly grown box and returns `SearchOutcome::Interrupted` — a
+/// box is only ever handed back whole.
+///
+/// In the maximal mode a side the oracle rejects is settled by
+/// `Growth::try_grow_maximal` instead of closed outright, and a side once
+/// closed is never retried — mirror of `treecf.regions._grow_box`.
 #[allow(clippy::too_many_arguments)]
 pub fn recourse_region(
     ens: &Ensemble,
@@ -462,6 +801,7 @@ pub fn recourse_region(
     min_total_path: f64,
     cat_open: &[usize],
     cat_blocks: &[Vec<Vec<u32>>],
+    mode: RegionMode,
     probe: InterruptProbe<'_>,
 ) -> SearchOutcome<RegionBox> {
     let ensembles: Vec<&Ensemble> = match if_pair {
@@ -469,10 +809,53 @@ pub fn recourse_region(
         Some((if_ens, _)) => vec![ens, if_ens],
     };
     let grids = crate::exact::constraint_cells(cons, &ensembles);
+    let n = x_cf.len();
+    let budget = match mode {
+        RegionMode::Fast => 0,
+        RegionMode::Maximal { budget } => budget,
+    };
+    let maximal_mode = mode != RegionMode::Fast;
+    let mut degenerate = vec![true; n];
+    for &j in open_set {
+        degenerate[j] = false;
+    }
+    let mut cat_blocks_by_feature: Vec<Vec<Vec<u32>>> = vec![Vec::new(); n];
+    for (k, &j) in cat_open.iter().enumerate() {
+        cat_blocks_by_feature[j] = cat_blocks[k].clone();
+    }
+    let growth = Growth {
+        ens,
+        missing_defined,
+        if_pair,
+        min_total_path,
+        interval,
+        linears: &cons.linears,
+        x_cf,
+        is_nan: &[],
+        grids: &grids,
+        degenerate: &degenerate,
+        cat_blocks_by_feature: &cat_blocks_by_feature,
+        budget,
+    };
+    let mut maximal_lo = vec![false; n];
+    let mut maximal_hi = vec![false; n];
+    let mut used_lo = vec![0u64; n];
+    let mut used_hi = vec![0u64; n];
+    let mut closed_lo = vec![false; n];
+    let mut closed_hi = vec![false; n];
+    let mut witnesses: Vec<(u32, u8, Vec<f64>)> = Vec::new();
+    let mut block_closed: Vec<Vec<bool>> =
+        cat_blocks.iter().map(|b| vec![false; b.len()]).collect();
+    let mut cat_unproven = vec![false; cat_open.len()];
+    let mut used_cat = vec![0u64; cat_open.len()];
 
     let mut box_lo = x_cf.to_vec();
     let mut box_hi = x_cf.to_vec();
     let is_nan_arr: Vec<bool> = x_cf.iter().map(|v| v.is_nan()).collect();
+    let growth = Growth {
+        is_nan: &is_nan_arr,
+        ..growth
+    };
     // certified member sets, indexed by FEATURE (empty = untracked coordinate)
     let mut cat_sets: Vec<Vec<u32>> = vec![Vec::new(); ens.n_features];
     for &j in cat_open {
@@ -506,46 +889,91 @@ pub fn recourse_region(
         let mut still_open: Vec<usize> = Vec::new();
         for &j in &open {
             let cells = &grids[j];
-            let grew_up = try_grow(
-                j,
-                true,
-                &mut box_lo,
-                &mut box_hi,
-                cells,
-                lo_b[j],
-                hi_b[j],
-                ens,
-                missing_defined,
-                if_pair,
-                min_total_path,
-                interval,
-                &cons.linears,
-                x_cf,
-                &is_nan_arr,
-                &cat_sets,
-                &mut model_cache,
-                &mut if_cache,
-            );
-            let grew_down = try_grow(
-                j,
-                false,
-                &mut box_lo,
-                &mut box_hi,
-                cells,
-                lo_b[j],
-                hi_b[j],
-                ens,
-                missing_defined,
-                if_pair,
-                min_total_path,
-                interval,
-                &cons.linears,
-                x_cf,
-                &is_nan_arr,
-                &cat_sets,
-                &mut model_cache,
-                &mut if_cache,
-            );
+            let (grew_up, grew_down) = if maximal_mode {
+                let mut grew = [false, false];
+                for (side, upper) in [(1usize, true), (0usize, false)] {
+                    let closed = if upper { closed_hi[j] } else { closed_lo[j] };
+                    if closed {
+                        continue;
+                    }
+                    let outcome = growth.try_grow_maximal(
+                        j,
+                        upper,
+                        &mut box_lo,
+                        &mut box_hi,
+                        lo_b[j],
+                        hi_b[j],
+                        &cat_sets,
+                        &mut model_cache,
+                        &mut if_cache,
+                        if upper {
+                            &mut maximal_hi[j]
+                        } else {
+                            &mut maximal_lo[j]
+                        },
+                        if upper {
+                            &mut used_hi[j]
+                        } else {
+                            &mut used_lo[j]
+                        },
+                        if upper {
+                            &mut closed_hi[j]
+                        } else {
+                            &mut closed_lo[j]
+                        },
+                        &mut witnesses,
+                        probe,
+                    );
+                    match outcome {
+                        SideOutcome::Grew => grew[side] = true,
+                        SideOutcome::Closed => {}
+                        SideOutcome::Interrupted => return SearchOutcome::Interrupted,
+                    }
+                }
+                (grew[1], grew[0])
+            } else {
+                let grew_up = try_grow(
+                    j,
+                    true,
+                    &mut box_lo,
+                    &mut box_hi,
+                    cells,
+                    lo_b[j],
+                    hi_b[j],
+                    ens,
+                    missing_defined,
+                    if_pair,
+                    min_total_path,
+                    interval,
+                    &cons.linears,
+                    x_cf,
+                    &is_nan_arr,
+                    &cat_sets,
+                    &mut model_cache,
+                    &mut if_cache,
+                );
+                let grew_down = try_grow(
+                    j,
+                    false,
+                    &mut box_lo,
+                    &mut box_hi,
+                    cells,
+                    lo_b[j],
+                    hi_b[j],
+                    ens,
+                    missing_defined,
+                    if_pair,
+                    min_total_path,
+                    interval,
+                    &cons.linears,
+                    x_cf,
+                    &is_nan_arr,
+                    &cat_sets,
+                    &mut model_cache,
+                    &mut if_cache,
+                );
+                (grew_up, grew_down)
+            };
             if grew_up || grew_down {
                 still_open.push(j);
             }
@@ -563,13 +991,13 @@ pub fn recourse_region(
                 continue;
             }
             let mut grew_cat = false;
-            for members in &cat_blocks[k] {
+            for (b_idx, members) in cat_blocks[k].iter().enumerate() {
                 let new_members: Vec<u32> = members
                     .iter()
                     .copied()
                     .filter(|c| !cat_sets[j].contains(c))
                     .collect();
-                if new_members.is_empty() {
+                if new_members.is_empty() || (maximal_mode && block_closed[k][b_idx]) {
                     continue;
                 }
                 cat_sets[j].extend(new_members.iter().copied());
@@ -617,13 +1045,49 @@ pub fn recourse_region(
                 };
                 if ok {
                     grew_cat = true;
-                } else {
+                } else if !maximal_mode {
                     model_cache.restore(&saved);
                     if let Some(cache) = if_cache.as_mut() {
                         cache.restore(&saved_if);
                     }
                     for c in &new_members {
                         cat_sets[j].retain(|m| m != c);
+                    }
+                } else {
+                    for c in &new_members {
+                        cat_sets[j].retain(|m| m != c);
+                    }
+                    let problem = growth.slab_problem(
+                        box_lo.clone(),
+                        box_hi.clone(),
+                        &cat_sets,
+                        Some(j),
+                        &new_members,
+                    );
+                    let (outcome, nodes) =
+                        search_slab(&problem, budget.saturating_sub(used_cat[k]), probe);
+                    used_cat[k] += nodes;
+                    match outcome {
+                        SlabOutcome::Empty => {
+                            cat_sets[j].extend(new_members.iter().copied());
+                            grew_cat = true;
+                        }
+                        SlabOutcome::Interrupted => return SearchOutcome::Interrupted,
+                        SlabOutcome::Witness(point) => {
+                            model_cache.restore(&saved);
+                            if let Some(cache) = if_cache.as_mut() {
+                                cache.restore(&saved_if);
+                            }
+                            block_closed[k][b_idx] = true;
+                            witnesses.push((j as u32, 2, point));
+                        }
+                        SlabOutcome::Unknown => {
+                            model_cache.restore(&saved);
+                            if let Some(cache) = if_cache.as_mut() {
+                                cache.restore(&saved_if);
+                            }
+                            cat_unproven[k] = true;
+                        }
                     }
                 }
                 attempts += 1;
@@ -647,10 +1111,26 @@ pub fn recourse_region(
         members.sort_unstable();
         grown.push(members);
     }
+    let mut maximal_cat = vec![false; cat_open.len()];
+    if maximal_mode {
+        for (k, &j) in cat_open.iter().enumerate() {
+            let excluded_proved = cat_blocks[k].iter().enumerate().all(|(b_idx, members)| {
+                members.iter().all(|c| cat_sets[j].contains(c)) || block_closed[k][b_idx]
+            });
+            maximal_cat[k] = excluded_proved && !cat_unproven[k];
+        }
+    }
     SearchOutcome::Done(RegionBox {
         lo: box_lo,
         hi: box_hi,
         cat_sets: grown,
+        maximal_lo,
+        maximal_hi,
+        maximal_cat,
+        used_lo,
+        used_hi,
+        used_cat,
+        witnesses,
     })
 }
 
@@ -753,6 +1233,7 @@ mod tests {
             0.0,
             &[],
             &[],
+            RegionMode::Fast,
             &mut || false,
         ));
         let second = done(recourse_region(
@@ -768,6 +1249,7 @@ mod tests {
             0.0,
             &[],
             &[],
+            RegionMode::Fast,
             &mut || false,
         ));
         assert_eq!(first.lo, second.lo);
@@ -793,15 +1275,21 @@ mod tests {
         // starting inside [1,3], growing up first claims this cell's own
         // achievable edge (3.0, closed) ...
         let first = next_edge(f0, 1.0, f64::NEG_INFINITY, f64::INFINITY, true);
-        assert_eq!(first, Some(3.0));
+        assert_eq!(first, Some((3.0, 1)));
         // ... then the next cell (3,inf) is unbounded above, so its achievable
         // edge IS +inf, not a stepped near-3 value -- "no further constraint
         // that way", per the module's own doc comment.
-        let second = next_edge(f0, first.unwrap(), f64::NEG_INFINITY, f64::INFINITY, true);
-        assert_eq!(second, Some(f64::INFINITY));
+        let second = next_edge(f0, first.unwrap().0, f64::NEG_INFINITY, f64::INFINITY, true);
+        assert_eq!(second, Some((f64::INFINITY, 2)));
         // an already-infinite edge never looks anything up again
         assert_eq!(
-            next_edge(f0, second.unwrap(), f64::NEG_INFINITY, f64::INFINITY, true),
+            next_edge(
+                f0,
+                second.unwrap().0,
+                f64::NEG_INFINITY,
+                f64::INFINITY,
+                true
+            ),
             None
         );
 
@@ -809,9 +1297,9 @@ mod tests {
         // lo_b=0.0 (not the joint grid) stops it -- one more step lands
         // exactly on the clamp, and there is nothing further past it.
         let down_first = next_edge(f0, 1.0, 0.0, f64::INFINITY, false);
-        assert_eq!(down_first, Some(0.0));
+        assert_eq!(down_first, Some((0.0, 0)));
         assert_eq!(
-            next_edge(f0, down_first.unwrap(), 0.0, f64::INFINITY, false),
+            next_edge(f0, down_first.unwrap().0, 0.0, f64::INFINITY, false),
             None
         );
     }
@@ -900,6 +1388,7 @@ mod tests {
             0.0,
             &[],
             &[],
+            RegionMode::Fast,
             &mut || false,
         ));
         // g must never cross into the unrouted subtree (g >= 1.0): the (unsound)
@@ -961,6 +1450,7 @@ mod tests {
             0.0,
             &[],
             &[],
+            RegionMode::Fast,
             probe,
         )
     }
@@ -1044,6 +1534,7 @@ mod tests {
             0.0,
             &[],
             &[],
+            RegionMode::Fast,
             &mut || false,
         ));
         let lo_bits: Vec<u64> = region.lo.iter().map(|v| v.to_bits()).collect();

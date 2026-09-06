@@ -44,7 +44,9 @@ EXACT_NODE_BUDGET = 2_000_000
 GENETIC_TIME_BUDGET_S = 5.0
 
 
-def run_scenario(tag: str, ir, X, seeds: list[int]) -> dict[str, object]:
+def run_scenario(
+    tag: str, ir, X, seeds: list[int], search: str = "classic"
+) -> dict[str, object]:
     exp = Explainer(ir, background=X[:2000])
     x = X[0].astype(float)
     scores = [raw_score(ir, X[i]) for i in range(200)]
@@ -58,7 +60,7 @@ def run_scenario(tag: str, ir, X, seeds: list[int]) -> dict[str, object]:
     def exact_run(seed: int, warm_start: bool):
         return exp.explain(
             x, target, backend="exact", time_budget_s=EXACT_TIME_BUDGET_S, seed=seed,
-            warm_start=warm_start, node_budget=EXACT_NODE_BUDGET,
+            warm_start=warm_start, node_budget=EXACT_NODE_BUDGET, search=search,
         )
 
     genetic_run(seeds[0])  # warmups (excluded)
@@ -100,7 +102,7 @@ def run_scenario(tag: str, ir, X, seeds: list[int]) -> dict[str, object]:
     proof_mix = {p: proofs.count(p) for p in sorted(set(proofs))}
 
     print(
-        f"{tag:38s} genetic median {gen_med:7.3f}s p95 {gen_p95:7.3f}s | "
+        f"{tag:38s} [{search}] genetic median {gen_med:7.3f}s p95 {gen_p95:7.3f}s | "
         f"exact(warm) median {on_med:7.3f}s p95 {on_p95:7.3f}s | "
         f"exact(cold) median {off_med:7.3f}s p95 {off_p95:7.3f}s"
     )
@@ -109,8 +111,9 @@ def run_scenario(tag: str, ir, X, seeds: list[int]) -> dict[str, object]:
         f"nodes_expanded median {nodes_med:9.0f} | proof mix {proof_mix}"
     )
     return {
-        "tag": tag, "genetic": (gen_med, gen_p95), "exact_warm": (on_med, on_p95),
-        "exact_cold": (off_med, off_p95), "gap_median": gap_med, "gap_max": gap_max,
+        "tag": tag, "search": search, "genetic": (gen_med, gen_p95),
+        "exact_warm": (on_med, on_p95), "exact_cold": (off_med, off_p95),
+        "gap_median": gap_med, "gap_max": gap_max,
         "nodes_expanded_median": nodes_med, "proof_mix": proof_mix,
     }
 
@@ -119,7 +122,9 @@ CERTIFICATION_BUDGET_S = 60.0
 CERTIFICATION_NODE_BUDGET = 500_000_000  # wall time is the binding budget here
 
 
-def run_certification_cell(tag: str, ir, X, seeds: list[int]) -> dict[str, object]:
+def run_certification_cell(
+    tag: str, ir, X, seeds: list[int], search: str = "classic"
+) -> dict[str, object]:
     """Median time-to-certificate and certified fractions within 10 s / 60 s."""
     from treecf import Infeasible
 
@@ -134,7 +139,7 @@ def run_certification_cell(tag: str, ir, X, seeds: list[int]) -> dict[str, objec
         t0 = time.perf_counter()
         result = exp.explain(
             x, target, backend="exact", time_budget_s=CERTIFICATION_BUDGET_S,
-            seed=seed, warm_start=True, node_budget=CERTIFICATION_NODE_BUDGET,
+            seed=seed, warm_start=True, node_budget=CERTIFICATION_NODE_BUDGET, search=search,
         )
         elapsed = time.perf_counter() - t0
         times.append(elapsed)
@@ -149,12 +154,13 @@ def run_certification_cell(tag: str, ir, X, seeds: list[int]) -> dict[str, objec
     within_10 = fast / len(seeds)
     within_60 = sum(1 for ok in certified if ok) / len(seeds)
     print(
-        f"{tag:38s} time-to-certificate median {median_certified:7.3f}s | "
+        f"{tag:38s} [{search}] time-to-certificate median {median_certified:7.3f}s | "
         f"certified <=10s {within_10:5.0%} | <=60s {within_60:5.0%}"
     )
     return {
         "tag": tag,
         "kind": "certification",
+        "search": search,
         "median_time_to_certificate_s": median_certified,
         "certified_within_10s": within_10,
         "certified_within_60s": within_60,
@@ -235,17 +241,29 @@ def main() -> None:
     json_path = None
     if "--json" in sys.argv:
         json_path = sys.argv[sys.argv.index("--json") + 1]
+    # --search classic|refine|both selects the exact engine(s) to time; the
+    # default keeps the classic-only run every earlier measurement used
+    search = "classic"
+    if "--search" in sys.argv:
+        search = sys.argv[sys.argv.index("--search") + 1]
+    if search not in ("classic", "refine", "both"):
+        raise SystemExit(f"--search must be classic, refine, or both, got {search!r}")
+    modes = ("classic", "refine") if search == "both" else (search,)
     print(f"cpu count: {os.cpu_count()} (sequential exact engine; rayon threads irrelevant here)")
 
     results = []
     small_ir, Xs = build_xgb(30, 4, 8, seed=1)
-    results.append(run_scenario("small 30t/d4/8f [HEADLINE]", small_ir, Xs, list(range(10))))
+    for mode in modes:
+        results.append(
+            run_scenario("small 30t/d4/8f [HEADLINE]", small_ir, Xs, list(range(10)), mode)
+        )
 
     if full:
         med_ir, Xm = build_xgb(60, 5, 12, seed=1)
-        results.append(run_scenario("medium 60t/d5/12f", med_ir, Xm, list(range(10))))
         large_ir, Xl = build_xgb(300, 6, 50, seed=2)  # bench_genetic's LARGE scenario
-        results.append(run_scenario("large 300t/d6/50f", large_ir, Xl, list(range(5))))
+        for mode in modes:
+            results.append(run_scenario("medium 60t/d5/12f", med_ir, Xm, list(range(10)), mode))
+            results.append(run_scenario("large 300t/d6/50f", large_ir, Xl, list(range(5)), mode))
 
     if matrix:
         print("\nscale matrix (certification):")
@@ -254,14 +272,16 @@ def main() -> None:
                 for features in (8, 12, 20):
                     ir, X = build_xgb(trees, depth, features, seed=1)
                     tag = f"matrix {trees}t/d{depth}/{features}f"
-                    results.append(run_certification_cell(tag, ir, X, list(range(3))))
+                    for mode in modes:
+                        results.append(run_certification_cell(tag, ir, X, list(range(3)), mode))
 
     if categorical:
         print("\ncategorical suite (LightGBM native, cardinalities 3/8/15):")
         for trees, depth in ((50, 3), (100, 5), (200, 5)):
             ir, X = build_lgb_categorical(trees, depth, seed=3)
             tag = f"categorical {trees}t/d{depth}/4num+3cat"
-            results.append(run_certification_cell(tag, ir, X, list(range(3))))
+            for mode in modes:
+                results.append(run_certification_cell(tag, ir, X, list(range(3)), mode))
 
     headline = results[0]
     print(

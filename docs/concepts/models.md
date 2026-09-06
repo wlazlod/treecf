@@ -35,3 +35,11 @@ shortest-round-trip decimals; treecf casts thresholds back through float32 where
 the library compares in float32, and handles LightGBM's zeroing of values with
 magnitude below 1e-35. Without this, counterfactual values equal to a threshold
 would route differently in the deployed model.
+
+The libraries also cast their *inputs* to float32 before comparing (sklearn,
+XGBoost, CatBoost; LightGBM compares in float64), so a float64 value within half
+a float32 ulp of a split routes one way natively and the other way under a plain
+float64 comparison. Each of those parsers therefore stores not the library's
+threshold but the float64 boundary of that cast — the largest value the native
+model still routes left — and float64 inputs then route exactly as the deployed
+model routes them, without any pre-rounding on your side.

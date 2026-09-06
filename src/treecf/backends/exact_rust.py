@@ -10,6 +10,7 @@ does, byte for byte on every fixture.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -98,6 +99,7 @@ def solve_exact_rust(
     time_budget_s: float = 10.0,
     incumbent: tuple[float, FloatArray] | None = None,
     cache: dict[str, Any] | None = None,
+    search: str = "classic",
 ) -> ExactResult:
     """Drop-in for ``solve_exact``; ``cache`` (e.g. on the ``Explainer``)
     avoids re-marshaling the ensembles and constraints on every call, exactly
@@ -109,6 +111,8 @@ def solve_exact_rust(
     raising ``KeyboardInterrupt`` with no result and discarding whatever
     incumbent it was holding.
     """
+    if search not in ("classic", "refine"):
+        raise ValueError(f"search must be 'classic' or 'refine', got {search!r}")
     core = _core()
     cache = cache if cache is not None else {}
     if "ensemble" not in cache:
@@ -130,7 +134,7 @@ def solve_exact_rust(
     )
 
     try:
-        x_cf, distance, proof, stats, snapped_idx = core.solve_exact_raw(
+        x_cf, distance, proof, stats, snapped_idx, trace_arrays = core.solve_exact_raw(
             cache["ensemble"],
             cache["constraints"],
             np.ascontiguousarray(x, dtype=np.float64),
@@ -149,6 +153,7 @@ def solve_exact_rust(
             time_budget_s=time_budget_s,
             incumbent_cost=incumbent_cost,
             incumbent_row=incumbent_row,
+            search=search,
         )
     except ValueError as exc:
         # solve_exact_raw raises ValueError for exactly one thing: the same
@@ -171,7 +176,15 @@ def solve_exact_rust(
         warm_start_used,
         presolve_removed,
         presolve_certified,
+        search_out,
+        coarse_accepts,
+        refinements,
     ) = stats
+    trace_nodes, trace_incumbent, trace_bound = trace_arrays
+    trace = [
+        (int(n), None if math.isnan(c) else float(c), float(b))
+        for n, c, b in zip(trace_nodes, trace_incumbent, trace_bound, strict=True)
+    ]
     return ExactResult(
         x_cf=None if x_cf is None else np.asarray(x_cf, dtype=np.float64),
         proof=proof,
@@ -185,6 +198,10 @@ def solve_exact_rust(
             "warm_start_used": bool(warm_start_used),
             "presolve_removed": int(presolve_removed),
             "presolve_certified": bool(presolve_certified),
+            "search": str(search_out),
+            "coarse_accepts": int(coarse_accepts),
+            "refinements": int(refinements),
+            "trace": trace,
         },
         snapped={ir.feature_names[int(i)]: True for i in np.asarray(snapped_idx)},
         distance=None if distance is None else float(distance),

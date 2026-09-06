@@ -12,7 +12,7 @@ use crate::ir::Ensemble;
 /// Python's `<`-based ordering: `-0.0` and `0.0` compare equal, so a stable sort
 /// leaves them in insertion order. Costs and sort values are never NaN here.
 #[inline]
-fn py_cmp(a: f64, b: f64) -> std::cmp::Ordering {
+pub(crate) fn py_cmp(a: f64, b: f64) -> std::cmp::Ordering {
     use std::cmp::Ordering;
     if a < b {
         Ordering::Less

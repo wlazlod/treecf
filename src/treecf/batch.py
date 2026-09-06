@@ -263,6 +263,27 @@ class BatchResult:
                                 name: list(names)
                                 for name, names in record.region.category_names.items()
                             },
+                            "maximal": {
+                                name: [bool(lo_ok), bool(hi_ok)]
+                                for name, (lo_ok, hi_ok) in record.region.maximal.items()
+                            },
+                            "maximal_categories": {
+                                name: bool(ok)
+                                for name, ok in record.region.maximal_categories.items()
+                            },
+                            "witnesses": (
+                                None
+                                if record.region.witnesses is None
+                                else {
+                                    key: encode_floats(point)
+                                    for key, point in record.region.witnesses.items()
+                                }
+                            ),
+                            "integer_features": list(record.region.integer_features),
+                            "data_limited": {
+                                name: [bool(lo_ok), bool(hi_ok)]
+                                for name, (lo_ok, hi_ok) in record.region.data_limited.items()
+                            },
                         }
                     ),
                 }
@@ -323,6 +344,31 @@ class BatchResult:
                         name: tuple(str(n) for n in names)
                         for name, names in raw_region.get("category_names", {}).items()
                     },
+                    # absent in files written before the maximal mode existed
+                    maximal={
+                        name: (bool(lo_ok), bool(hi_ok))
+                        for name, (lo_ok, hi_ok) in raw_region.get("maximal", {}).items()
+                    },
+                    maximal_categories={
+                        name: bool(ok)
+                        for name, ok in raw_region.get("maximal_categories", {}).items()
+                    },
+                    witnesses=(
+                        None
+                        if raw_region.get("witnesses") is None
+                        else {
+                            key: np.asarray(decode_floats(point), dtype=np.float64)
+                            for key, point in raw_region["witnesses"].items()
+                        }
+                    ),
+                    # absent in files written before integer phrasing existed
+                    integer_features=tuple(
+                        str(n) for n in raw_region.get("integer_features", ())
+                    ),
+                    data_limited={
+                        name: (bool(lo_ok), bool(hi_ok))
+                        for name, (lo_ok, hi_ok) in raw_region.get("data_limited", {}).items()
+                    },
                 )
             )
             records.append(
@@ -354,10 +400,7 @@ class BatchResult:
                     # records without these fields default to None
                     calibrator_fingerprint=raw.get("calibrator_fingerprint"),
                     score_calibrated=raw.get("score_calibrated"),
-                    solver_stats={
-                        key: decode_floats(value)
-                        for key, value in raw.get("solver_stats", {}).items()
-                    },
+                    solver_stats=_decode_stats(raw.get("solver_stats", {})),
                 )
             )
         essential_ids = [decode_floats(k) for k in data.get("essential_lever_ids", [])]
@@ -433,7 +476,10 @@ def explain_batch(
     warm_start: bool | None = None,
     node_budget: int | None = None,
     gap: float | None = None,
+    search: str | None = None,
     region: bool = False,
+    region_mode: str = "fast",
+    region_budget: int = 100_000,
     allow_exact_batch: bool = False,
 ) -> BatchResult:
     """See ``Explainer.explain_batch``.
@@ -494,7 +540,7 @@ def explain_batch(
     importable, exactly as a single ``explain(..., region=True)`` call would
     run it) -- there is no batched/parallel region path.
     """
-    from treecf.api import _degraded_summary, _resolve_exact_kwargs
+    from treecf.api import _degraded_summary, _resolve_exact_kwargs, _resolve_region_kwargs
 
     if target.bands_spec is not None:
         raise TreecfError("Target.bands is not supported in explain_batch; loop bands explicitly")
@@ -507,7 +553,10 @@ def explain_batch(
     # Validated here too (not only inside `_explain`) because the rust
     # wave-parallel paths below (`_rows_by_seed_waves`, `_lever_primaries`)
     # never call `_explain` and would otherwise silently ignore the kwargs.
-    resolved_warm_start, _, _ = _resolve_exact_kwargs(backend, warm_start, node_budget, gap)
+    resolved_warm_start, _, _, _ = _resolve_exact_kwargs(
+        backend, warm_start, node_budget, gap, search
+    )
+    region_mode, region_budget = _resolve_region_kwargs(region, region_mode, region_budget)
     X = np.asarray(X, dtype=np.float64)
     validate_feature_matrix(explainer.ir, X, where="factual")
     if backend == "exact" and not allow_exact_batch:
@@ -565,7 +614,8 @@ def explain_batch(
         records = _rows_by_coalitions(
             explainer, X, target, row_ids, coalitions, include_full,
             backend, time_budget_s, sparsity_weight, seed=seed,
-            warm_start=warm_start, node_budget=node_budget, gap=gap, region=region,
+            warm_start=warm_start, node_budget=node_budget, gap=gap, search=search,
+            region=region, region_mode=region_mode, region_budget=region_budget,
             row_degraded=row_degraded,
         )
     elif diversity == "seeds" and backend in ("genetic", "genetic-rust"):
@@ -575,6 +625,7 @@ def explain_batch(
         records = _rows_by_seed_waves(
             explainer, X, target, row_ids, n_per_example,
             time_budget_s, sparsity_weight, seed=seed, region=region,
+            region_mode=region_mode, region_budget=region_budget,
         )
     else:
         primaries: list[Counterfactual | Infeasible] | None = None
@@ -610,7 +661,7 @@ def explain_batch(
             if diversity == "lever-blocking":
                 primaries = _exact_lever_primaries(
                     explainer, X, target, time_budget_s, sparsity_weight,
-                    node_budget, gap, seed, row_incumbents, row_degraded,
+                    node_budget, gap, search, seed, row_incumbents, row_degraded,
                 )
         for i, row_id in enumerate(row_ids):
             if diversity == "seeds":
@@ -619,7 +670,8 @@ def explain_batch(
                     backend, time_budget_s, sparsity_weight,
                     master_seed=seed * 1_000_003 + i * 1_009,
                     warm_start=False if backend == "exact" else warm_start,
-                    node_budget=node_budget, gap=gap, region=region,
+                    node_budget=node_budget, gap=gap, search=search, region=region,
+                    region_mode=region_mode, region_budget=region_budget,
                     degraded=row_degraded[i],
                     incumbent=None if row_incumbents is None else row_incumbents[i],
                 )
@@ -628,7 +680,8 @@ def explain_batch(
                     explainer, X[i], target, row_id, n_per_example,
                     backend, time_budget_s, sparsity_weight, seed=seed,
                     primary=None if primaries is None else primaries[i],
-                    warm_start=warm_start, node_budget=node_budget, gap=gap, region=region,
+                    warm_start=warm_start, node_budget=node_budget, gap=gap, search=search,
+                    region=region, region_mode=region_mode, region_budget=region_budget,
                     degraded=row_degraded[i],
                 )
                 essential[row_id] = row_essential
@@ -671,6 +724,23 @@ def _exact_stats(stats: dict[str, object]) -> dict[str, object]:
     diagnostics (recognized by their ``completed`` key). Genetic/python engine
     stats are not mirrored — those engines report no per-row diagnostics."""
     return stats if "completed" in stats else {}
+
+
+def _decode_stats(raw: dict[str, Any]) -> dict[str, object]:
+    """Solver stats back from a batch file. The certification trace is a list
+    of ``(nodes, incumbent, bound)`` samples whose incumbent is ``None`` while
+    no row had been found — a genuine ``None``, not a missing float, so it is
+    restored as-is rather than through the NaN-as-null float convention."""
+    out: dict[str, object] = {}
+    for key, value in raw.items():
+        if key == "trace":
+            out[key] = [
+                (int(nodes), None if cost is None else float(cost), decode_floats(bound))
+                for nodes, cost, bound in value
+            ]
+        else:
+            out[key] = decode_floats(value)
+    return out
 
 
 def _record_from(
@@ -727,6 +797,8 @@ def _rows_by_seed_waves(
     sparsity_weight: float,
     seed: int,
     region: bool = False,
+    region_mode: str = "fast",
+    region_budget: int = 100_000,
 ) -> list[BatchRecord]:
     """Wave-parallel `_row_by_seeds` over all rows (Rust backend only).
 
@@ -776,7 +848,13 @@ def _rows_by_seed_waves(
         records.extend(
             _record_from(
                 row_id, k, cf, seed=cf_seed,
-                region=explainer._region_for(X[i], cf.x_cf, interval) if region else None,
+                region=(
+                    explainer._region_for(
+                        X[i], cf.x_cf, interval, mode=region_mode, budget=region_budget
+                    )
+                    if region
+                    else None
+                ),
             )
             for k, (cf, cf_seed) in enumerate(ranked)
         )
@@ -896,6 +974,7 @@ def _exact_lever_primaries(
     sparsity_weight: float,
     node_budget: int | None,
     gap: float | None,
+    search: str | None,
     seed: int,
     row_incumbents: Sequence[tuple[float, FloatArray] | None],
     row_degraded: list[list[_Degradation]],
@@ -914,7 +993,7 @@ def _exact_lever_primaries(
     return [
         explainer._explain_one(
             X[i], target, "exact", time_budget_s, sparsity_weight, seed,
-            warn_factual=False, warm_start=False, node_budget=node_budget, gap=gap,
+            warn_factual=False, warm_start=False, node_budget=node_budget, gap=gap, search=search,
             degraded=row_degraded[i], incumbent=row_incumbents[i],
         )
         for i in range(len(X))
@@ -935,7 +1014,10 @@ def _rows_by_coalitions(
     warm_start: bool | None = None,
     node_budget: int | None = None,
     gap: float | None = None,
+    search: str | None = None,
     region: bool = False,
+    region_mode: str = "fast",
+    region_budget: int = 100_000,
     row_degraded: list[list[_Degradation]] | None = None,
 ) -> list[BatchRecord]:
     """One record per named coalition per row (plus the optional baseline).
@@ -984,7 +1066,7 @@ def _rows_by_coalitions(
                 solver._explain_one(
                     X[i], target, backend, time_budget_s, sparsity_weight, seed,
                     warn_factual=False,
-                    warm_start=warm_start, node_budget=node_budget, gap=gap,
+                    warm_start=warm_start, node_budget=node_budget, gap=gap, search=search,
                     degraded=None if row_degraded is None else row_degraded[i],
                 )
                 for i in range(len(X))
@@ -1000,7 +1082,13 @@ def _rows_by_coalitions(
         feasible.sort(key=lambda pair: pair[1].distance)
         k = 0
         for name, cf in feasible:
-            reg = solvers[name]._region_for(X[i], cf.x_cf, interval) if region else None
+            reg = (
+                solvers[name]._region_for(
+                    X[i], cf.x_cf, interval, mode=region_mode, budget=region_budget
+                )
+                if region
+                else None
+            )
             records.append(_record_from(row_id, k, cf, coalition=name, region=reg))
             k += 1
         for name in solvers:
@@ -1024,7 +1112,10 @@ def _row_by_seeds(
     warm_start: bool | None = None,
     node_budget: int | None = None,
     gap: float | None = None,
+    search: str | None = None,
     region: bool = False,
+    region_mode: str = "fast",
+    region_budget: int = 100_000,
     degraded: list[_Degradation] | None = None,
     incumbent: tuple[float, FloatArray] | None = None,
 ) -> list[BatchRecord]:
@@ -1042,7 +1133,7 @@ def _row_by_seeds(
         result = explainer._explain(
             x, target, backend, time_budget_s, sparsity_weight, attempt_seed,
             warn_factual=False,  # explain_batch already warned in aggregate
-            warm_start=warm_start, node_budget=node_budget, gap=gap,
+            warm_start=warm_start, node_budget=node_budget, gap=gap, search=search,
             degraded=degraded, incumbent=incumbent,
         )
         if isinstance(result, Counterfactual):
@@ -1060,7 +1151,13 @@ def _row_by_seeds(
     return [
         _record_from(
             row_id, k, cf, seed=cf_seed,
-            region=explainer._region_for(x, cf.x_cf, interval) if interval is not None else None,
+            region=(
+                explainer._region_for(
+                    x, cf.x_cf, interval, mode=region_mode, budget=region_budget
+                )
+                if interval is not None
+                else None
+            ),
         )
         for k, (cf, cf_seed) in enumerate(ranked)
     ]
@@ -1080,7 +1177,10 @@ def _row_by_lever_blocking(
     warm_start: bool | None = None,
     node_budget: int | None = None,
     gap: float | None = None,
+    search: str | None = None,
     region: bool = False,
+    region_mode: str = "fast",
+    region_budget: int = 100_000,
     degraded: list[_Degradation] | None = None,
 ) -> tuple[list[BatchRecord], list[str]]:
     from treecf.api import Counterfactual
@@ -1089,7 +1189,7 @@ def _row_by_lever_blocking(
         explained = explainer._explain(
             x, target, backend, time_budget_s, sparsity_weight, seed,
             warn_factual=False,  # explain_batch already warned in aggregate
-            warm_start=warm_start, node_budget=node_budget, gap=gap,
+            warm_start=warm_start, node_budget=node_budget, gap=gap, search=search,
             degraded=degraded,
         )
         assert not isinstance(explained, dict)  # bands are rejected by explain_batch
@@ -1099,7 +1199,9 @@ def _row_by_lever_blocking(
 
     interval = target.raw_interval(explainer.ir.link) if region else None
     primary_region = (
-        explainer._region_for(x, primary.x_cf, interval) if interval is not None else None
+        explainer._region_for(x, primary.x_cf, interval, mode=region_mode, budget=region_budget)
+        if interval is not None
+        else None
     )
     records = [_record_from(row_id, 0, primary, region=primary_region)]
     seen = {frozenset(primary.changes)}
@@ -1119,7 +1221,7 @@ def _row_by_lever_blocking(
         alternative = clone._explain(
             x, target, backend, time_budget_s, sparsity_weight, seed,
             warn_factual=False,  # explain_batch already warned in aggregate
-            warm_start=warm_start, node_budget=node_budget, gap=gap,
+            warm_start=warm_start, node_budget=node_budget, gap=gap, search=search,
             degraded=degraded,
         )
         if isinstance(alternative, Counterfactual):
@@ -1127,7 +1229,9 @@ def _row_by_lever_blocking(
             if key not in seen:
                 seen.add(key)
                 alt_region = (
-                    clone._region_for(x, alternative.x_cf, interval)
+                    clone._region_for(
+                        x, alternative.x_cf, interval, mode=region_mode, budget=region_budget
+                    )
                     if interval is not None
                     else None
                 )

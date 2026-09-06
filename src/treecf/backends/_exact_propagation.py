@@ -7,6 +7,9 @@ and the Rust mirror has to match all five bit-for-bit.
 
 from __future__ import annotations
 
+import math
+
+from treecf.backends._exact_bounds import _RangeIv
 from treecf.backends._exact_domains import _State
 from treecf.constraints.compile import CompiledConstraints
 
@@ -42,6 +45,11 @@ class _Propagation:
 
     ``assigned`` and ``values`` are the search's own arrays, shared by
     reference, so this reads the one assignment everything else reads.
+    ``ranges`` is the coarse-to-fine search's third array: a feature held to a
+    whole interval has no value to compare a demand against, so the demand is
+    checked for containment and then recorded, exactly as for an undecided
+    feature — the moment the feature is narrowed to a point, that point is
+    held to the demand.
     """
 
     def __init__(
@@ -50,11 +58,13 @@ class _Propagation:
         domains: list[list[_State]],
         assigned: list[bool],
         values: list[float],
+        ranges: list[_RangeIv | None] | None = None,
     ) -> None:
         self.implications = compiled.implications
         self.groups = compiled.onehot_groups
         self.assigned = assigned
         self.values = values
+        self.ranges: list[_RangeIv | None] = [None] * len(assigned) if ranges is None else ranges
         self.group_of: dict[int, int] = {}
         for g_idx, group in enumerate(self.groups):
             if all(s.value in (0.0, 1.0) for f in group for s in domains[f]):
@@ -70,7 +80,11 @@ class _Propagation:
         counters: list[tuple[int, int, int]] = []
 
         def force(f: int, value: float) -> bool:
-            if self.assigned[f]:
+            rng = self.ranges[f]
+            if rng is not None:
+                if not _range_contains(rng, value):
+                    return False
+            elif self.assigned[f]:
                 return self.values[f] == value
             current = self.forced_value[f]
             if current is not None:
@@ -115,3 +129,14 @@ class _Propagation:
         for g_idx, ones, zeros in reversed(counters):
             self.ones[g_idx] = ones
             self.zeros[g_idx] = zeros
+
+
+def _range_contains(rng: _RangeIv, value: float) -> bool:
+    """Whether a demanded value can still be met inside an interval; a missing
+    value never can, since an interval holds numbers only."""
+    if math.isnan(value):
+        return False
+    lo, hi, lo_open, hi_open = rng
+    if value < lo or (value == lo and lo_open):
+        return False
+    return not (value > hi or (value == hi and hi_open))

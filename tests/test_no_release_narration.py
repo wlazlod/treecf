@@ -24,6 +24,7 @@ ALLOWED_FILES = {
     "docs/concepts/backends.md",  # benchmark provenance: versions a measurement used
     "tests/test_no_release_narration.py",
     "tests/test_version_everywhere.py",  # parses the version locations
+    "tests/test_commit_hygiene.py",  # holds the shorthand it proves the checker refuses
 }
 ALLOWED_DIRS = (
     "docs/benchmarks/",  # generated from measured runs; carries version stamps
@@ -35,7 +36,7 @@ ALLOWED_LINE = re.compile(r"__version__|schema_version")
 
 VERSION_LITERAL = re.compile(r"\b0\.\d+\.\d+\b")
 RELEASE_SCOPING = re.compile(r"\bv0\.\d+\b")
-WORKITEM_ID = re.compile(r"\b[TCSDVG]\d\b")
+WORKITEM_ID = re.compile(r"\b[TCSDVGXRPWH]\d\b")
 # matplotlib's colour-cycle strings ("C0".."C9") are code, not shorthand
 _QUOTED_COLOR = re.compile(r"""["']C\d["']""")
 
@@ -71,7 +72,6 @@ def test_no_version_literals() -> None:
     assert not hits, "version literals belong in CHANGELOG.md, not here:\n" + "\n".join(hits)
 
 
-def test_no_workitem_ids_in_python() -> None:
-    files = [f for f in _tracked_files() if f.suffix == ".py"]
-    hits = _violations(WORKITEM_ID, files)
+def test_no_workitem_ids() -> None:
+    hits = _violations(WORKITEM_ID, _tracked_files())
     assert not hits, "work-item shorthand does not belong in tracked text:\n" + "\n".join(hits)

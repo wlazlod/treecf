@@ -12,7 +12,8 @@ The public API is exactly the export lists below; anything prefixed with
 `_` or not exported is internal and may change without notice.
 
 - `treecf.__all__`: `Explainer`, the result types (`Counterfactual`,
-  `Infeasible`, `BatchResult`, `BatchRecord`, `RecourseRegion`), `Target`,
+  `Infeasible`, `BatchResult`, `BatchRecord`, `RecourseRegion`, `RecourseMenu`,
+  `DiverseSet`), `Target`,
   the constraint objects (`Freeze`, `Monotone`, `Range`, `Linear`, `Equals`,
   `Implies`, `OneHot`, `AllowMissing`, `AllowedCategories`, the
   `constraint()` mini-language), `Plausibility`, `Grid`, constraint mining
@@ -24,11 +25,11 @@ The public API is exactly the export lists below; anything prefixed with
 - `treecf.constraints.__all__`: the constraint objects plus
   `CompiledConstraints`, `compile_constraints`, and `constraint`.
 - `treecf.audit.__all__`: `build_certificate`, `check_certificate`,
-  `ir_fingerprint`, `constraints_fingerprint`.
+  `ir_fingerprint`, `constraints_fingerprint`, `portfolio_report`.
 - `treecf.viz.__all__` (extra `treecf[viz]`): `plot_changes`,
   `plot_counterfactuals`, `plot_ladder`, `plot_alternatives`,
   `plot_tradeoff`, `plot_recourse_map`, `plot_waterfall`, `plot_effort`,
-  `plot_region`.
+  `plot_region`, `plot_certification_trace`, `plot_recourse_menu`.
 - `treecf.viz_batch.__all__` (extra `treecf[viz]`): `plot_batch_levers`,
   `plot_batch_matrix`, `plot_batch_summary`, `plot_batch_deltas`,
   `plot_recourse_burden`, `recourse_burden_table`.
@@ -44,6 +45,58 @@ Three artifact kinds leave the library, all plain JSON, none ever unpickled:
   1 and 2, and a committed version-1 golden file keeps that promise honest.
 - **Model dumps** are inputs, not outputs — the parsers read the training
   libraries' own JSON formats.
+
+Keys are added, never repurposed. A reader of a certificate or a batch file
+must tolerate keys it does not know: a release may add a key to any block
+(a new solver counter, a new region flag) without bumping the schema
+version, and `check_certificate` verifies such a file exactly as it would
+without the addition. Only removing a key, or changing what an existing key
+means, bumps `schema_version`.
+
+## Added in 0.3.1
+
+New public symbols in this release, as one running list:
+
+- `explain(..., search="refine")` / `explain_batch` / `explain_coalitions`:
+  the coarse-to-fine exact search; `"classic"` stays the default and is
+  unchanged. `Explainer.certificate(..., search=)` records the choice under
+  `declared`.
+- `explain(..., region_mode="maximal", region_budget=)` and
+  `Explainer.recourse_region(mode=, budget=, keep_witnesses=)`: budgeted
+  proof that a region side cannot grow, with witness points on request.
+- `RecourseRegion.maximal` / `.maximal_categories` / `.witnesses`: per-side
+  proof flags, per-feature category flags, and the witnesses that closed
+  each side (`None` unless kept); certificates store the flags under
+  `plan.region_maximal` and `plan.region_maximal_categories` without a
+  schema bump.
+- `RecourseRegion.integer_features`: the features under an `"integer"`
+  value policy when the region was built; `describe()` phrases those on the
+  integers, and every phrase is now strict where a rounded endpoint would
+  overstate the box.
+- `RecourseRegion.data_limited`: the sides that stopped at the observed
+  range of the explainer's background data, which now bounds every side no
+  constraint bounds; batch files round-trip the field.
+- `Explainer.recourse_menu(x, target, max_levers=, mode=, ...)` and
+  `RecourseMenu` (`treecf`): every lever set up to a size solved as its own
+  coalition, keyed by the features each plan changed, with the minimal
+  frontier, the certified-infeasible sets, and a `complete` flag; strict
+  JSON through `to_dict()` (`menu_schema_version` 1, readers tolerate
+  unknown keys).
+- `Explainer.explain_diverse(x, target, k=, diversity=, ...)` and
+  `DiverseSet` (`treecf`): the `k` cheapest plans with distinct lever sets,
+  or a ladder over declared coalitions and their unions.
+- `plot_recourse_menu` (`treecf.viz`): the lever-set by feature matrix of a
+  menu with a proof glyph per row.
+- `Explainer.search_profile(x, target=None)`: per-feature domain sizes and
+  the total search-space size before an exact solve; the budget-exhaustion
+  warning quotes that size.
+- `solver_stats["search"]`, `["coarse_accepts"]`, `["refinements"]`,
+  `["trace"]` on every exact result: the search mode, its counters, and the
+  sampled incumbent/bound trace; certificates carry them as JSON lists.
+- `treecf.audit.portfolio_report`: a batch-level audit report as JSON, a
+  self-contained HTML page, or markdown with figures beside it.
+- `treecf.viz.plot_certification_trace`: the incumbent and the proven lower
+  bound against nodes expanded, ending at the named outcome.
 
 ## Added in 0.3.0
 

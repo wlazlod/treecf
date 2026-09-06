@@ -24,22 +24,38 @@ interval-tree walk of every ensemble tree (and the isolation forest's, when
 plausibility is configured) -- per attempted per-feature, per-direction
 expansion; a feature with many joint-grid cells inside its instance bounds
 costs proportionally more.
+
+The oracle's interval bracket is sound but loose, so the fast mode stops a
+side as soon as the bracket of the extended box leaves the target. The
+maximal mode (``mode="maximal"``) settles each such side with a budgeted
+search for an actual violating point in the extension slab
+(``treecf._region_slab``): none found and the search complete, the side
+extends and keeps growing; one found, the side is proved maximal and the
+point kept as its witness; budget spent, the side is left unproven — the
+fast mode's own state. A maximal region is not a superset of the fast one:
+an early extension on one feature can make a later extension on another
+genuinely unsound.
 """
 
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import numpy as np
 import numpy.typing as npt
 
+from treecf._errors import TreecfError
 from treecf.aim.cells import Cell, category_blocks, cell_index
 from treecf.backends._exact_domains import _constraint_cells
 from treecf.backends._exact_orderpairs import _achievable_bounds, _intersect_cell
 from treecf.constraints.compile import CompiledConstraints, ResolvedLinear
 from treecf.ir.model import EnsembleIR, Node, SplitOp
+
+if TYPE_CHECKING:
+    from treecf._region_slab import SlabProblem
 
 FloatArray = npt.NDArray[np.float64]
 BoolArray = npt.NDArray[np.bool_]
@@ -59,11 +75,14 @@ class RecourseRegion:
 
     ``lo``/``hi`` cover every feature (degenerate coordinates included, as a
     single point); ``feature_intervals`` keys only the non-degenerate ones by
-    name, for display. Regions are certified but neither maximal (a larger
-    sound box may exist) nor monotone in the target interval (a strictly
-    narrower target can still produce a strictly wider region on some
-    feature: growth is greedy and order-dependent, so a feature that is
-    forced to stop early frees room a later feature grows into). See
+    name, for display. Regions are certified but not monotone in the target
+    interval (a strictly narrower target can still produce a strictly wider
+    region on some feature: growth is greedy and order-dependent, so a
+    feature that is forced to stop early frees room a later feature grows
+    into), and in the default fast mode not maximal either (a larger sound
+    box may exist). The maximal mode settles each stopped side with a
+    budgeted search for a violating point and records what it proved in
+    ``maximal``/``maximal_categories``. See
     [Certification](../concepts/certification.md#regions-certified-not-maximal-not-monotone).
 
     Attributes
@@ -82,6 +101,35 @@ class RecourseRegion:
         by ``Explainer.recourse_region``/``explain(..., region=True)`` is
         a sound certificate; the field is reserved for a future relaxed
         mode.
+    maximal
+        ``{feature: (lower side proved, upper side proved)}`` for the
+        non-degenerate numeric features, set by the maximal mode only. A
+        proved side cannot be extended into the next routing cell without
+        leaving the target or breaking a constraint (a witness point
+        exists), or already sits at an instance bound or at infinity. A
+        side left ``False`` stopped on a conservative bound or ran out of
+        its budget — the fast mode's state for every side. Empty in fast
+        mode.
+    maximal_categories
+        ``{feature: proved}`` per grown categorical feature, likewise:
+        ``True`` when every excluded category block was proved impossible.
+    witnesses
+        ``{"feature:lo" | "feature:hi" | "feature:cat": point}`` — for
+        each proved side, one point just past it that leaves the target
+        or violates a constraint; ``None`` unless the region was asked to
+        keep them.
+    integer_features
+        Names of the features under an ``"integer"`` value policy when the
+        region was built; ``describe()`` phrases their intervals on the
+        integers.
+    data_limited
+        ``{feature: (lower side, upper side)}`` for every feature some side
+        of which stopped at the observed range of the explainer's background
+        data rather than at a constraint or at the model. A feature with no
+        ``Range`` constraint on a side is grown no further than the data
+        reaches on that side (a counterfactual outside the data still lies
+        in its box); the flag says which sides that was. Empty when the
+        explainer has no background data.
     """
 
     lo: FloatArray
@@ -94,6 +142,12 @@ class RecourseRegion:
     feature_categories: dict[str, tuple[int, ...]] = field(default_factory=dict)
     cat_sets: dict[int, tuple[int, ...]] = field(default_factory=dict)
     category_names: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    # what the maximal mode proved about each stopped side; empty in fast mode
+    maximal: dict[str, tuple[bool, bool]] = field(default_factory=dict)
+    maximal_categories: dict[str, bool] = field(default_factory=dict)
+    witnesses: dict[str, FloatArray] | None = None
+    integer_features: tuple[str, ...] = ()
+    data_limited: dict[str, tuple[bool, bool]] = field(default_factory=dict)
 
     def contains(self, x: FloatArray) -> bool:
         """Whether ``x`` lies inside the region, coordinate by coordinate.
@@ -129,10 +183,19 @@ class RecourseRegion:
     def describe(self) -> dict[str, str]:
         """One human-readable phrase per non-degenerate feature.
 
-        One-sided (``"<= v"``/``">= v"``) when the other endpoint is
+        One-sided (``"≤ v"``/``"≥ v"``) when the other endpoint is
         infinite, two-sided (``"in [lo, hi]"``) otherwise, and
-        ``"unconstrained"`` when both endpoints are infinite; values
-        formatted ``"{:.3g}"``.
+        ``"unconstrained"`` when both endpoints are infinite; values are
+        shown to three significant digits. A shown value never overstates
+        the box: an endpoint that rounds to a value outside the interval is
+        phrased strictly (``"< 1"``, ``"in [0, 1)"``), so a box that stops
+        one float32 ulp below 1 does not read as if 1 were inside it. A
+        feature in ``integer_features`` is phrased on the integers the box
+        contains (``"= 0"``, ``"≤ 0"``, ``"in [2, 4]"``). A feature whose
+        every side the maximal mode proved carries the suffix
+        ``" (maximal)"``, and one some side of which stopped at the data
+        range ``" (data-limited)"`` (``" (maximal, data-limited)"`` for
+        both).
 
         Returns
         -------
@@ -140,14 +203,17 @@ class RecourseRegion:
         """
         out: dict[str, str] = {}
         for name, (lo, hi) in self.feature_intervals.items():
-            if lo == -math.inf and hi == math.inf:
-                out[name] = "unconstrained"
-            elif lo == -math.inf:
-                out[name] = f"≤ {hi:.3g}"
-            elif hi == math.inf:
-                out[name] = f"≥ {lo:.3g}"
+            if name in self.integer_features:
+                out[name] = _integer_phrase(lo, hi)
             else:
-                out[name] = f"in [{lo:.3g}, {hi:.3g}]"
+                out[name] = _interval_phrase(lo, hi)
+            notes = []
+            if self.maximal.get(name) == (True, True):
+                notes.append("maximal")
+            if any(self.data_limited.get(name, (False, False))):
+                notes.append("data-limited")
+            if notes:
+                out[name] += f" ({', '.join(notes)})"
         for name, codes in self.feature_categories.items():
             names = self.category_names.get(name)
             rendered = (
@@ -156,7 +222,49 @@ class RecourseRegion:
                 else ", ".join(str(c) for c in codes)
             )
             out[name] = f"∈ {{{rendered}}}"
+            if self.maximal_categories.get(name):
+                out[name] += " (maximal)"
         return out
+
+
+def _shown(value: float, *, upper: bool) -> tuple[str, bool]:
+    """``value`` to three significant digits, and whether the shown number
+    lies outside the interval on that side (so the phrase must be strict)."""
+    text = f"{value:.3g}"
+    shown = float(text)
+    return text, (shown > value if upper else shown < value)
+
+
+def _interval_phrase(lo: float, hi: float) -> str:
+    if lo == -math.inf and hi == math.inf:
+        return "unconstrained"
+    if lo == -math.inf:
+        text, strict = _shown(hi, upper=True)
+        return f"{'<' if strict else '≤'} {text}"
+    if hi == math.inf:
+        text, strict = _shown(lo, upper=False)
+        return f"{'>' if strict else '≥'} {text}"
+    lo_text, lo_strict = _shown(lo, upper=False)
+    hi_text, hi_strict = _shown(hi, upper=True)
+    return f"in {'(' if lo_strict else '['}{lo_text}, {hi_text}{')' if hi_strict else ']'}"
+
+
+def _integer_phrase(lo: float, hi: float) -> str:
+    """The integers of ``[lo, hi]``; falls back to the plain phrase when the
+    interval holds none."""
+    lo_int = None if lo == -math.inf else math.ceil(lo)
+    hi_int = None if hi == math.inf else math.floor(hi)
+    if lo_int is None and hi_int is None:
+        return "unconstrained"
+    if lo_int is None:
+        return f"≤ {hi_int}"
+    if hi_int is None:
+        return f"≥ {lo_int}"
+    if lo_int > hi_int:
+        return _interval_phrase(lo, hi)
+    if lo_int == hi_int:
+        return f"= {lo_int}"
+    return f"in [{lo_int}, {hi_int}]"
 
 
 def _is_order_pair(lin: ResolvedLinear) -> bool:
@@ -209,6 +317,7 @@ def _tree_interval_bracket(
     hi: FloatArray,
     is_nan: BoolArray,
     cat_sets: Mapping[int, set[int]] | None = None,
+    straddles: list[int] | None = None,
 ) -> tuple[float, float] | None:
     """``[min, max]`` leaf value reachable from ``nodes[idx]`` over the box, or
     ``None`` if the box cannot be soundly bracketed at all.
@@ -226,6 +335,11 @@ def _tree_interval_bracket(
     computation may, since every row it returns is re-verified individually)
     would be an unsound shortcut; returning ``None`` instead makes the whole
     box's bracket undefined, which the oracle reads as a flat rejection.
+
+    ``straddles``, when given, counts per feature the nodes whose split fell
+    strictly inside the box's interval on it (or whose set split parted the
+    box's code set), so both children stayed live — what the emptiness search
+    reads to pick the feature to split next.
     """
     node = nodes[idx]
     if node.feature is None:
@@ -237,7 +351,7 @@ def _tree_interval_bracket(
         if node.missing_left is None:
             return None
         child = node.left if node.missing_left else node.right
-        return _tree_interval_bracket(nodes, child, lo, hi, is_nan, cat_sets)
+        return _tree_interval_bracket(nodes, child, lo, hi, is_nan, cat_sets, straddles)
     members: tuple[int, ...] | None = None
     if cat_sets is not None and f in cat_sets:
         members = tuple(sorted(cat_sets[f]))
@@ -270,13 +384,15 @@ def _tree_interval_bracket(
         else:
             all_left, all_right = hi_f <= threshold, lo_f > threshold
     if all_left:
-        return _tree_interval_bracket(nodes, node.left, lo, hi, is_nan, cat_sets)
+        return _tree_interval_bracket(nodes, node.left, lo, hi, is_nan, cat_sets, straddles)
     if all_right:
-        return _tree_interval_bracket(nodes, node.right, lo, hi, is_nan, cat_sets)
-    left = _tree_interval_bracket(nodes, node.left, lo, hi, is_nan, cat_sets)
+        return _tree_interval_bracket(nodes, node.right, lo, hi, is_nan, cat_sets, straddles)
+    if straddles is not None:
+        straddles[f] += 1
+    left = _tree_interval_bracket(nodes, node.left, lo, hi, is_nan, cat_sets, straddles)
     if left is None:
         return None
-    right = _tree_interval_bracket(nodes, node.right, lo, hi, is_nan, cat_sets)
+    right = _tree_interval_bracket(nodes, node.right, lo, hi, is_nan, cat_sets, straddles)
     if right is None:
         return None
     lmin, lmax = left
@@ -363,8 +479,9 @@ def _box_feasible(
 
 def _next_edge(
     cells: tuple[Cell, ...], value: float, lo_b: float, hi_b: float, upper: bool
-) -> float | None:
-    """The achievable far edge one joint-grid cell beyond ``value``, or ``None``.
+) -> tuple[float, int] | None:
+    """The achievable far edge one joint-grid cell beyond ``value`` together
+    with the index of the cell that edge belongs to, or ``None``.
 
     Finishes the cell ``value`` is already inside first, if it has not yet
     reached that cell's own achievable edge; once it has, claims the whole
@@ -382,17 +499,17 @@ def _next_edge(
     cur_lo, cur_hi = _achievable_bounds(iv)
     if upper:
         if cur_hi > value:
-            return cur_hi
+            return cur_hi, idx
         if idx + 1 >= len(cells):
             return None
         nxt = _intersect_cell(cells[idx + 1], lo_b, hi_b)
-        return None if nxt is None else _achievable_bounds(nxt)[1]
+        return None if nxt is None else (_achievable_bounds(nxt)[1], idx + 1)
     if cur_lo < value:
-        return cur_lo
+        return cur_lo, idx
     if idx - 1 < 0:
         return None
     prev = _intersect_cell(cells[idx - 1], lo_b, hi_b)
-    return None if prev is None else _achievable_bounds(prev)[0]
+    return None if prev is None else (_achievable_bounds(prev)[0], idx - 1)
 
 
 def _try_grow(
@@ -411,9 +528,10 @@ def _try_grow(
     oracle accepts the whole box with it, retracting otherwise.
     """
     current = float(box_hi[j]) if upper else float(box_lo[j])
-    candidate = _next_edge(cells, current, lo_b, hi_b, upper)
-    if candidate is None:
+    edge = _next_edge(cells, current, lo_b, hi_b, upper)
+    if edge is None:
         return False
+    candidate = edge[0]
     if upper:
         box_hi[j] = candidate
     else:
@@ -436,6 +554,12 @@ def _recourse_region(
     if_ir: EnsembleIR | None,
     min_total_path: float,
     cache: dict[str, object] | None = None,
+    *,
+    mode: str = "fast",
+    budget: int = 100_000,
+    keep_witnesses: bool = False,
+    integer_features: Sequence[str] = (),
+    data_bounds: tuple[FloatArray, FloatArray] | None = None,
 ) -> RecourseRegion:
     """Grow a certified box around the verified counterfactual ``x_cf``.
 
@@ -460,12 +584,40 @@ def _recourse_region(
     ``tests/fixtures/regions/`` proves the two produce byte-identical ``lo``/
     ``hi`` arrays, so the fallback only ever changes which engine ran, never
     what it found.
+
+    ``mode="maximal"`` settles every side the fast growth stops with a
+    budgeted emptiness search of at most ``budget`` sub-boxes per side (see
+    the module docstring); ``keep_witnesses`` keeps the violating point found
+    for each proved side.
+
+    ``data_bounds`` (per-feature observed minimum and maximum, NaN where
+    unknown) stand in for the instance bounds on every side no constraint
+    bounds, widened to include ``x_cf`` itself; the sides that stopped there
+    are reported in ``RecourseRegion.data_limited``.
     """
     from treecf.backends.regions_rust import _rust_available, compute_region_rust
+
+    if mode not in ("fast", "maximal"):
+        raise TreecfError(f"unknown region mode {mode!r}; use 'fast' or 'maximal'")
+    if budget < 1:
+        raise ValueError(f"region budget must be at least 1, got {budget!r}")
 
     lo_b, hi_b, frozen = compiled.instance_bounds(x)
     lo_b = np.where(np.isnan(lo_b), -math.inf, lo_b)
     hi_b = np.where(np.isnan(hi_b), math.inf, hi_b)
+    data_lo_side = [False] * len(x_cf)
+    data_hi_side = [False] * len(x_cf)
+    if data_bounds is not None:
+        data_lo, data_hi = data_bounds
+        for j in range(len(x_cf)):
+            if j in ir.categorical or math.isnan(x_cf[j]):
+                continue
+            if lo_b[j] == -math.inf and not math.isnan(data_lo[j]):
+                lo_b[j] = min(float(data_lo[j]), float(x_cf[j]))
+                data_lo_side[j] = True
+            if hi_b[j] == math.inf and not math.isnan(data_hi[j]):
+                hi_b[j] = max(float(data_hi[j]), float(x_cf[j]))
+                data_hi_side[j] = True
     degenerate = _degenerate_features(compiled, frozen, lo_b, hi_b, x_cf)
     # categorical coordinates are always pinned for the numeric machinery
     # (lo = hi = the counterfactual's code); their growth is a separate
@@ -474,14 +626,14 @@ def _recourse_region(
     cat_candidates = _categorical_candidates(ir, if_ir, compiled, frozen, x_cf)
 
     if _rust_available():
-        box_lo, box_hi, grown_sets = compute_region_rust(
+        box_lo, box_hi, grown_sets, extras = compute_region_rust(
             ir, x_cf, interval, compiled, lo_b, hi_b, degenerate, if_ir, min_total_path,
-            cat_candidates, cache=cache,
+            cat_candidates, cache=cache, mode=mode, budget=budget,
         )
     else:
-        box_lo, box_hi, grown_sets = _grow_box(
+        box_lo, box_hi, grown_sets, extras = _grow_box(
             ir, x_cf, interval, compiled, if_ir, min_total_path, degenerate, lo_b, hi_b,
-            cat_candidates,
+            cat_candidates, mode=mode, budget=budget,
         )
 
     feature_intervals = {
@@ -489,6 +641,14 @@ def _recourse_region(
         for j in range(len(x_cf))
         if j not in degenerate
     }
+    data_limited: dict[str, tuple[bool, bool]] = {}
+    for j in range(len(x_cf)):
+        if j in degenerate:
+            continue
+        at_lo = data_lo_side[j] and float(box_lo[j]) == float(lo_b[j])
+        at_hi = data_hi_side[j] and float(box_hi[j]) == float(hi_b[j])
+        if at_lo or at_hi:
+            data_limited[compiled.feature_names[j]] = (at_lo, at_hi)
     cat_sets = {j: tuple(sorted(members)) for j, members in sorted(grown_sets.items())}
     feature_categories = {
         compiled.feature_names[j]: codes for j, codes in cat_sets.items()
@@ -498,6 +658,21 @@ def _recourse_region(
         for j in cat_sets
         if ir.categorical[j].categories is not None
     }
+    maximal: dict[str, tuple[bool, bool]] = {}
+    maximal_categories: dict[str, bool] = {}
+    witnesses: dict[str, FloatArray] | None = None
+    if mode == "maximal":
+        names = compiled.feature_names
+        maximal = {
+            names[j]: (extras.maximal_lo[j], extras.maximal_hi[j])
+            for j in range(len(x_cf))
+            if j not in degenerate
+        }
+        maximal_categories = {names[j]: extras.maximal_cat[j] for j in sorted(extras.maximal_cat)}
+        if keep_witnesses:
+            witnesses = {}
+            for j, side, point in extras.witnesses:
+                witnesses.setdefault(f"{names[j]}:{_SIDE_NAMES[side]}", point)
     return RecourseRegion(
         lo=box_lo,
         hi=box_hi,
@@ -506,7 +681,36 @@ def _recourse_region(
         feature_categories=feature_categories,
         cat_sets=cat_sets,
         category_names=category_names,  # type: ignore[arg-type]
+        maximal=maximal,
+        maximal_categories=maximal_categories,
+        witnesses=witnesses,
+        integer_features=tuple(integer_features),
+        data_limited=data_limited,
     )
+
+
+_SIDE_NAMES = ("lo", "hi", "cat")
+
+
+@dataclass
+class _GrowthExtras:
+    """What the maximal mode found out beyond the box itself: per numeric
+    side whether it was proved impossible to extend, per categorical
+    feature whether every excluded block was, the witnesses (feature, side
+    code 0/1/2 for lo/hi/cat, point), and the search nodes each side spent.
+    Fast mode leaves it at the empty defaults."""
+
+    maximal_lo: list[bool]
+    maximal_hi: list[bool]
+    maximal_cat: dict[int, bool]
+    witnesses: list[tuple[int, int, FloatArray]]
+    used_lo: list[int]
+    used_hi: list[int]
+    used_cat: dict[int, int]
+
+    @classmethod
+    def empty(cls, p: int) -> _GrowthExtras:
+        return cls([False] * p, [False] * p, {}, [], [0] * p, [0] * p, {})
 
 
 def _categorical_candidates(
@@ -554,10 +758,22 @@ def _grow_box(
     lo_b: FloatArray,
     hi_b: FloatArray,
     cat_candidates: dict[int, list[tuple[int, ...]]] | None = None,
-) -> tuple[FloatArray, FloatArray, dict[int, set[int]]]:
+    *,
+    mode: str = "fast",
+    budget: int = 100_000,
+) -> tuple[FloatArray, FloatArray, dict[int, set[int]], _GrowthExtras]:
     """Pure-Python growth loop -- the reference ``_recourse_region`` falls
     back to when the Rust extension is unavailable, and the fixture-golden
-    freeze in ``tests/exactness/test_exact_golden.py`` pins directly."""
+    freeze in ``tests/exactness/test_exact_golden.py`` pins directly.
+
+    In the maximal mode a side the oracle rejects is settled by
+    ``_try_grow_maximal`` instead of closed outright, and a side once closed
+    is never retried: the oracle is monotone in the box, so a rejection
+    stands in every later round, and a proved or budget-spent side stays
+    what it is."""
+    from treecf._region_slab import EMPTY, WITNESS, SlabProblem, search_slab
+
+    maximal_mode = mode == "maximal"
     p = len(x_cf)
     grids = (
         _constraint_cells(compiled, ir)
@@ -604,55 +820,174 @@ def _grow_box(
             total_max = total_max + bracket[1]
         return total_min, total_max
 
+    _Saved = list[tuple[int, tuple[float, float] | None]]
+
+    def update_caches(j: int) -> tuple[_Saved, _Saved]:
+        """Re-walk the trees that split on ``j`` against the current box;
+        return what they held so ``restore`` can put it back."""
+        saved = [(t, model_cache[t]) for t in model_on[j]]
+        for t in model_on[j]:
+            model_cache[t] = _tree_interval_bracket(
+                ir.trees[t].nodes, 0, box_lo, box_hi, is_nan_arr, cat_sets
+            )
+        saved_if: _Saved = []
+        if if_ir is not None:
+            saved_if = [(t, if_cache[t]) for t in if_on[j]]
+            for t in if_on[j]:
+                if_cache[t] = _tree_interval_bracket(
+                    if_ir.trees[t].nodes, 0, box_lo, box_hi, is_nan_arr, cat_sets
+                )
+        return saved, saved_if
+
+    def restore(saved: tuple[_Saved, _Saved]) -> None:
+        for t, bracket in saved[0]:
+            model_cache[t] = bracket
+        for t, bracket in saved[1]:
+            if_cache[t] = bracket
+
+    def check() -> bool:
+        """The conservative oracle over the cached brackets and the box."""
+        bracket = total(ir.base_score, model_cache)
+        if bracket is None or bracket[0] < interval[0] or bracket[1] > interval[1]:
+            return False
+        if if_ir is not None:
+            if_bracket = total(if_ir.base_score, if_cache)
+            if if_bracket is None or if_bracket[0] < min_total_path:
+                return False
+        return all(_linear_holds(lin, x_cf, box_lo, box_hi) for lin in compiled.linears)
+
     def make_oracle(j: int) -> Callable[[], bool]:
         def oracle() -> bool:
-            saved = [(t, model_cache[t]) for t in model_on[j]]
-            for t in model_on[j]:
-                model_cache[t] = _tree_interval_bracket(
-                    ir.trees[t].nodes, 0, box_lo, box_hi, is_nan_arr, cat_sets
-                )
-            saved_if: list[tuple[int, tuple[float, float] | None]] = []
-            if if_ir is not None:
-                saved_if = [(t, if_cache[t]) for t in if_on[j]]
-                for t in if_on[j]:
-                    if_cache[t] = _tree_interval_bracket(
-                        if_ir.trees[t].nodes, 0, box_lo, box_hi, is_nan_arr, cat_sets
-                    )
-
-            def retract() -> None:
-                for t, bracket in saved:
-                    model_cache[t] = bracket
-                for t, bracket in saved_if:
-                    if_cache[t] = bracket
-
-            bracket = total(ir.base_score, model_cache)
-            if bracket is None or bracket[0] < interval[0] or bracket[1] > interval[1]:
-                retract()
-                return False
-            if if_ir is not None:
-                if_bracket = total(if_ir.base_score, if_cache)
-                if if_bracket is None or if_bracket[0] < min_total_path:
-                    retract()
-                    return False
-            if not all(
-                _linear_holds(lin, x_cf, box_lo, box_hi) for lin in compiled.linears
-            ):
-                retract()
-                return False
-            return True
+            saved = update_caches(j)
+            if check():
+                return True
+            restore(saved)
+            return False
 
         return oracle
+
+    extras = _GrowthExtras.empty(p)
+    closed_lo = [False] * p
+    closed_hi = [False] * p
+    block_closed: dict[int, list[bool]] = {
+        j: [False] * len(blocks) for j, blocks in cat_candidates.items()
+    }
+    cat_unproven: dict[int, bool] = dict.fromkeys(cat_candidates, False)
+    if maximal_mode:
+        for j in cat_candidates:
+            extras.used_cat[j] = 0
+
+    def failing_corner() -> FloatArray | None:
+        """The worst corner of the first Linear the box breaks: a point in
+        the box that violates it, so a witness without any search."""
+        for lin in compiled.linears:
+            if _linear_holds(lin, x_cf, box_lo, box_hi):
+                continue
+            hi_sum = 0.0
+            for coef, k in zip(lin.coefs, lin.indices, strict=True):
+                hi_sum += max(coef * box_lo[k], coef * box_hi[k])
+            maximize = lin.op == "<=" or (lin.op == "==" and hi_sum > lin.rhs + _LINEAR_SLACK)
+            point = x_cf.copy()
+            for coef, k in zip(lin.coefs, lin.indices, strict=True):
+                high = (coef > 0) == maximize
+                point[k] = box_hi[k] if high else box_lo[k]
+            return point
+        return None
+
+    def slab_problem(
+        slab_lo: FloatArray, slab_hi: FloatArray, fixed_cat: int | None, fixed_members: set[int]
+    ) -> SlabProblem:
+        sets = {c: frozenset(s) for c, s in cat_sets.items()}
+        if fixed_cat is not None:
+            sets[fixed_cat] = frozenset(fixed_members)
+        free = tuple(
+            k for k in range(p)
+            if k not in degenerate and slab_lo[k] < slab_hi[k]
+        )
+        free_cats = tuple(c for c in sorted(sets) if c != fixed_cat and len(sets[c]) > 1)
+        return SlabProblem(
+            ir=ir, if_ir=if_ir, min_total_path=min_total_path, interval=interval,
+            grids=grids, x_cf=x_cf, is_nan=is_nan_arr, lo=slab_lo, hi=slab_hi,
+            cat_sets=sets, free=free, free_cats=free_cats, blocks=cat_candidates,
+        )
+
+    def try_grow_maximal(j: int, upper: bool) -> bool:
+        """One side of one feature in the maximal mode: grow, prove, or give up.
+        Returns whether the side grew; a side that did not grow is closed."""
+        cells = grids[j]
+        lo_bj, hi_bj = float(lo_b[j]), float(hi_b[j])
+        current = float(box_hi[j]) if upper else float(box_lo[j])
+        proved = extras.maximal_hi if upper else extras.maximal_lo
+        used = extras.used_hi if upper else extras.used_lo
+        closed = closed_hi if upper else closed_lo
+        closed[j] = True
+        edge = _next_edge(cells, current, lo_bj, hi_bj, upper)
+        if edge is None:
+            proved[j] = True  # an instance bound or infinity: nothing lies beyond
+            return False
+        candidate, claimed = edge
+        if upper:
+            box_hi[j] = candidate
+        else:
+            box_lo[j] = candidate
+        saved = update_caches(j)
+        if check():
+            closed[j] = False
+            return True
+        corner = failing_corner()
+        if corner is not None:
+            restore(saved)
+            if upper:
+                box_hi[j] = current
+            else:
+                box_lo[j] = current
+            proved[j] = True
+            extras.witnesses.append((j, 1 if upper else 0, corner))
+            return False
+        if claimed == cell_index(cells, current):
+            # finishing the cell ``current`` sits in: every added point routes
+            # exactly as a certified point does, and the Linears just passed
+            closed[j] = False
+            return True
+        slab_cell = _intersect_cell(cells[claimed], lo_bj, hi_bj)
+        assert slab_cell is not None  # the edge came from this very intersection
+        slab_ach_lo, slab_ach_hi = _achievable_bounds(slab_cell)
+        slab_lo = box_lo.copy()
+        slab_hi = box_hi.copy()
+        slab_lo[j] = slab_ach_lo
+        slab_hi[j] = slab_ach_hi
+        outcome, point, nodes = search_slab(
+            slab_problem(slab_lo, slab_hi, None, set()), budget - used[j]
+        )
+        used[j] += nodes
+        if outcome == EMPTY:
+            closed[j] = False
+            return True
+        restore(saved)
+        if upper:
+            box_hi[j] = current
+        else:
+            box_lo[j] = current
+        if outcome == WITNESS:
+            assert point is not None
+            proved[j] = True
+            extras.witnesses.append((j, 1 if upper else 0, point))
+        return False
 
     open_set = {j for j in range(p) if j not in degenerate}
     open_cats = set(cat_candidates)
     while open_set or open_cats:
         still_open: set[int] = set()
         for j in sorted(open_set):
-            cells = grids[j]
-            lo_bj, hi_bj = float(lo_b[j]), float(hi_b[j])
-            oracle_j = make_oracle(j)
-            grew_up = _try_grow(j, True, box_lo, box_hi, cells, lo_bj, hi_bj, oracle_j)
-            grew_down = _try_grow(j, False, box_lo, box_hi, cells, lo_bj, hi_bj, oracle_j)
+            if maximal_mode:
+                grew_up = False if closed_hi[j] else try_grow_maximal(j, True)
+                grew_down = False if closed_lo[j] else try_grow_maximal(j, False)
+            else:
+                cells = grids[j]
+                lo_bj, hi_bj = float(lo_b[j]), float(hi_b[j])
+                oracle_j = make_oracle(j)
+                grew_up = _try_grow(j, True, box_lo, box_hi, cells, lo_bj, hi_bj, oracle_j)
+                grew_down = _try_grow(j, False, box_lo, box_hi, cells, lo_bj, hi_bj, oracle_j)
             if grew_up or grew_down:
                 still_open.add(j)
         open_set = still_open
@@ -660,22 +995,49 @@ def _grow_box(
         # ascending feature index, ascending block order
         still_open_cats: set[int] = set()
         for j in sorted(open_cats):
-            oracle_j = make_oracle(j)
             grew_cat = False
-            for members in cat_candidates[j]:
+            for b_idx, members in enumerate(cat_candidates[j]):
                 new_members = [c for c in members if c not in cat_sets[j]]
-                if not new_members:
+                if not new_members or (maximal_mode and block_closed[j][b_idx]):
                     continue
                 cat_sets[j].update(new_members)
-                if oracle_j():
+                saved = update_caches(j)
+                if check():
                     grew_cat = True
-                else:
+                    continue
+                if not maximal_mode:
+                    restore(saved)
                     cat_sets[j].difference_update(new_members)
+                    continue
+                cat_sets[j].difference_update(new_members)
+                outcome, point, nodes = search_slab(
+                    slab_problem(box_lo.copy(), box_hi.copy(), j, set(new_members)),
+                    budget - extras.used_cat[j],
+                )
+                extras.used_cat[j] += nodes
+                if outcome == EMPTY:
+                    cat_sets[j].update(new_members)
+                    grew_cat = True
+                    continue
+                restore(saved)
+                if outcome == WITNESS:
+                    assert point is not None
+                    block_closed[j][b_idx] = True
+                    extras.witnesses.append((j, 2, point))
+                else:
+                    cat_unproven[j] = True
             if grew_cat:
                 still_open_cats.add(j)
         open_cats = still_open_cats
 
-    return box_lo, box_hi, cat_sets
+    if maximal_mode:
+        for j, blocks in cat_candidates.items():
+            excluded_proved = all(
+                all(c in cat_sets[j] for c in members) or block_closed[j][b_idx]
+                for b_idx, members in enumerate(blocks)
+            )
+            extras.maximal_cat[j] = excluded_proved and not cat_unproven[j]
+    return box_lo, box_hi, cat_sets, extras
 
 
 def _trees_on_feature(ir: EnsembleIR, n_features: int) -> list[list[int]]:

@@ -212,3 +212,12 @@ def test_combination_statistics_are_rejected_with_the_recipe() -> None:
     )
     with pytest.raises(ParserError, match="max_ctr_complexity=1"):
         parse_catboost_dump(dump, categories={"occ": NAMES[:4]})
+
+
+def test_regressor_unquantized_probes() -> None:
+    """float64 inputs within half a float32 ulp of a border must route the way
+    CatBoost routes them after its own float32 cast."""
+    X, _, y = make_synthetic(seed=32)
+    model = _fit("RMSE", X, y)
+    ir = parse_model(model)
+    assert_conformance(ir, X, model.predict, n_random=3000, quantize=False)

@@ -2,6 +2,7 @@
 //! port of `treecf.backends._exact_propagation`. Parity rules in the module
 //! header of `super` govern this file too.
 
+use crate::cells::Cell;
 use crate::constraints::Constraints;
 use crate::exact::domains::State;
 
@@ -29,15 +30,30 @@ pub(crate) struct Propagation<'a> {
     pub(crate) zeros: Vec<usize>,
 }
 
+/// Whether a demanded value can still be met inside an interval; a missing
+/// value never can, since an interval holds numbers only.
+fn range_contains(rng: &Cell, value: f64) -> bool {
+    !value.is_nan() && rng.contains(value)
+}
+
+/// A feature held to a whole interval (`ranges[f]` set) has no value to compare
+/// a demand against: the demand is checked for containment and then recorded,
+/// exactly as for an undecided feature, so the point the feature is later
+/// narrowed to is held to it.
 fn force(
     forced_value: &mut [Option<f64>],
     frame: &mut PropFrame,
     assigned: &[bool],
     values: &[f64],
+    ranges: &[Option<Cell>],
     f: usize,
     value: f64,
 ) -> bool {
-    if assigned[f] {
+    if let Some(rng) = ranges.get(f).copied().flatten() {
+        if !range_contains(&rng, value) {
+            return false;
+        }
+    } else if assigned[f] {
         return values[f] == value;
     }
     if let Some(current) = forced_value[f] {
@@ -83,6 +99,19 @@ impl<'a> Propagation<'a> {
         assigned: &[bool],
         values: &[f64],
     ) -> (PropFrame, bool) {
+        self.apply_with(j, v, assigned, values, &[])
+    }
+
+    /// `apply` for a search that also holds features to whole intervals; an
+    /// empty `ranges` slice is what the classic search passes.
+    pub(crate) fn apply_with(
+        &mut self,
+        j: usize,
+        v: f64,
+        assigned: &[bool],
+        values: &[f64],
+        ranges: &[Option<Cell>],
+    ) -> (PropFrame, bool) {
         let mut frame = PropFrame::default();
         if let Some(forced) = self.forced_value[j] {
             if v != forced {
@@ -117,6 +146,7 @@ impl<'a> Propagation<'a> {
                     &mut frame,
                     assigned,
                     values,
+                    ranges,
                     last,
                     1.0,
                 ) {
@@ -132,6 +162,7 @@ impl<'a> Propagation<'a> {
                     &mut frame,
                     assigned,
                     values,
+                    ranges,
                     cons_index as usize,
                     cons_value,
                 )

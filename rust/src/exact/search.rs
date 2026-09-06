@@ -14,6 +14,7 @@ use crate::exact::domains::{
 };
 use crate::exact::orderpairs::{achievable_bounds, boundary_candidates, intersect_cell};
 use crate::exact::propagation::{PropFrame, Propagation};
+use crate::exact::trace::{Trace, TraceSample};
 use crate::exact::ValuePolicy;
 use crate::interrupt::{InterruptProbe, SearchOutcome};
 use crate::ir::Ensemble;
@@ -25,12 +26,32 @@ const LINEAR_SLACK: f64 = 1e-9;
 /// How many expanded nodes between two interrupt polls. Asking is cheap but not
 /// free, and a search that gets nowhere near this many nodes finishes fast
 /// enough that nobody reaches for the keyboard.
-const SIGNAL_CHECK_INTERVAL: u64 = 1 << 18;
+pub(crate) const SIGNAL_CHECK_INTERVAL: u64 = 1 << 18;
 
-/// The exact set of counters `solve_exact` reports — the seven keys of Python's
-/// `_stats`. `nodes_pruned_score` counts branches the ensemble can no longer
-/// bring into the target (the plausibility bound counts here too); every other
-/// cut, cost and feasibility alike, counts under `nodes_pruned_cost`.
+/// Which engine ran: the classic cell-by-cell search, or the coarse-to-fine
+/// search over cell ranges.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SearchMode {
+    Classic,
+    Refine,
+}
+
+impl SearchMode {
+    pub fn name(self) -> &'static str {
+        match self {
+            SearchMode::Classic => "classic",
+            SearchMode::Refine => "refine",
+        }
+    }
+}
+
+/// The exact set of counters `solve_exact` reports — the keys of Python's
+/// `_stats` minus the trace, which travels on `ExactResult`. `nodes_pruned_score`
+/// counts branches the ensemble can no longer bring into the target (the
+/// plausibility bound counts here too); every other cut, cost and feasibility
+/// alike, counts under `nodes_pruned_cost`. `coarse_accepts` and `refinements`
+/// are the range-level acceptances and range splits of the coarse-to-fine
+/// search; the classic search reports zero for both.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ExactStats {
     pub nodes_expanded: u64,
@@ -42,6 +63,9 @@ pub struct ExactStats {
     pub warm_start_used: bool,
     pub presolve_removed: u64,
     pub presolve_certified: bool,
+    pub search: SearchMode,
+    pub coarse_accepts: u64,
+    pub refinements: u64,
 }
 
 /// Outcome of an exact-backend search. `snapped` lists the feature indices whose
@@ -54,14 +78,16 @@ pub struct ExactResult {
     pub stats: ExactStats,
     pub snapped: Vec<usize>,
     pub distance: Option<f64>,
+    pub trace: Vec<TraceSample>,
 }
 
-/// Budgets and the optimality gap.
+/// Budgets, the optimality gap, and which engine to run.
 #[derive(Clone, Copy, Debug)]
 pub struct ExactParams {
     pub node_budget: u64,
     pub gap: f64,
     pub time_budget_s: f64,
+    pub search: SearchMode,
 }
 
 impl Default for ExactParams {
@@ -70,6 +96,7 @@ impl Default for ExactParams {
             node_budget: 2_000_000,
             gap: 0.0,
             time_budget_s: 10.0,
+            search: SearchMode::Classic,
         }
     }
 }
@@ -79,23 +106,27 @@ impl Default for ExactParams {
 /// Fixed-width bitset over features — the mirror of Python's arbitrary-precision
 /// int masks, correct for models wider than 64 features.
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct BitSet {
+pub(crate) struct BitSet {
     words: Vec<u64>,
 }
 
 impl BitSet {
-    fn new(n_features: usize) -> Self {
+    pub(crate) fn new(n_features: usize) -> Self {
         Self {
             words: vec![0; n_words(n_features)],
         }
     }
 
-    fn set(&mut self, i: usize) {
+    pub(crate) fn set(&mut self, i: usize) {
         self.words[i / 64] |= 1u64 << (i % 64);
     }
 
-    fn clear(&mut self, i: usize) {
+    pub(crate) fn clear(&mut self, i: usize) {
         self.words[i / 64] &= !(1u64 << (i % 64));
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.words.iter().all(|&w| w == 0)
     }
 
     #[cfg(test)]
@@ -118,7 +149,7 @@ fn n_words(n_features: usize) -> usize {
 /// full walks. The ensemble bracket is then re-summed in full over every tree in
 /// ascending index, the same additions `raw_score` performs (see rule 2 of the
 /// module header).
-struct EnsembleBounds<'a> {
+pub(crate) struct EnsembleBounds<'a> {
     ens: &'a Ensemble,
     n_words: usize,
     sub_min: Vec<f64>,
@@ -127,8 +158,8 @@ struct EnsembleBounds<'a> {
     trees_on_feature: Vec<Vec<usize>>,
     tree_min: Vec<f64>,
     tree_max: Vec<f64>,
-    score_min: f64,
-    score_max: f64,
+    pub(crate) score_min: f64,
+    pub(crate) score_max: f64,
 }
 
 fn prepare_node(
@@ -203,7 +234,7 @@ impl<'a> EnsembleBounds<'a> {
     fn recompute(&mut self, assigned_mask: &BitSet, assigned: &[bool], values: &[f64]) {
         for t in 0..self.ens.tree_roots.len() {
             let root = self.ens.tree_roots[t] as usize;
-            let (low, high) = self.walk(root, assigned_mask, assigned, values);
+            let (low, high) = self.walk(root, assigned_mask, assigned, values, &[]);
             self.tree_min[t] = low;
             self.tree_max[t] = high;
         }
@@ -218,12 +249,27 @@ impl<'a> EnsembleBounds<'a> {
         assigned: &[bool],
         values: &[f64],
     ) -> Vec<(usize, f64, f64)> {
+        self.apply_with(j, assigned_mask, assigned, values, &[])
+    }
+
+    /// `apply` for a search that also holds features to whole intervals:
+    /// `ranges[f]`, when set, is read instead of `values[f]` and routes a split
+    /// the way the region oracle routes an interval. An empty slice means no
+    /// feature is held to a range, which is what the classic search passes.
+    pub(crate) fn apply_with(
+        &mut self,
+        j: usize,
+        assigned_mask: &BitSet,
+        assigned: &[bool],
+        values: &[f64],
+        ranges: &[Option<Cell>],
+    ) -> Vec<(usize, f64, f64)> {
         let mut frame: Vec<(usize, f64, f64)> = Vec::new();
         for k in 0..self.trees_on_feature[j].len() {
             let t = self.trees_on_feature[j][k];
             frame.push((t, self.tree_min[t], self.tree_max[t]));
             let root = self.ens.tree_roots[t] as usize;
-            let (low, high) = self.walk(root, assigned_mask, assigned, values);
+            let (low, high) = self.walk(root, assigned_mask, assigned, values, ranges);
             self.tree_min[t] = low;
             self.tree_max[t] = high;
         }
@@ -232,7 +278,7 @@ impl<'a> EnsembleBounds<'a> {
     }
 
     /// Put back the brackets an `apply` replaced.
-    fn restore(&mut self, frame: &[(usize, f64, f64)]) {
+    pub(crate) fn restore(&mut self, frame: &[(usize, f64, f64)]) {
         for &(t, low, high) in frame {
             self.tree_min[t] = low;
             self.tree_max[t] = high;
@@ -256,23 +302,55 @@ impl<'a> EnsembleBounds<'a> {
         self.score_max = high;
     }
 
-    fn touches_assigned(&self, idx: usize, assigned_mask: &BitSet) -> bool {
-        let base = idx * self.n_words;
-        (0..self.n_words).any(|w| self.mask[base + w] & assigned_mask.words[w] != 0)
-    }
-
-    fn walk(
+    /// Per feature, how many live tree nodes a range assignment leaves
+    /// unresolved: nodes reachable under the current routing whose threshold
+    /// falls strictly inside the interval their feature is held to. Adds into
+    /// `counts` so the model and plausibility ensembles can share one tally.
+    pub(crate) fn count_unresolved(
         &self,
-        idx: usize,
-        assigned_mask: &BitSet,
+        ranges: &[Option<Cell>],
+        range_mask: &BitSet,
         assigned: &[bool],
         values: &[f64],
-    ) -> (f64, f64) {
-        if !self.touches_assigned(idx, assigned_mask) {
-            return (self.sub_min[idx], self.sub_max[idx]);
+        counts: &mut [u64],
+    ) {
+        for &root in &self.ens.tree_roots {
+            self.count_node(root as usize, ranges, range_mask, assigned, values, counts);
         }
-        let f = self.ens.feature[idx] as usize; // a set mask bit means this is a split
+    }
+
+    fn count_node(
+        &self,
+        idx: usize,
+        ranges: &[Option<Cell>],
+        range_mask: &BitSet,
+        assigned: &[bool],
+        values: &[f64],
+        counts: &mut [u64],
+    ) {
+        if !self.touches_assigned(idx, range_mask) {
+            return; // nothing below is held to a range: nothing to resolve
+        }
+        let f = self.ens.feature[idx] as usize;
         let (left, right) = (self.ens.left[idx] as usize, self.ens.right[idx] as usize);
+        if let Some(rng) = ranges[f] {
+            let t = self.ens.threshold[idx];
+            let (all_left, all_right) = if self.ens.is_lt[idx] {
+                (rng.hi < t || (rng.hi == t && rng.hi_open), rng.lo >= t)
+            } else {
+                (rng.hi <= t, rng.lo > t || (rng.lo == t && rng.lo_open))
+            };
+            if all_left {
+                self.count_node(left, ranges, range_mask, assigned, values, counts);
+            } else if all_right {
+                self.count_node(right, ranges, range_mask, assigned, values, counts);
+            } else {
+                counts[f] += 1;
+                self.count_node(left, ranges, range_mask, assigned, values, counts);
+                self.count_node(right, ranges, range_mask, assigned, values, counts);
+            }
+            return;
+        }
         if assigned[f] {
             let value = values[f];
             let child = if value.is_nan() {
@@ -298,10 +376,74 @@ impl<'a> EnsembleBounds<'a> {
             } else {
                 right
             };
-            return self.walk(child, assigned_mask, assigned, values);
+            self.count_node(child, ranges, range_mask, assigned, values, counts);
+            return;
         }
-        let (left_min, left_max) = self.walk(left, assigned_mask, assigned, values);
-        let (right_min, right_max) = self.walk(right, assigned_mask, assigned, values);
+        self.count_node(left, ranges, range_mask, assigned, values, counts);
+        self.count_node(right, ranges, range_mask, assigned, values, counts);
+    }
+
+    fn touches_assigned(&self, idx: usize, assigned_mask: &BitSet) -> bool {
+        let base = idx * self.n_words;
+        (0..self.n_words).any(|w| self.mask[base + w] & assigned_mask.words[w] != 0)
+    }
+
+    fn walk(
+        &self,
+        idx: usize,
+        assigned_mask: &BitSet,
+        assigned: &[bool],
+        values: &[f64],
+        ranges: &[Option<Cell>],
+    ) -> (f64, f64) {
+        if !self.touches_assigned(idx, assigned_mask) {
+            return (self.sub_min[idx], self.sub_max[idx]);
+        }
+        let f = self.ens.feature[idx] as usize; // a set mask bit means this is a split
+        let (left, right) = (self.ens.left[idx] as usize, self.ens.right[idx] as usize);
+        if let Some(rng) = ranges.get(f).copied().flatten() {
+            let t = self.ens.threshold[idx];
+            let (all_left, all_right) = if self.ens.is_lt[idx] {
+                (rng.hi < t || (rng.hi == t && rng.hi_open), rng.lo >= t)
+            } else {
+                (rng.hi <= t, rng.lo > t || (rng.lo == t && rng.lo_open))
+            };
+            if all_left {
+                return self.walk(left, assigned_mask, assigned, values, ranges);
+            }
+            if all_right {
+                return self.walk(right, assigned_mask, assigned, values, ranges);
+            }
+            // the threshold falls inside the interval: both children stay live
+        } else if assigned[f] {
+            let value = values[f];
+            let child = if value.is_nan() {
+                if self.ens.missing_left[idx] {
+                    left
+                } else {
+                    right
+                }
+            } else if self.ens.node_set[idx] >= 0 {
+                if self.ens.set_contains(self.ens.node_set[idx], value) {
+                    left
+                } else {
+                    right
+                }
+            } else if self.ens.is_lt[idx] {
+                if value < self.ens.threshold[idx] {
+                    left
+                } else {
+                    right
+                }
+            } else if value <= self.ens.threshold[idx] {
+                left
+            } else {
+                right
+            };
+            return self.walk(child, assigned_mask, assigned, values, ranges);
+        }
+        let (left_min, left_max) = self.walk(left, assigned_mask, assigned, values, ranges);
+        let (right_min, right_max) = self.walk(right, assigned_mask, assigned, values, ranges);
         (py_min(left_min, right_min), py_max(left_max, right_max))
     }
 }
@@ -335,35 +477,34 @@ fn accepts(
 }
 
 /// Everything the search reads but never writes.
-struct Ctx<'a> {
-    ens: &'a Ensemble,
-    if_ens: Option<&'a Ensemble>,
-    min_total_path: f64,
-    x: &'a [f64],
-    lo_t: f64,
-    hi_t: f64,
-    cons: &'a Constraints,
-    sigma: &'a [f64],
-    weights: &'a [f64],
-    lam: f64,
-    deltas: Vec<(f64, f64)>,
-    grids: Vec<Vec<Cell>>,
-    domains: Vec<Vec<State>>,
-    order: Vec<usize>,
-    level_of: Vec<usize>,
-    bounds_lo: Vec<f64>,
-    bounds_hi: Vec<f64>,
-    order_pairs: Vec<(usize, usize)>,
-    bounded_pairs: Vec<(usize, usize)>,
-    repairable_pairs: Vec<(usize, usize)>,
-    g_floor_pairs: Vec<(usize, usize)>,
-    spans: Vec<Option<(f64, f64)>>,
-    state_spans: Vec<Vec<(f64, f64)>>,
-    demanded: Vec<Vec<f64>>,
+pub(crate) struct Ctx<'a> {
+    pub(crate) ens: &'a Ensemble,
+    pub(crate) if_ens: Option<&'a Ensemble>,
+    pub(crate) min_total_path: f64,
+    pub(crate) x: &'a [f64],
+    pub(crate) lo_t: f64,
+    pub(crate) hi_t: f64,
+    pub(crate) cons: &'a Constraints,
+    pub(crate) sigma: &'a [f64],
+    pub(crate) weights: &'a [f64],
+    pub(crate) lam: f64,
+    pub(crate) deltas: Vec<(f64, f64)>,
+    pub(crate) grids: Vec<Vec<Cell>>,
+    pub(crate) domains: Vec<Vec<State>>,
+    pub(crate) order: Vec<usize>,
+    pub(crate) bounds_lo: Vec<f64>,
+    pub(crate) bounds_hi: Vec<f64>,
+    pub(crate) order_pairs: Vec<(usize, usize)>,
+    pub(crate) bounded_pairs: Vec<(usize, usize)>,
+    pub(crate) repairable_pairs: Vec<(usize, usize)>,
+    pub(crate) g_floor_pairs: Vec<(usize, usize)>,
+    pub(crate) spans: Vec<Option<(f64, f64)>>,
+    pub(crate) state_spans: Vec<Vec<(f64, f64)>>,
+    pub(crate) demanded: Vec<Vec<f64>>,
 }
 
 impl Ctx<'_> {
-    fn accepts(&self, row: &[f64]) -> bool {
+    pub(crate) fn accepts(&self, row: &[f64]) -> bool {
         accepts(
             self.ens,
             self.if_ens,
@@ -376,7 +517,7 @@ impl Ctx<'_> {
         )
     }
 
-    fn cost_of(&self, row: &[f64]) -> f64 {
+    pub(crate) fn cost_of(&self, row: &[f64]) -> f64 {
         cost_of_row(
             self.x,
             row,
@@ -388,58 +529,64 @@ impl Ctx<'_> {
         )
     }
 
-    /// The state index feature `f` currently sits on: the one its level pushed,
-    /// or the one being tried right now at the level the stack has not taken yet.
-    fn chosen(&self, f: usize, stack: &[usize], next_state: usize) -> usize {
-        let level = self.level_of[f];
-        if level < stack.len() {
-            stack[level]
-        } else {
-            next_state
-        }
-    }
-
     /// The values feature `f` can still end up holding. Undecided, that is every
     /// cell it might yet be put in; decided, the cell it was put in — a boundary
     /// repair may still move it anywhere inside — unless the pair cannot be
     /// repaired at all, and then the value it was given is the only point left.
+    /// A feature held to a whole interval (`range_span[f]` set) reaches that
+    /// interval's achievable span whether or not the pair can be repaired:
+    /// every state inside lies within it.
     fn reach(
         &self,
         f: usize,
         movable: bool,
         assigned: &[bool],
         values: &[f64],
-        stack: &[usize],
-        next_state: usize,
+        picked: &[usize],
+        range_span: &[Option<(f64, f64)>],
     ) -> (f64, f64) {
         if !assigned[f] {
             return self.spans[f].expect("a bounded pair's features have spans");
         }
+        if let Some(span) = range_span.get(f).copied().flatten() {
+            return span;
+        }
         if !movable {
             return (values[f], values[f]);
         }
-        self.state_spans[f][self.chosen(f, stack, next_state)]
+        self.state_spans[f][picked[f]]
     }
 
     /// True when some pair `a <= b` is already out of reach: the lowest value `a`
     /// can still hold is above the highest `b` can.
-    fn unorderable(
+    ///
+    /// A pair no repair may touch is judged on the values its features were
+    /// given. When their cells could still have been ordered, the cut leaves a
+    /// completion the search never settled, and the ledger says so.
+    pub(crate) fn unorderable(
         &self,
         assigned: &[bool],
         values: &[f64],
-        stack: &[usize],
-        next_state: usize,
+        picked: &[usize],
+        range_span: &[Option<(f64, f64)>],
+        dropped_floor: &mut f64,
     ) -> bool {
         for pair in &self.bounded_pairs {
             let (a, b) = *pair;
             let movable = self.repairable_pairs.contains(pair);
             if self
-                .reach(a, movable, assigned, values, stack, next_state)
+                .reach(a, movable, assigned, values, picked, range_span)
                 .0
                 > self
-                    .reach(b, movable, assigned, values, stack, next_state)
+                    .reach(b, movable, assigned, values, picked, range_span)
                     .1
             {
+                if !movable
+                    && self.reach(a, true, assigned, values, picked, range_span).0
+                        <= self.reach(b, true, assigned, values, picked, range_span).1
+                {
+                    *dropped_floor = f64::NEG_INFINITY;
+                }
                 return true;
             }
         }
@@ -448,13 +595,13 @@ impl Ctx<'_> {
 
     /// The cell the current assignment puts `f` in, narrowed to its constraint
     /// bounds; `None` when `f` is currently missing.
-    fn intersected_cell(&self, f: usize, stack: &[usize], next_state: usize) -> Option<Cell> {
-        let picked = self.domains[f][self.chosen(f, stack, next_state)];
-        if picked.is_nan {
+    fn intersected_cell(&self, f: usize, picked: &[usize]) -> Option<Cell> {
+        let state = self.domains[f][picked[f]];
+        if state.is_nan {
             return None;
         }
         intersect_cell(
-            &self.grids[f][picked.cell_idx],
+            &self.grids[f][state.cell_idx],
             self.bounds_lo[f],
             self.bounds_hi[f],
         )
@@ -481,13 +628,12 @@ impl Ctx<'_> {
         &self,
         a: usize,
         b: usize,
-        stack: &[usize],
-        next_state: usize,
+        picked: &[usize],
         forced_value: &[Option<f64>],
     ) -> Vec<f64> {
         let (Some(cell_a), Some(cell_b)) = (
-            self.intersected_cell(a, stack, next_state),
-            self.intersected_cell(b, stack, next_state),
+            self.intersected_cell(a, picked),
+            self.intersected_cell(b, picked),
         ) else {
             return Vec::new();
         };
@@ -535,11 +681,10 @@ impl Ctx<'_> {
     /// Several broken pairs at once are repaired one after another, each on the
     /// cheapest shared value regardless of the arbiter, and the whole completion
     /// is dropped if any pair is left broken.
-    fn finish(
+    pub(crate) fn finish(
         &self,
         row: &[f64],
-        stack: &[usize],
-        next_state: usize,
+        picked: &[usize],
         forced_value: &[Option<f64>],
         g: f64,
         dropped_floor: &mut f64,
@@ -556,13 +701,16 @@ impl Ctx<'_> {
             .iter()
             .any(|pair| !self.repairable_pairs.contains(pair))
         {
-            return None; // a policy-bound pair; the arbiter rejects the row anyway
+            // a policy-bound pair: nothing legal to move, so the completion is
+            // dropped unrepaired, and the ledger records that it was
+            self.set_aside(&violated, g, dropped_floor);
+            return None;
         }
         if violated.len() == 1 {
             let (a, b) = violated[0];
             let mut best_row: Option<Vec<f64>> = None;
             let mut best_cost = f64::INFINITY;
-            for t in self.candidates_for(a, b, stack, next_state, forced_value) {
+            for t in self.candidates_for(a, b, picked, forced_value) {
                 let mut variant = row.to_vec();
                 variant[a] = t;
                 variant[b] = t;
@@ -581,7 +729,7 @@ impl Ctx<'_> {
         for &(a, b) in &violated {
             let mut best_t: Option<f64> = None;
             let mut best_cost = f64::INFINITY;
-            for t in self.candidates_for(a, b, stack, next_state, forced_value) {
+            for t in self.candidates_for(a, b, picked, forced_value) {
                 let mut variant = repaired.clone();
                 variant[a] = t;
                 variant[b] = t;
@@ -694,6 +842,30 @@ fn presolve_domains(
     removed
 }
 
+/// Which features of the winning row were moved onto a policy grid, in
+/// search order — a feature an order-pair repair moved no longer holds the
+/// value the policy produced, so it is not reported as snapped either.
+pub(crate) fn snapped_of(
+    order: &[usize],
+    incumbent_states: Option<&[State]>,
+    incumbent_row: Option<&[f64]>,
+    x: &[f64],
+) -> Vec<usize> {
+    let mut snapped: Vec<usize> = Vec::new();
+    for (level, chosen_state) in incumbent_states.into_iter().flatten().enumerate() {
+        let f = order[level];
+        if let Some(row) = incumbent_row {
+            if row[f] != chosen_state.value {
+                continue;
+            }
+        }
+        if chosen_state.snapped && chosen_state.value != x[f] {
+            snapped.push(f);
+        }
+    }
+    snapped
+}
+
 #[allow(clippy::too_many_arguments)]
 fn stats(
     nodes_expanded: u64,
@@ -705,6 +877,7 @@ fn stats(
     warm_start_used: bool,
     presolve_removed: u64,
     presolve_certified: bool,
+    search: SearchMode,
 ) -> ExactStats {
     ExactStats {
         nodes_expanded,
@@ -716,7 +889,20 @@ fn stats(
         warm_start_used,
         presolve_removed,
         presolve_certified,
+        search,
+        coarse_accepts: 0,
+        refinements: 0,
     }
+}
+
+/// The single sample an early exit records: `bound` is `0.0` when the factual
+/// itself was accepted and `+inf` when nothing can be feasible.
+fn single_sample(incumbent: Option<f64>, bound: f64) -> Vec<TraceSample> {
+    vec![TraceSample {
+        nodes: 0,
+        incumbent,
+        bound,
+    }]
 }
 
 /// Search the cell grid depth-first for the cheapest counterfactual — port of
@@ -773,9 +959,10 @@ pub fn solve_exact(
         return Ok(SearchOutcome::Done(ExactResult {
             x_cf: Some(x.to_vec()),
             proof: "optimal",
-            stats: stats(0, 0, 0, 0.0, gap, true, false, 0, false),
+            stats: stats(0, 0, 0, 0.0, gap, true, false, 0, false, params.search),
             snapped: Vec::new(),
             distance: Some(0.0),
+            trace: single_sample(Some(0.0), 0.0),
         }));
     }
 
@@ -802,9 +989,21 @@ pub fn solve_exact(
         return Ok(SearchOutcome::Done(ExactResult {
             x_cf: None,
             proof: "optimal",
-            stats: stats(0, 0, 0, f64::INFINITY, gap, true, false, 0, false),
+            stats: stats(
+                0,
+                0,
+                0,
+                f64::INFINITY,
+                gap,
+                true,
+                false,
+                0,
+                false,
+                params.search,
+            ),
             snapped: Vec::new(),
             distance: None,
+            trace: single_sample(None, f64::INFINITY),
         }));
     }
     let mut assigned = vec![false; x.len()];
@@ -840,17 +1039,19 @@ pub fn solve_exact(
                 false,
                 presolve_removed,
                 true,
+                params.search,
             ),
             snapped: Vec::new(),
             distance: None,
+            trace: single_sample(None, f64::INFINITY),
         }));
     }
 
     let h_suffix = h_suffix(&order, &domains);
 
-    let mut level_of = vec![usize::MAX; x.len()];
-    for (level, &f) in order.iter().enumerate() {
-        level_of[f] = level;
+    let mut in_order = vec![false; x.len()];
+    for &f in &order {
+        in_order[f] = true;
     }
     // Every feature an implication, a one-hot group or an order pair mentions is
     // constraint-referenced, and feature_order keeps all of those, so the search
@@ -861,7 +1062,7 @@ pub fn solve_exact(
             .flat_map(|&(ci, _, si, _)| [ci as usize, si as usize])
             .chain(cons.onehot.iter().flatten().map(|&f| f as usize))
             .chain(order_pairs.iter().flat_map(|&(a, b)| [a, b]))
-            .all(|f| level_of[f] != usize::MAX),
+            .all(|f| in_order[f]),
         "a related feature was left out of the search order"
     );
 
@@ -910,18 +1111,6 @@ pub fn solve_exact(
         .copied()
         .filter(|&(a, b)| !policy_active(a) && !policy_active(b))
         .collect();
-    // Python holds the repairable pairs in a frozenset and weighs its size
-    // against the *list* of order pairs, so a pair declared twice — two
-    // identical `a - b <= 0` Linears, which the compiler accepts — already
-    // trips the withdrawal even with no value policy anywhere. Only this count
-    // is deduplicated; membership tests read the same either way.
-    let mut unique_repairable: Vec<(usize, usize)> = Vec::new();
-    for &pair in &repairable_pairs {
-        if !unique_repairable.contains(&pair) {
-            unique_repairable.push(pair);
-        }
-    }
-    let policy_bound = !order_pairs.is_empty() && unique_repairable.len() < order_pairs.len();
     let mut onehot_member = vec![false; cons.n_features];
     for group in &cons.onehot {
         for &f in group {
@@ -947,7 +1136,6 @@ pub fn solve_exact(
         grids,
         domains,
         order,
-        level_of,
         bounds_lo,
         bounds_hi,
         order_pairs,
@@ -960,6 +1148,24 @@ pub fn solve_exact(
     };
 
     let mut propagation = Propagation::new(cons, &ctx.domains);
+
+    if params.search == SearchMode::Refine {
+        return Ok(crate::exact::refine::run(
+            &ctx,
+            &mut propagation,
+            &mut model_bounds,
+            &mut if_bounds,
+            &mut assigned,
+            &mut values,
+            &h_suffix,
+            incumbent,
+            presolve_removed,
+            f64::INFINITY,
+            start,
+            params,
+            probe,
+        ));
+    }
 
     let mut incumbent_cost = f64::INFINITY;
     let mut incumbent_row: Option<Vec<f64>> = None;
@@ -982,17 +1188,55 @@ pub fn solve_exact(
     // cheapest committed cost among the completions the repair had to set aside;
     // nothing derived from one of those can cost less than this, so once the
     // incumbent is at least as cheap, setting them aside changed nothing
-    let mut dropped_floor = if policy_bound {
-        f64::NEG_INFINITY
-    } else {
-        f64::INFINITY
-    };
+    let mut dropped_floor = f64::INFINITY;
 
     let mut stack: Vec<usize> = Vec::new(); // state index chosen at each assigned level
+                                            // the state index each assigned feature sits on; the classic search never
+                                            // holds a feature to an interval, so its range spans stay unset
+    let mut picked: Vec<usize> = vec![0; x.len()];
+    let range_span: Vec<Option<(f64, f64)>> = vec![None; x.len()];
     let mut frames: Vec<Frame> = Vec::new();
     let mut g_stack: Vec<f64> = vec![0.0]; // cost committed before the level of the same index
     let mut g = 0.0;
     let mut next_state: usize = 0;
+    let mut trace = Trace::new();
+
+    // Cheapest cost any completion still ahead of the search could reach: at
+    // every level, the next untried state (states are cost-sorted, so it is the
+    // cheapest one left there) plus the cheapest remainder.
+    let frontier_bound = |stack: &[usize], next_state: usize, g_stack: &[f64]| -> f64 {
+        let mut bound = f64::INFINITY;
+        for (level, &chosen) in stack.iter().enumerate() {
+            let states_at = &ctx.domains[ctx.order[level]];
+            if chosen + 1 < states_at.len() {
+                bound = py_min(
+                    bound,
+                    g_stack[level] + states_at[chosen + 1].cost + h_suffix[level + 1],
+                );
+            }
+        }
+        let k = stack.len();
+        if k < ctx.order.len() && next_state < ctx.domains[ctx.order[k]].len() {
+            bound = py_min(
+                bound,
+                g_stack[k] + ctx.domains[ctx.order[k]][next_state].cost + h_suffix[k + 1],
+            );
+        }
+        bound
+    };
+    // One trace sample: the sound lower bound as the search knows it now.
+    let sample_bound = |frontier: f64, incumbent_cost: f64, dropped_floor: f64| -> f64 {
+        let mut bound = frontier;
+        if gap > 0.0 {
+            bound = py_min(bound, incumbent_cost / (1.0 + gap));
+        }
+        let set_aside_view = if dropped_floor == f64::NEG_INFINITY {
+            0.0
+        } else {
+            dropped_floor
+        };
+        py_min(py_min(bound, set_aside_view), incumbent_cost)
+    };
 
     while !ctx.order.is_empty() {
         let k = stack.len();
@@ -1029,11 +1273,25 @@ pub fn solve_exact(
         }
 
         nodes_expanded += 1;
+        if nodes_expanded & (nodes_expanded - 1) == 0 {
+            let bound = sample_bound(
+                frontier_bound(&stack, next_state, &g_stack),
+                incumbent_cost,
+                dropped_floor,
+            );
+            trace.record(
+                nodes_expanded,
+                incumbent_row.as_ref().map(|_| incumbent_cost),
+                bound,
+                false,
+            );
+        }
         let j = ctx.order[k];
         let state = ctx.domains[j][next_state];
         let (prop_frame, conflict) = propagation.apply(j, state.value, &assigned, &values);
         assigned[j] = true;
         values[j] = state.value;
+        picked[j] = next_state;
         assigned_mask.set(j);
         let frame = Frame {
             j,
@@ -1049,7 +1307,7 @@ pub fn solve_exact(
 
         if conflict
             || (!ctx.bounded_pairs.is_empty()
-                && ctx.unorderable(&assigned, &values, &stack, next_state))
+                && ctx.unorderable(&assigned, &values, &picked, &range_span, &mut dropped_floor))
         {
             // No completion below this state can satisfy the constraints, so it
             // is cut on feasibility, counted with the cost prunes.
@@ -1129,8 +1387,7 @@ pub fn solve_exact(
             row[j] = state.value;
             let accepted = ctx.finish(
                 &row,
-                &stack,
-                next_state,
+                &picked,
                 &propagation.forced_value,
                 g,
                 &mut dropped_floor,
@@ -1147,6 +1404,12 @@ pub fn solve_exact(
                         .collect();
                     winning.push(state);
                     incumbent_states = Some(winning);
+                    let bound = sample_bound(
+                        frontier_bound(&stack, next_state, &g_stack),
+                        incumbent_cost,
+                        dropped_floor,
+                    );
+                    trace.record(nodes_expanded, Some(incumbent_cost), bound, true);
                 }
             }
             undo(
@@ -1201,21 +1464,19 @@ pub fn solve_exact(
             "heuristic",
         )
     };
+    trace.record(
+        nodes_expanded,
+        incumbent_row.as_ref().map(|_| incumbent_cost),
+        lower_bound,
+        false,
+    );
 
-    let mut snapped: Vec<usize> = Vec::new();
-    for (level, chosen_state) in incumbent_states.iter().flatten().enumerate() {
-        let f = ctx.order[level];
-        // a feature an order-pair repair moved no longer holds the value the
-        // policy produced, so it is not reported as snapped either
-        if let Some(row) = incumbent_row.as_ref() {
-            if row[f] != chosen_state.value {
-                continue;
-            }
-        }
-        if chosen_state.snapped && chosen_state.value != x[f] {
-            snapped.push(f);
-        }
-    }
+    let snapped = snapped_of(
+        &ctx.order,
+        incumbent_states.as_deref(),
+        incumbent_row.as_deref(),
+        x,
+    );
 
     Ok(SearchOutcome::Done(ExactResult {
         distance: incumbent_row.as_ref().map(|_| incumbent_cost),
@@ -1231,8 +1492,10 @@ pub fn solve_exact(
             warm_start_used,
             presolve_removed,
             false,
+            params.search,
         ),
         snapped,
+        trace: trace.into_samples(),
     }))
 }
 
@@ -1599,6 +1862,9 @@ mod tests {
                 warm_start_used: false,
                 presolve_removed: 1,
                 presolve_certified: false,
+                search: SearchMode::Classic,
+                coarse_accepts: 0,
+                refinements: 0,
             }
         );
         assert!(result.snapped.is_empty());
@@ -1727,9 +1993,10 @@ mod tests {
         assert_eq!(result.stats.presolve_removed, 1);
     }
 
-    /// A value policy on either side makes the pair unrepairable, so the search
-    /// withdraws its claim on the whole space (`completed` false) instead of
-    /// reporting a certificate.
+    /// A value policy on either side makes the pair unrepairable. The one
+    /// in-target completion breaks the pair on values its cells could still
+    /// have ordered, so cutting it withdraws the claim on the whole space
+    /// (`completed` false) instead of reporting a certificate.
     #[test]
     fn policy_bound_pair_withdraws_the_completeness_claim() {
         let ens = stumps(&[(0, 1.0, true, 0.0, 1.0)], 2);
@@ -1767,6 +2034,9 @@ mod tests {
                 warm_start_used: false,
                 presolve_removed: 1,
                 presolve_certified: false,
+                search: SearchMode::Classic,
+                coarse_accepts: 0,
+                refinements: 0,
             }
         );
     }
@@ -1806,6 +2076,9 @@ mod tests {
                 warm_start_used: false,
                 presolve_removed: 1,
                 presolve_certified: false,
+                search: SearchMode::Classic,
+                coarse_accepts: 0,
+                refinements: 0,
             }
         );
     }
@@ -1972,6 +2245,9 @@ mod tests {
                 warm_start_used: false,
                 presolve_removed: 2,
                 presolve_certified: false,
+                search: SearchMode::Classic,
+                coarse_accepts: 0,
+                refinements: 0,
             }
         );
     }
@@ -2038,6 +2314,9 @@ mod tests {
                 warm_start_used: false,
                 presolve_removed: 2,
                 presolve_certified: false,
+                search: SearchMode::Classic,
+                coarse_accepts: 0,
+                refinements: 0,
             }
         );
     }
@@ -2088,17 +2367,18 @@ mod tests {
                 warm_start_used: false,
                 presolve_removed: 1,
                 presolve_certified: false,
+                search: SearchMode::Classic,
+                coarse_accepts: 0,
+                refinements: 0,
             }
         );
     }
 
     /// The same pair declared twice — two identical `a - b <= 0` Linears, which
-    /// the compiler accepts — collapses in Python's frozenset of repairable
-    /// pairs but not in the list of order pairs, so the withdrawal fires even
-    /// with no value policy in sight. Python: `x_cf = [1.0, 1.0]`, distance 1.5,
-    /// proof "heuristic", completed false (against "optimal"/true for one copy).
+    /// the compiler accepts — is repaired like a single copy and keeps the
+    /// certificate. Python: `x_cf = [1.0, 1.0]`, distance 1.5, proof "optimal".
     #[test]
-    fn duplicate_order_pair_withdraws_the_completeness_claim() {
+    fn duplicate_order_pairs_are_one_pair() {
         let ens = stumps(&[(0, 1.0, true, 0.0, 1.0)], 2);
         let pair = || LinearC {
             indices: vec![0, 1],
@@ -2124,19 +2404,22 @@ mod tests {
             vec![0x3ff0000000000000, 0x3ff0000000000000]
         );
         assert_eq!(result.distance.unwrap().to_bits(), 0x3ff8000000000000);
-        assert_eq!(result.proof, "heuristic");
+        assert_eq!(result.proof, "optimal");
         assert_eq!(
             result.stats,
             ExactStats {
                 nodes_expanded: 2,
                 nodes_pruned_score: 0,
                 nodes_pruned_cost: 0,
-                lower_bound: 0.0,
+                lower_bound: 1.5,
                 gap: 0.0,
-                completed: false,
+                completed: true,
                 warm_start_used: false,
                 presolve_removed: 1,
                 presolve_certified: false,
+                search: SearchMode::Classic,
+                coarse_accepts: 0,
+                refinements: 0,
             }
         );
     }

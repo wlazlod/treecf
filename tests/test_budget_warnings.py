@@ -50,7 +50,7 @@ def exp() -> Explainer:
     return Explainer(_ir(), normalizers=np.ones(3))
 
 
-X0 = np.zeros(3)
+x0 = np.zeros(3)
 
 
 class TestGapParenthetical:
@@ -74,16 +74,20 @@ class TestGapParenthetical:
         assert _gap_parenthetical(1.0, math.inf) == ""
 
 
+SEARCH_MODES = ["classic", "refine"]
+
+
 class TestExhaustionBodies:
     """node_budget=1 exhausts on the very first assignment; the two bodies
     differ only by whether the warm start had already produced a row."""
 
-    def test_incumbent_exists_uses_body_a(self, exp: Explainer) -> None:
+    @pytest.mark.parametrize("search", SEARCH_MODES)
+    def test_incumbent_exists_uses_body_a(self, exp: Explainer, search: str) -> None:
         target = Target.raw(op=">=", value=1.5)  # needs at least two levers
         with pytest.warns(TreecfWarning, match="exhausted") as record:
             result = exp.explain(
-                X0, target, backend="exact", seed=0,
-                warm_start=True, node_budget=1, time_budget_s=5.0,
+                x0, target, backend="exact", seed=0,
+                warm_start=True, node_budget=1, time_budget_s=5.0, search=search,
             )
         assert isinstance(result, Counterfactual)
         assert result.solver_stats["completed"] is False
@@ -92,12 +96,13 @@ class TestExhaustionBodies:
         assert "the result is the best found, not proven optimal" in message
         assert "raise node_budget/time_budget_s" in message
 
-    def test_no_incumbent_uses_body_b(self, exp: Explainer) -> None:
+    @pytest.mark.parametrize("search", SEARCH_MODES)
+    def test_no_incumbent_uses_body_b(self, exp: Explainer, search: str) -> None:
         target = Target.raw(op=">=", value=1.5)
         with pytest.warns(TreecfWarning, match="exhausted") as record:
             result = exp.explain(
-                X0, target, backend="exact", seed=0,
-                warm_start=False, node_budget=1, time_budget_s=5.0,
+                x0, target, backend="exact", seed=0,
+                warm_start=False, node_budget=1, time_budget_s=5.0, search=search,
             )
         assert isinstance(result, Infeasible)
         assert result.solver_stats["completed"] is False
@@ -107,32 +112,75 @@ class TestExhaustionBodies:
         assert "NOT a certified infeasibility" in message
 
 
-class TestWithdrawalBody:
-    """Declaring the same order pair twice trips the conservative repair's
-    "several pairs sharing features" fallback -- a completion is set aside
-    although the whole budget was never touched."""
+class TestPolicyPairsKeepTheCertificate:
+    """An order pair over a feature under a value policy cannot be repaired,
+    but that costs the certificate only when a completion actually breaks the
+    pair; a search that never meets one stays exact."""
 
-    def test_duplicate_order_pair_withdraws_without_exhaustion(self) -> None:
-        withdrawing = Explainer(
+    @pytest.mark.parametrize("search", SEARCH_MODES)
+    def test_no_broken_completion_means_optimal(self, search: str) -> None:
+        exp = Explainer(
+            _ir(), normalizers=np.ones(3),
+            constraints=[constraint("a <= b")], value_policy={"a": "integer"},
+        )
+        # b already sits at 1, so moving a to 1 keeps a <= b; the only
+        # cheaper candidates fail the score bound before any repair is due
+        result = exp.explain(
+            np.array([0.0, 1.0, 0.0]), Target.raw(op=">=", value=1.5), backend="exact",
+            seed=0, warm_start=False, search=search,
+        )
+        assert isinstance(result, Counterfactual)
+        assert result.x_cf.tolist() == [1.0, 1.0, 0.0]
+        assert result.proof == "optimal"
+        assert result.solver_stats["completed"] is True
+
+    @pytest.mark.parametrize("search", SEARCH_MODES)
+    def test_duplicate_order_pairs_are_one_pair(self, search: str) -> None:
+        exp = Explainer(
             _ir(), normalizers=np.ones(3),
             constraints=[constraint("a <= b"), constraint("a <= b")],
         )
+        result = exp.explain(
+            x0, Target.raw(op=">=", value=0.5), backend="exact", seed=0,
+            warm_start=False, search=search,
+        )
+        assert isinstance(result, Counterfactual)
+        assert result.proof == "optimal"
+
+
+class TestWithdrawalBody:
+    """A completion that breaks an order pair over a policy-bound feature is
+    dropped rather than repaired, so the search sets it aside although the
+    whole budget was never touched."""
+
+    @pytest.mark.parametrize("search", SEARCH_MODES)
+    def test_policy_bound_pair_withdraws_without_exhaustion(self, search: str) -> None:
+        withdrawing = Explainer(
+            _ir(), normalizers=np.ones(3),
+            constraints=[constraint("a <= b")], value_policy={"a": "integer"},
+        )
         target = Target.raw(op=">=", value=0.5)
+        # a and b both sit above their splits, in one shared cell where a plain
+        # repair could order them; the policy on a forbids moving it, so the
+        # completion is cut unsettled and the claim goes with it
         with pytest.warns(TreecfWarning) as record:
             result = withdrawing.explain(
-                X0, target, backend="exact", seed=0,
-                warm_start=False, node_budget=2_000_000, time_budget_s=10.0,
+                np.array([2.0, 1.5, 0.0]), target, backend="exact", seed=0,
+                warm_start=False, node_budget=2_000_000, time_budget_s=10.0, search=search,
             )
         assert isinstance(result, Counterfactual)
         assert result.proof == "heuristic"
         stats = result.solver_stats
         assert stats["completed"] is False
         assert stats["nodes_expanded"] < 100  # budget (2_000_000) nowhere near touched
-        assert len(record) == 1
-        message = str(record[0].message)
+        messages = [
+            str(w.message) for w in record
+            if "withdrew its optimality certificate" in str(w.message)
+        ]
+        assert len(messages) == 1  # the factual-violation warning also fires
+        message = messages[0]
         # the cardinal rule: a withdrawal must never be spelled as an exhaustion
         assert "exhausted" not in message
-        assert "withdrew its optimality certificate" in message
         assert "not proven cheapest" in message
 
     def test_no_row_withdrawal_never_claims_exhaustion(self) -> None:
@@ -211,7 +259,7 @@ class TestSeedClause:
         target = Target.raw(op=">=", value=1.5)
         with pytest.warns(TreecfWarning, match="exhausted") as record:
             result = exp.explain(
-                X0, target, backend="exact", seed=None,
+                x0, target, backend="exact", seed=None,
                 warm_start=True, node_budget=1, time_budget_s=5.0,
             )
         assert isinstance(result, Counterfactual)
@@ -222,7 +270,7 @@ class TestSeedClause:
         target = Target.raw(op=">=", value=1.5)
         with pytest.warns(TreecfWarning, match="exhausted") as record:
             result = exp.explain(
-                X0, target, backend="exact", seed=0,
+                x0, target, backend="exact", seed=0,
                 warm_start=True, node_budget=1, time_budget_s=5.0,
             )
         assert isinstance(result, Counterfactual)
@@ -235,20 +283,22 @@ class TestNeverWarns:
     suite's ``filterwarnings = ["error"]`` is the real net, this just names
     the three cases explicitly."""
 
+    @pytest.mark.parametrize("search", SEARCH_MODES)
     def test_completed_counterfactual_never_warns(
-        self, exp: Explainer, recwarn: pytest.WarningsRecorder
+        self, exp: Explainer, recwarn: pytest.WarningsRecorder, search: str
     ) -> None:
         target = Target.raw(op=">=", value=0.5)
-        result = exp.explain(X0, target, backend="exact", seed=0)
+        result = exp.explain(x0, target, backend="exact", seed=0, search=search)
         assert isinstance(result, Counterfactual)
         assert result.solver_stats["completed"] is True
         assert not any(issubclass(w.category, TreecfWarning) for w in recwarn.list)
 
+    @pytest.mark.parametrize("search", SEARCH_MODES)
     def test_certified_infeasible_never_warns(
-        self, exp: Explainer, recwarn: pytest.WarningsRecorder
+        self, exp: Explainer, recwarn: pytest.WarningsRecorder, search: str
     ) -> None:
         target = Target.raw(op=">=", value=10.0)  # unreachable: max raw score is 2.4
-        result = exp.explain(X0, target, backend="exact", seed=0)
+        result = exp.explain(x0, target, backend="exact", seed=0, search=search)
         assert isinstance(result, Infeasible)
         assert result.proof == "certified"
         assert not any(issubclass(w.category, TreecfWarning) for w in recwarn.list)
@@ -257,7 +307,7 @@ class TestNeverWarns:
         self, exp: Explainer, recwarn: pytest.WarningsRecorder
     ) -> None:
         target = Target.raw(op=">=", value=0.5)
-        result = exp.explain(X0, target, backend="genetic", seed=0)
+        result = exp.explain(x0, target, backend="genetic", seed=0)
         assert isinstance(result, Counterfactual | Infeasible)
         assert not any(issubclass(w.category, TreecfWarning) for w in recwarn.list)
 
@@ -270,7 +320,7 @@ class TestAggregateWarnings:
         target = Target.bands({"lo": (0.5, 0.7), "hi": (1.3, 1.5)}, space="raw")
         with pytest.warns(TreecfWarning) as record:
             result = exp.explain(
-                X0, target, backend="exact", seed=0,
+                x0, target, backend="exact", seed=0,
                 warm_start=False, node_budget=1, time_budget_s=5.0,
             )
         assert isinstance(result, dict)
@@ -281,7 +331,7 @@ class TestAggregateWarnings:
         target = Target.raw(op=">=", value=0.5)
         with pytest.warns(TreecfWarning) as record:
             result = exp.explain_coalitions(
-                X0, target, {"c1": ["a"], "c2": ["b", "c"]}, backend="exact", seed=0,
+                x0, target, {"c1": ["a"], "c2": ["b", "c"]}, backend="exact", seed=0,
                 warm_start=False, node_budget=1, time_budget_s=5.0,
             )
         assert set(result) == {"c1", "c2"}

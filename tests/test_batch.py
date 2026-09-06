@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 
 import numpy as np
@@ -171,24 +172,24 @@ class TestLeverBlocking:
 
 class TestExactBatchOptIn:
     def test_no_flag_raises_with_estimate(self, exp: Explainer) -> None:
-        X5 = np.zeros((5, 3))
+        X_5 = np.zeros((5, 3))
         with pytest.raises(ValueError, match=r"5 rows x 1 plans x 10s") as excinfo:
-            exp.explain_batch(X5, TARGET, backend="exact", seed=0)
+            exp.explain_batch(X_5, TARGET, backend="exact", seed=0)
         assert "hours" in str(excinfo.value)
 
     def test_no_flag_estimate_multiplies_plans_by_n_per_example(self, exp: Explainer) -> None:
-        X3 = np.zeros((3, 3))
+        X_3 = np.zeros((3, 3))
         with pytest.raises(ValueError, match=r"3 rows x 4 plans x 10s"):
             exp.explain_batch(
-                X3, TARGET, backend="exact", seed=0,
+                X_3, TARGET, backend="exact", seed=0,
                 diversity="lever-blocking", n_per_example=4,
             )
 
     def test_no_flag_estimate_uses_coalition_count_as_plans(self, exp: Explainer) -> None:
-        X2 = np.zeros((2, 3))
+        X_2 = np.zeros((2, 3))
         with pytest.raises(ValueError, match=r"2 rows x 3 plans x 10s"):
             exp.explain_batch(
-                X2, TARGET, backend="exact", seed=0, diversity="coalitions",
+                X_2, TARGET, backend="exact", seed=0, diversity="coalitions",
                 coalitions={"c1": ["a"], "c2": ["b", "c"]}, include_full=True,
             )
 
@@ -257,8 +258,8 @@ class TestExactBatchOptIn:
         monkeypatch.setattr(Explainer, "_explain_genetic", spy_explain_genetic)
         monkeypatch.setattr(Explainer, "_solve_batch", fake_solve_batch)
 
-        X2 = np.zeros((2, 3))
-        batch = exp.explain_batch(X2, TARGET, backend="exact", seed=0, allow_exact_batch=True)
+        X_2 = np.zeros((2, 3))
+        batch = exp.explain_batch(X_2, TARGET, backend="exact", seed=0, allow_exact_batch=True)
         assert explain_genetic_calls == 0
         assert all(r.feasible for r in batch)  # the (generous default budget) exact
         # search still finds a counterfactual on its own, without the warm start
@@ -416,6 +417,57 @@ class TestPersistence:
             np.testing.assert_array_equal(restored.region.hi, original.region.hi)
             assert restored.region.feature_intervals == original.region.feature_intervals
             assert restored.region.certified == original.region.certified
+
+        # maximality flags and witnesses round-trip too; files written before
+        # they existed load with the empty defaults
+        from dataclasses import replace as dc_replace
+
+        flagged_records = []
+        for record in batch:
+            if record.region is None:
+                flagged_records.append(record)
+                continue
+            name = next(iter(record.region.feature_intervals))
+            region = dc_replace(
+                record.region,
+                maximal={name: (True, False)},
+                maximal_categories={},
+                witnesses={f"{name}:lo": np.array([1.0, math.nan, 3.0])},
+                integer_features=(name,),
+                data_limited={name: (False, True)},
+            )
+            flagged_records.append(dc_replace(record, region=region))
+        flagged = dc_replace(batch, records=tuple(flagged_records))
+        flagged_path = f"{tmp_path}/batch_flagged.json"
+        flagged.save(flagged_path)
+        for original, restored in zip(flagged, BatchResult.load(flagged_path), strict=True):
+            if original.region is None:
+                continue
+            assert restored.region is not None
+            assert restored.region.maximal == original.region.maximal
+            assert restored.region.maximal_categories == {}
+            assert restored.region.integer_features == original.region.integer_features
+            assert restored.region.data_limited == original.region.data_limited
+            assert restored.region.witnesses is not None
+            for key, point in original.region.witnesses.items():
+                np.testing.assert_array_equal(restored.region.witnesses[key], point)
+        with open(path, encoding="utf-8") as fh:
+            raw = json.load(fh)
+        for record in raw["records"]:
+            if record["region"] is not None:
+                for key in (
+                    "maximal", "maximal_categories", "witnesses", "integer_features",
+                    "data_limited",
+                ):
+                    record["region"].pop(key, None)
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(raw, fh)
+        for restored in BatchResult.load(path):
+            if restored.region is not None:
+                assert restored.region.maximal == {}
+                assert restored.region.witnesses is None
+                assert restored.region.integer_features == ()
+                assert restored.region.data_limited == {}
 
         # a file saved without region=True (or by an older version) has no
         # "region" key per record at all -- the loader must not choke on it.

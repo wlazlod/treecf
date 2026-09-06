@@ -1129,6 +1129,68 @@ class TestPlotRegion:
         model_caps = [ln for ln in ax.lines if ln.get_label() == "_cap_model"]
         assert constraint_caps and model_caps
 
+    def test_proved_sides_get_a_square_cap_and_drop_the_caveat(self) -> None:
+        from dataclasses import replace
+
+        from treecf.viz import plot_region
+
+        exp, x, x_cf, region = self._setup()
+        proved = replace(
+            region,
+            maximal={name: (True, True) for name in region.feature_intervals},
+        )
+        ax = plot_region(exp, x, (proved, x_cf))
+        labels = [t.get_text() for t in ax.get_legend().get_texts()]
+        assert "stopped at a proved boundary" in labels
+        assert "certified, not necessarily maximal" not in labels
+        proved_caps = [ln for ln in ax.lines if ln.get_label() == "_cap_proved"]
+        model_caps = [ln for ln in ax.lines if ln.get_label() == "_cap_model"]
+        assert proved_caps and not model_caps
+        assert all(ln.get_marker() == "s" for ln in proved_caps)
+
+    def test_data_limited_sides_get_their_own_cap_and_settle_the_caveat(self) -> None:
+        from dataclasses import replace
+
+        from treecf.viz import plot_region
+
+        exp, x, x_cf, region = self._setup()
+        # income stopped at the data range on both sides; utilization's finite
+        # side is proved and its other side open: nothing left unsettled
+        limited = replace(
+            region,
+            data_limited={"income": (True, True)},
+            maximal={"utilization": (True, False)},
+        )
+        ax = plot_region(exp, x, (limited, x_cf))
+        labels = [t.get_text() for t in ax.get_legend().get_texts()]
+        assert "stopped at the data range" in labels
+        assert "certified, not necessarily maximal" not in labels
+        data_caps = [ln for ln in ax.lines if ln.get_label() == "_cap_data"]
+        model_caps = [ln for ln in ax.lines if ln.get_label() == "_cap_model"]
+        assert len(data_caps) == 2 and not model_caps
+
+    def test_legend_omits_the_data_cap_when_no_side_stopped_there(self) -> None:
+        from treecf.viz import plot_region
+
+        exp, x, x_cf, region = self._setup()
+        ax = plot_region(exp, x, (region, x_cf))
+        labels = [t.get_text() for t in ax.get_legend().get_texts()]
+        assert "stopped at the data range" not in labels
+
+    def test_one_unproven_side_keeps_the_caveat(self) -> None:
+        from dataclasses import replace
+
+        from treecf.viz import plot_region
+
+        exp, x, x_cf, region = self._setup()
+        names = list(region.feature_intervals)
+        flags = {name: (True, True) for name in names}
+        flags[names[0]] = (False, True)
+        partly = replace(region, maximal=flags)
+        ax = plot_region(exp, x, (partly, x_cf))
+        labels = [t.get_text() for t in ax.get_legend().get_texts()]
+        assert "certified, not necessarily maximal" in labels
+
     def test_raw_units_produce_one_axis_per_feature(self) -> None:
         from treecf.viz import plot_region
 
@@ -1199,3 +1261,189 @@ class TestPlotRegion:
         ax = plot_region(exp, x, (region, x_cf), max_features=1)
         assert len(ax.get_yticklabels()) == 1
         assert any("(+1 more)" in t.get_text() for t in ax.texts)
+
+
+class TestPlotCertificationTrace:
+    """The exact search's trace as a picture: incumbent and lower bound over
+    nodes, the gap shaded, the outcome named at the end."""
+
+    @staticmethod
+    def _levers() -> tuple[object, np.ndarray]:
+        from treecf import Explainer
+        from treecf.ir.model import EnsembleIR, Link, Node, SplitOp, Tree
+
+        def leaf(i: int, v: float) -> Node:
+            return Node(i, None, None, None, None, None, None, v)
+
+        def stump(f: int, t: float, rv: float) -> Tree:
+            return Tree((Node(0, f, t, SplitOp.LT, True, 1, 2, None), leaf(1, 0.0), leaf(2, rv)))
+
+        ir = EnsembleIR(
+            (stump(0, 1.0, 1.0), stump(1, 1.0, 0.8), stump(2, 1.0, 0.6)),
+            0.0, Link.IDENTITY, 3, ("a", "b", "c"), {},
+        )
+        return Explainer(ir, normalizers=np.ones(3)), np.zeros(3)
+
+    def test_genetic_result_has_no_trace(self) -> None:
+        from treecf import Target, TreecfError
+        from treecf.viz import plot_certification_trace
+
+        exp, x = self._levers()
+        result = exp.explain(x, Target.raw(op=">=", value=0.5), seed=0)
+        with pytest.raises(TreecfError, match="trace"):
+            plot_certification_trace(result)
+
+    def test_exact_result_draws_both_curves_and_names_the_outcome(self) -> None:
+        from treecf import Target
+        from treecf.viz import plot_certification_trace
+
+        exp, x = self._levers()
+        result = exp.explain(x, Target.raw(op=">=", value=1.5), backend="exact", seed=0)
+        ax = plot_certification_trace(result)
+        assert ax.get_xscale() == "log"
+        labels = [ln.get_label() for ln in ax.lines]
+        assert "incumbent" in labels and "lower bound" in labels
+        assert ax.collections  # the shaded gap
+        texts = [t.get_text() for t in ax.texts]
+        assert any("optimal" in t for t in texts)
+
+    def test_unproven_outcome_is_named(self) -> None:
+        from treecf import Target, TreecfWarning
+        from treecf.viz import plot_certification_trace
+
+        exp, x = self._levers()
+        with pytest.warns(TreecfWarning):
+            result = exp.explain(
+                x, Target.raw(op=">=", value=1.5), backend="exact", seed=0,
+                warm_start=True, node_budget=1, time_budget_s=5.0,
+            )
+        ax = plot_certification_trace(result)
+        texts = [t.get_text() for t in ax.texts]
+        assert any("stopped early" in t for t in texts)
+
+    def test_infeasible_and_batch_records_are_accepted(self) -> None:
+        from treecf import Infeasible, Target
+        from treecf.viz import plot_certification_trace
+
+        exp, x = self._levers()
+        result = exp.explain(x, Target.raw(op=">=", value=10.0), backend="exact", seed=0)
+        assert isinstance(result, Infeasible)
+        ax = plot_certification_trace(result)
+        assert any("certified" in t.get_text() for t in ax.texts)
+
+        batch = exp.explain_batch(
+            np.zeros((1, 3)), Target.raw(op=">=", value=0.5), backend="exact", seed=0,
+            allow_exact_batch=True,
+        )
+        ax = plot_certification_trace(batch.records[0])
+        assert ax.lines
+
+    def test_axis_is_reused_when_given(self) -> None:
+        import matplotlib.pyplot as plt
+
+        from treecf import Target
+        from treecf.viz import plot_certification_trace
+
+        exp, x = self._levers()
+        result = exp.explain(x, Target.raw(op=">=", value=0.5), backend="exact", seed=0)
+        _, ax = plt.subplots()
+        assert plot_certification_trace(result, ax=ax) is ax
+
+
+class TestPlotRecourseMenu:
+    """The lever-set matrix: one row per entry, filled cells for changed levers,
+    a proof glyph per row."""
+
+    @staticmethod
+    def _setup(**kwargs):
+        from treecf import Explainer
+        from treecf.ir.model import EnsembleIR, Link, Node, SplitOp, Tree
+
+        def stump(feature: int, right_value: float) -> Tree:
+            return Tree(
+                nodes=(
+                    Node(0, feature, 1.0, SplitOp.LT, True, 1, 2, None),
+                    Node(1, None, None, None, None, None, None, 0.0),
+                    Node(2, None, None, None, None, None, None, right_value),
+                )
+            )
+
+        ir = EnsembleIR(
+            trees=(stump(0, 1.0), stump(1, 0.8), stump(2, 0.6)),
+            base_score=0.0, link=Link.IDENTITY, n_features=3,
+            feature_names=("a", "b", "c"), meta={},
+        )
+        exp = Explainer(ir, normalizers=np.ones(3))
+        x = np.zeros(3)
+        target = Target.raw(op=">=", value=1.5)  # a+b or a+c; every single lever fails
+        options = {"max_levers": 2, "mode": "all", "backend": "exact", "seed": 0}
+        options.update(kwargs)
+        return exp, x, target, exp.recourse_menu(x, target, **options)
+
+    def test_rows_cells_and_glyphs(self) -> None:
+        from treecf.viz import plot_recourse_menu
+
+        _exp, _x, _target, menu = self._setup()
+        ax = plot_recourse_menu(menu)
+        assert [t.get_text().split()[0] for t in ax.get_yticklabels()] == list(menu)
+        filled = [p for p in ax.patches if p.get_label() == "_cell_filled"]
+        expected = sum(
+            len(e.changes) for e in menu.values() if isinstance(e, Counterfactual)
+        )
+        assert len(filled) == expected == 4
+        optimal = [ln for ln in ax.lines if ln.get_label() == "_glyph_optimal"]
+        certified = [ln for ln in ax.lines if ln.get_label() == "_glyph_certified"]
+        assert len(optimal) == 2 and len(certified) == 4
+        labels = [t.get_text() for t in ax.get_legend().get_texts()]
+        assert "optimal" in labels and "certified infeasible" in labels
+        assert "heuristic" not in labels  # only the kinds present are listed
+
+    def test_order_by_size_and_row_cap(self) -> None:
+        from treecf.viz import plot_recourse_menu
+
+        _exp, _x, _target, menu = self._setup()
+        ax = plot_recourse_menu(menu, order="size", max_rows=3)
+        keys = [t.get_text().split()[0] for t in ax.get_yticklabels()]
+        assert keys == ["a", "b", "c"]
+        assert "3 of 6" in ax.get_title()
+
+    def test_unresolved_sets_get_question_marks(self) -> None:
+        from treecf import TreecfWarning
+        from treecf.viz import plot_recourse_menu
+
+        with pytest.warns(TreecfWarning):
+            _exp, _x, _target, menu = self._setup(total_budget_s=0.0)
+        ax = plot_recourse_menu(menu)
+        assert len(ax.get_yticklabels()) == 6
+        unresolved = [ln for ln in ax.lines if ln.get_label() == "_glyph_unresolved"]
+        assert len(unresolved) == 6
+        assert not [p for p in ax.patches if p.get_label() == "_cell_filled"]
+
+    def test_explainer_scales_cells(self) -> None:
+        from treecf.viz import plot_recourse_menu
+
+        exp, _x, _target, menu = self._setup()
+        ax = plot_recourse_menu(menu, explainer=exp)
+        filled = [p for p in ax.patches if p.get_label() == "_cell_filled"]
+        assert len(filled) == 4
+
+    def test_diverse_set_renders_through_its_menu(self) -> None:
+        from treecf.viz import plot_recourse_menu
+
+        exp, x, target, _menu = self._setup()
+        diverse = exp.explain_diverse(x, target, k=3, backend="exact", seed=0)
+        ax = plot_recourse_menu(diverse)
+        assert len(ax.get_yticklabels()) == len(diverse.menu)
+        by_coalition = exp.explain_diverse(
+            x, target, k=3, diversity="coalitions",
+            coalitions={"first": ["a"], "rest": ["b", "c"]}, backend="exact", seed=0,
+        )
+        with pytest.raises(TreecfError, match="menu"):
+            plot_recourse_menu(by_coalition)
+
+    def test_recourse_map_accepts_a_menu(self) -> None:
+        from treecf.viz import plot_recourse_map
+
+        exp, x, target, menu = self._setup()
+        ax = plot_recourse_map(exp, x, menu, target=target)
+        assert ax is not None

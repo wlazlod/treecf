@@ -12,6 +12,12 @@
 
 ::: treecf.BatchRecord
 
+## Recourse menus
+
+::: treecf.RecourseMenu
+
+::: treecf.DiverseSet
+
 ## Regions
 
 ::: treecf.RecourseRegion
@@ -21,3 +27,5 @@
 ::: treecf.ir_fingerprint
 
 ::: treecf.constraints_fingerprint
+
+::: treecf.audit.portfolio_report

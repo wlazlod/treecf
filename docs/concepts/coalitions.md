@@ -91,3 +91,7 @@ customer-facing hints, or fairness reviews asking "can this be fixed by behavior
 without income changes?". For the single cheapest plan regardless of grouping, plain
 `explain` remains the right call; for many stylistically different plans,
 `diversity="seeds"` or `"lever-blocking"` ([batch production](../getting-started.md#scale-to-a-dataset)).
+To see *every* lever set up to a size at once — with the ones that provably cannot reach
+the target — `recourse_menu` enumerates them as coalitions and `explain_diverse` reads the
+cheapest distinct plans off the result
+([run the search](../guide/explain.md#recourse-menus-and-diverse-plans)).

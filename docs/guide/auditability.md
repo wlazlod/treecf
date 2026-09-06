@@ -14,6 +14,7 @@ these files, what can I re-derive myself?*
 | `check_certificate(cert, calibrator=...)` | That a calibrated-target plan was solved against *this* calibrator: fingerprint match plus a re-inversion of the stored calibrated bounds against the stored raw interval | Load the calibrator from its own JSON, pass it in ([calibration](../concepts/calibration.md#calibrator-provenance)) |
 | `BatchResult.save` / `load` | A portable record of a whole campaign: per-row plans, proofs, seeds, solver statistics, calibrator fingerprints | The file is inert JSON — no pickle, no code execution on load; every 0.x release reads every earlier file ([API stability](../api-stability.md)) |
 | `ir_fingerprint(exp.ir)` / `constraints_fingerprint(exp)` | Identity of the parsed model and the compiled constraint set — the same hashes certificates embed | Recompute on the artifact in front of you and compare with what the certificate or report recorded |
+| `portfolio_report(batch, groups, explainer=exp)` | One campaign as an artifact: population and proof mix, recourse burden per segment, dominant levers, missing-value transitions, the fingerprints — and, only when asked, framed disparity ratios | The dict is strict JSON; `path=` renders it as one self-contained HTML page (no external references) or as Markdown, so the same numbers travel as a file and as a page |
 
 The chain is short and each link is a hash: the certificate names the model
 and constraint fingerprints it was solved under, `check_certificate`
@@ -62,6 +63,44 @@ that exist, not the people who needed one.
 
 ![Recourse burden by segment: feasible share and cost distribution kept side by side](img/plot_recourse_burden.png)
 
+## Report on a portfolio
+
+`treecf.audit.portfolio_report` turns a batch into one document a reviewer
+can file: the population counts and the proof mix, the burden table per
+segment, the levers each segment's cheapest plans lean on (with the median
+move in normalizer units, or the target categories for a categorical lever),
+the missing-value transitions those plans ask for, and the model and
+constraint fingerprints when the explainer is passed. The returned dict is
+the fingerprintable artifact — strict JSON, `portfolio_schema_version: 1`;
+`path=` writes it as JSON, or renders it as a single self-contained HTML
+page with every figure embedded and no external references, or as Markdown
+with the figures beside the file:
+
+```python
+# exp, batch: the docs explainer and a batch solved from X_bg
+# X_bg: the docs background rows the batch was solved from
+from treecf.audit import portfolio_report
+
+groups = ["thin-file" if row[3] < 100 else "established" for row in X_bg[: len(batch)]]
+report = portfolio_report(
+    batch, groups, explainer=exp, path="portfolio.html", title="Q3 recourse review",
+    min_group_size=3,
+)
+report["population"]                # rows, records, with_recourse, certified/unproven no recourse
+report["dominant_levers"]           # per segment: the features the cheapest plans move
+report["fingerprints"]              # the same hashes the certificates carry
+```
+
+![Dominant levers per segment from the sample portfolio report: horizontal bars of how many cheapest plans move each feature](img/portfolio_report.png)
+
+A rendered example is committed as
+[a sample page](samples/portfolio_report.html). Disparity ratios — median
+burden and no-recourse share against a reference segment — are off by
+default (`disparity=True, reference_group=...` turns them on) and every
+ratio carries the same framing sentence: a ratio under one declared cost
+model and constraint set; which comparison matters is a modeling choice the
+report does not make. Segments smaller than `min_group_size` are flagged.
+
 ## What this does not prove
 
 A certificate is a statement about the artifact, not the world. It does not
@@ -75,7 +114,9 @@ says so instead of carrying anything over. The full scope statement is in
 
 ## Related
 
-- [Certify and widen](certify.md): producing the claims worth auditing.
+- [Certify and widen](certify.md): producing the claims worth auditing,
+  including the certification trace and the maximal regions a report may
+  summarize.
 - [Certification](../concepts/certification.md): proof taxonomy, budgets,
   honesty notes.
 - [Calibration](../concepts/calibration.md): calibrator provenance inside

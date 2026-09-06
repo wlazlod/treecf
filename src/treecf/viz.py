@@ -4,18 +4,20 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, Literal
 
 from treecf._errors import MissingExtraError, TreecfError
 from treecf.api import Counterfactual, Infeasible
 
 __all__ = [
     "plot_alternatives",
+    "plot_certification_trace",
     "plot_changes",
     "plot_counterfactuals",
     "plot_effort",
     "plot_ladder",
     "plot_recourse_map",
+    "plot_recourse_menu",
     "plot_region",
     "plot_tradeoff",
     "plot_waterfall",
@@ -941,6 +943,198 @@ def _format_plan(
     return "\n".join(lines)
 
 
+_FillStyle = Literal["full", "left", "right", "bottom", "top", "none"]
+_MENU_GLYPHS: dict[str, tuple[str, _FillStyle, str]] = {
+    # kind -> (marker, fillstyle, legend label)
+    "optimal": ("s", "full", "optimal"),
+    "optimal_within_gap": ("s", "left", "optimal within gap"),
+    "heuristic": ("s", "none", "heuristic"),
+    "certified": ("x", "full", "certified infeasible"),
+    "search_exhausted": (".", "full", "search exhausted"),
+    "unresolved": ("$?$", "full", "unresolved"),
+}
+
+
+def _menu_glyph_kind(entry: Any) -> str:
+    """Which glyph an entry gets: its proof, or ``"unresolved"`` for ``None``."""
+    if entry is None:
+        return "unresolved"
+    if isinstance(entry, Counterfactual):
+        return entry.proof if entry.proof in _MENU_GLYPHS else "heuristic"
+    return "certified" if entry.proof == "certified" else "search_exhausted"
+
+
+def plot_recourse_menu(
+    menu: Any,
+    *,
+    ax: Any = None,
+    order: str = "cost",
+    max_rows: int = 25,
+    annotate: bool = True,
+    explainer: Any = None,
+) -> Any:
+    """Lever-set by feature matrix of a recourse menu.
+
+    One row per menu entry — in the menu's own order (minimal frontier
+    first) when ``order="cost"``, by set size then key when
+    ``order="size"`` — followed by the unresolved sets, and one column per
+    candidate lever. A filled cell marks a feature the plan changed, shaded
+    by the size of the change: ``|Δ|/σ`` when ``explainer`` is given
+    (categorical levers hatched), otherwise ``|Δ|`` relative to the largest
+    change of that lever across the menu. The row label carries the plan
+    cost, and a glyph before it the proof: filled square ``optimal``, half
+    square ``optimal_within_gap``, open square ``heuristic``, cross
+    certified infeasible, dot ``search_exhausted``, question mark
+    unresolved. A ``DiverseSet`` built from a menu renders through it.
+
+    Parameters
+    ----------
+    menu
+        A ``RecourseMenu``, or a ``DiverseSet`` whose ``menu`` is set.
+    ax
+        Existing axes to draw on; a new figure is created if omitted.
+    order
+        ``"cost"`` (the menu's order) or ``"size"``.
+    max_rows
+        Rows drawn before the rest is cut; the title says how many of the
+        total are shown.
+    annotate
+        Write each changed feature's new value in its cell.
+    explainer
+        The explainer the menu came from, for sigma-scaled shading and
+        categorical hatching; optional.
+
+    Returns
+    -------
+    The axes the matrix was drawn on.
+
+    Raises
+    ------
+    MissingExtraError
+        If matplotlib is not installed.
+    TreecfError
+        If a ``DiverseSet`` without a menu is given, or the menu has no
+        levers.
+    ValueError
+        If ``order`` is unknown.
+    """
+    from matplotlib.patches import Rectangle
+
+    from treecf._menu import DiverseSet
+
+    plt = _import_pyplot()
+    if isinstance(menu, DiverseSet):
+        if menu.menu is None:
+            raise TreecfError(
+                "this DiverseSet carries no menu (coalition criterion); draw its plans "
+                "with plot_alternatives instead"
+            )
+        menu = menu.menu
+    if order not in ("cost", "size"):
+        raise ValueError(f"order must be 'cost' or 'size', got {order!r}")
+    levers = list(menu.levers)
+    if not levers:
+        raise TreecfError("the menu has no candidate levers to draw")
+
+    rows: list[tuple[str, Any]] = [*menu.items(), *((key, None) for key in menu.unresolved)]
+    if order == "size":
+        rows.sort(key=lambda row: (len(row[0].split("+")), row[0]))
+    total = len(rows)
+    rows = rows[:max_rows]
+
+    categorical = set()
+    sigma: dict[str, float] = {}
+    if explainer is not None:
+        categorical = {explainer.ir.feature_names[j] for j in explainer.ir.categorical}
+        sigma = dict(
+            zip(explainer.ir.feature_names, [float(s) for s in explainer.sigma], strict=True)
+        )
+
+    def magnitude(name: str, before: float, after: float) -> float:
+        if name in categorical:
+            return 1.0
+        if math.isnan(before) or math.isnan(after):
+            return 1.0
+        delta = abs(after - before)
+        return delta / sigma[name] if sigma else delta
+
+    scale: dict[str, float] = dict.fromkeys(levers, 0.0)
+    for _key, entry in rows:
+        if isinstance(entry, Counterfactual):
+            for name, (before, after) in entry.changes.items():
+                if name in scale:
+                    scale[name] = max(scale[name], magnitude(name, before, after))
+    if sigma:
+        top = max(scale.values(), default=1.0) or 1.0
+        scale = dict.fromkeys(levers, top)
+
+    if ax is None:
+        _, ax = plt.subplots(figsize=(0.6 * len(levers) + 3.0, 0.38 * len(rows) + 1.6))
+    cmap = plt.get_cmap("Blues")
+    labels: list[str] = []
+    present: list[str] = []
+    for i, (key, entry) in enumerate(rows):
+        members = set(key.split("+"))
+        changes = entry.changes if isinstance(entry, Counterfactual) else {}
+        for j, name in enumerate(levers):
+            if name in changes:
+                before, after = changes[name]
+                share = magnitude(name, before, after) / (scale[name] or 1.0)
+                ax.add_patch(Rectangle(
+                    (j - 0.5, i - 0.5), 1.0, 1.0,
+                    facecolor=cmap(0.35 + 0.6 * min(share, 1.0)),
+                    edgecolor="white", hatch="//" if name in categorical else None,
+                    label="_cell_filled",
+                ))
+                if annotate:
+                    text = "NaN" if math.isnan(after) else f"{after:.3g}"
+                    ax.text(j, i, text, ha="center", va="center", fontsize=7,
+                            color="white" if share > 0.55 else "0.15")
+            else:
+                ax.add_patch(Rectangle(
+                    (j - 0.5, i - 0.5), 1.0, 1.0,
+                    facecolor="0.97" if name in members else "white",
+                    edgecolor="0.85", label="_cell_empty",
+                ))
+        kind = _menu_glyph_kind(entry)
+        marker, fillstyle, _ = _MENU_GLYPHS[kind]
+        ax.plot([-0.9], [i], marker=marker, fillstyle=fillstyle, color="0.2",
+                markersize=7 if marker != "$?$" else 9, linestyle="none",
+                label=f"_glyph_{kind}")
+        if kind not in present:
+            present.append(kind)
+        if isinstance(entry, Counterfactual):
+            labels.append(f"{key}  J={entry.distance:.3g}")
+        else:
+            labels.append(key)
+
+    ax.set_xlim(-1.4, len(levers) - 0.5)
+    ax.set_ylim(len(rows) - 0.5, -0.5)
+    ax.set_xticks(range(len(levers)))
+    ax.set_xticklabels(levers, rotation=30, ha="right")
+    ax.set_yticks(range(len(rows)))
+    ax.set_yticklabels(labels, fontsize=8)
+    ax.tick_params(length=0)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    title = f"recourse menu — {total} lever set(s)"
+    if len(rows) < total:
+        title += f" (showing {len(rows)} of {total})"
+    ax.set_title(title)
+    from matplotlib.lines import Line2D
+
+    handles: list[Any] = [
+        Line2D([], [], marker=_MENU_GLYPHS[kind][0], fillstyle=_MENU_GLYPHS[kind][1],
+               color="0.2", linestyle="none", markersize=7, label=_MENU_GLYPHS[kind][2])
+        for kind in present
+    ]
+    handles.append(Rectangle((0, 0), 1, 1, facecolor=cmap(0.7), edgecolor="white",
+                             label="changed lever (shade: size of change)"))
+    ax.legend(handles=handles, loc="upper left", bbox_to_anchor=(1.01, 1.0),
+              fontsize=7, frameon=False)
+    return ax
+
+
 def plot_region(
     explainer: Any,
     x: Any,
@@ -1050,6 +1244,17 @@ def plot_region(
     if max_features is not None and total_rows > max_features:
         hidden = total_rows - max_features
         rows = rows[:max_features]
+    # the caveat line is only owed while some side is neither at a bound nor proved
+    maximal_categories = getattr(region, "maximal_categories", {})
+    show_caveat = any(
+        _unproven_sides(region, name, float(lo_b[j]), float(hi_b[j]))
+        if kind == "numeric"
+        else not maximal_categories.get(name, False)
+        for j, name, kind in rows
+    )
+    show_data = any(
+        any(_data_limited_sides(region, name)) for _j, name, kind in rows if kind == "numeric"
+    )
 
     if units == "raw":
         _, axes = plt.subplots(
@@ -1064,7 +1269,7 @@ def plot_region(
             )
             strip.set_yticks([0.0])
             strip.set_yticklabels([name])
-        _region_legend(axes[0])
+        _region_legend(axes[0], show_caveat, show_data)
         axes[0].set_title(f"certified recourse region — {total_rows} feature(s)")
         if hidden:
             axes[-1].annotate(
@@ -1090,13 +1295,145 @@ def plot_region(
             f"(+{hidden} more)", xy=(0.99, 0.02), xycoords="axes fraction",
             ha="right", fontsize=8, color="0.4",
         )
-    _region_legend(ax)
+    _region_legend(ax, show_caveat, show_data)
     return ax
+
+
+def plot_certification_trace(result: Any, *, ax: Any = None) -> Any:
+    """How an exact search's proof formed: incumbent and lower bound over nodes.
+
+    Reads ``solver_stats["trace"]`` — the samples the exact backend takes at
+    every incumbent update and every power-of-two node count — and draws the
+    incumbent cost (what has been found) and the lower bound (what can still
+    be ruled out) against the nodes expanded on a log axis, with the gap
+    between them shaded. The terminal marker names the outcome: ``optimal``,
+    ``within gap``, ``certified infeasible``, or ``stopped early`` for a
+    search that ran out of budget or withdrew its claim (the solve-time
+    warning says which).
+
+    Parameters
+    ----------
+    result
+        A ``Counterfactual``, ``Infeasible``, or ``BatchRecord`` produced
+        by ``backend="exact"``.
+    ax
+        Axes to draw on; a new figure is created when omitted.
+
+    Returns
+    -------
+    The matplotlib ``Axes`` drawn on.
+
+    Raises
+    ------
+    MissingExtraError
+        If matplotlib is not installed.
+    TreecfError
+        If ``result`` carries no trace (a genetic or python-backend result).
+    """
+    plt = _import_pyplot()
+
+    stats = getattr(result, "solver_stats", None)
+    trace = stats.get("trace") if isinstance(stats, dict) else None
+    if not trace:
+        raise TreecfError(
+            "result carries no certification trace; only backend='exact' records one"
+        )
+    assert isinstance(stats, dict)  # narrowed by the trace check above
+    nodes = [max(int(n), 1) for n, _, _ in trace]  # a log axis cannot show node 0
+    incumbents = [None if c is None else float(c) for _, c, _ in trace]
+    bounds = [float(b) for _, _, b in trace]
+
+    if ax is None:
+        _, ax = plt.subplots(figsize=(6, 3.2))
+    known_bound = [(n, b) for n, b in zip(nodes, bounds, strict=True) if math.isfinite(b)]
+    if known_bound:
+        ax.plot(
+            [n for n, _ in known_bound], [b for _, b in known_bound],
+            drawstyle="steps-post", color="C3", linewidth=1.5, label="lower bound",
+        )
+    known_inc = [(n, c) for n, c in zip(nodes, incumbents, strict=True) if c is not None]
+    if known_inc:
+        ax.plot(
+            [n for n, _ in known_inc], [c for _, c in known_inc],
+            drawstyle="steps-post", color="C0", linewidth=1.5, label="incumbent",
+        )
+    both = [
+        (n, c, b)
+        for n, c, b in zip(nodes, incumbents, bounds, strict=True)
+        if c is not None and math.isfinite(b)
+    ]
+    if both:
+        ax.fill_between(
+            [n for n, _, _ in both], [b for _, _, b in both], [c for _, c, _ in both],
+            step="post", color="C0", alpha=0.15, linewidth=0, label="_gap",
+        )
+    ax.set_xscale("log")
+    ax.set_xlabel("nodes expanded")
+    ax.set_ylabel("cost")
+    ax.set_title("certification trace")
+
+    outcome = _trace_outcome(result, stats)
+    last_n = nodes[-1]
+    last_y = incumbents[-1] if incumbents[-1] is not None else (
+        bounds[-1] if math.isfinite(bounds[-1]) else 0.0
+    )
+    ax.plot([last_n], [last_y], marker="o", color="0.2", markersize=5, zorder=5,
+            label="_terminal")
+    ax.annotate(
+        outcome, xy=(last_n, last_y), xytext=(-6, 8), textcoords="offset points",
+        ha="right", fontsize=8, color="0.2",
+    )
+    if known_bound or known_inc:
+        ax.legend(fontsize=7, frameon=False, loc="best")
+    return ax
+
+
+def _trace_outcome(result: Any, stats: dict[str, Any]) -> str:
+    """The claim a result makes, as the trace's terminal label."""
+    proof = str(getattr(result, "proof", ""))
+    feasible = getattr(result, "feasible", getattr(result, "x_cf", None) is not None)
+    if proof == "optimal_within_gap":
+        return "within gap"
+    if proof == "optimal":
+        return "optimal"
+    if proof == "certified" or (not feasible and stats.get("completed") is True):
+        return "certified infeasible"
+    return "stopped early"
 
 
 _CAP_MODEL = "stopped by the model"
 _CAP_CONSTRAINT = "stopped by a constraint"
+_CAP_PROVED = "stopped at a proved boundary"
+_CAP_DATA = "stopped at the data range"
 _CAP_CAVEAT = "certified, not necessarily maximal"
+
+
+def _proved_sides(region: Any, name: str) -> tuple[bool, bool]:
+    """What the maximal mode proved about a feature's two sides; nothing in
+    fast mode."""
+    flags = getattr(region, "maximal", {}).get(name, (False, False))
+    return bool(flags[0]), bool(flags[1])
+
+
+def _data_limited_sides(region: Any, name: str) -> tuple[bool, bool]:
+    """Which sides of ``name`` stopped at the observed data range."""
+    flags = getattr(region, "data_limited", {}).get(name, (False, False))
+    return bool(flags[0]), bool(flags[1])
+
+
+def _unproven_sides(region: Any, name: str, lo_b: float, hi_b: float) -> bool:
+    """Whether some finite side of ``name`` is neither at its instance bound,
+    nor at the data range, nor proved maximal — the case the legend's caveat
+    line speaks to."""
+    lo, hi = region.feature_intervals[name]
+    proved_lo, proved_hi = _proved_sides(region, name)
+    data_lo, data_hi = _data_limited_sides(region, name)
+    for endpoint, bound, settled in (
+        (lo, lo_b, proved_lo or data_lo), (hi, hi_b, proved_hi or data_hi)
+    ):
+        if math.isfinite(endpoint) and not _constraint_limited(endpoint, bound) and not settled:
+            return True
+    return False
 
 
 def _constraint_limited(endpoint: float, bound: float) -> bool:
@@ -1177,9 +1514,17 @@ def _region_row(
                     label="_region_open_end")
             continue
         bound = float(lo_b[j]) if side == "lo" else float(hi_b[j])
-        if _constraint_limited(endpoint, bound):
+        proved = _proved_sides(region, name)[0 if side == "lo" else 1]
+        data_limited = _data_limited_sides(region, name)[0 if side == "lo" else 1]
+        if data_limited:
+            ax.plot([drawn], [y], marker="D", color="0.45", markersize=6,
+                    zorder=4, label="_cap_data")
+        elif _constraint_limited(endpoint, bound):
             ax.plot([drawn], [y], marker="$[$" if side == "lo" else "$]$",
                     color="C3", markersize=11, zorder=4, label="_cap_constraint")
+        elif proved:
+            ax.plot([drawn], [y], marker="s", color="C0", markersize=7,
+                    zorder=4, label="_cap_proved")
         else:
             ax.plot([drawn], [y], marker="|", color="C0", markersize=11,
                     markeredgewidth=2.5, zorder=4, label="_cap_model")
@@ -1241,7 +1586,7 @@ def _categorical_tiles(
         )
 
 
-def _region_legend(ax: Any) -> None:
+def _region_legend(ax: Any, show_caveat: bool = True, show_data: bool = False) -> None:
     from matplotlib.lines import Line2D
 
     handles = [
@@ -1249,8 +1594,16 @@ def _region_legend(ax: Any) -> None:
                linestyle="none", label=_CAP_MODEL),
         Line2D([], [], marker="$[$", color="C3", markersize=10, linestyle="none",
                label=_CAP_CONSTRAINT),
-        Line2D([], [], linestyle="none", label=_CAP_CAVEAT),
+        Line2D([], [], marker="s", color="C0", markersize=7, linestyle="none",
+               label=_CAP_PROVED),
     ]
+    if show_data:
+        handles.append(
+            Line2D([], [], marker="D", color="0.45", markersize=6, linestyle="none",
+                   label=_CAP_DATA)
+        )
+    if show_caveat:
+        handles.append(Line2D([], [], linestyle="none", label=_CAP_CAVEAT))
     ax.legend(handles=handles, loc="best", fontsize=7, frameon=False)
 
 

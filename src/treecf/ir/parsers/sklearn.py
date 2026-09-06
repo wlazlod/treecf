@@ -25,6 +25,7 @@ import numpy.typing as npt
 
 from treecf._errors import UnsupportedModelError
 from treecf.ir.model import CategoricalFeature, EnsembleIR, Link, Node, SplitOp, Tree
+from treecf.ir.parsers._float32 import effective_le_threshold
 
 
 def parse_sklearn(
@@ -212,38 +213,11 @@ def _hgb_categorical_context(
     )
 
 
-def _effective_le_threshold(t: float) -> float:
-    """The float64 boundary of sklearn's float32 input cast, exactly.
-
-    sklearn ``tree_``-based ensembles route ``float32(x) <= float64(t)`` —
-    the input is cast to float32 (round-to-nearest-even) before the
-    comparison. The IR evaluates in float64, so the stored threshold must be
-    the largest float64 ``T`` with ``float32(T) <= t``; then ``x <= T``
-    reproduces the native routing for *every* float64 ``x``, including points
-    exactly on split boundaries — where a counterfactual search naturally
-    lands. (Verified by a 138k-probe property sweep and the unquantized
-    conformance tests.)
-
-    Construction: let ``f`` be the largest float32 with ``f <= t`` and ``s``
-    its float32 successor; every ``x`` below their float64 midpoint rounds to
-    ``<= f``. The midpoint itself rounds half-to-even: it belongs to the left
-    side exactly when it rounds back to ``f``.
-    """
-    f32 = np.float32(t)
-    if float(f32) > t:
-        f32 = np.nextafter(f32, np.float32(-np.inf))
-    succ = np.nextafter(f32, np.float32(np.inf))
-    mid = (float(f32) + float(succ)) / 2.0
-    if float(np.float32(mid)) == float(f32):
-        return mid
-    return float(np.nextafter(mid, -np.inf))
-
-
 def _tree_from_arrays(tree: Any, scale: float, classifier: bool) -> Tree:
     """Convert a fitted ``sklearn.tree._tree.Tree`` to IR nodes (LE convention).
 
     Thresholds are re-expressed on the float64 grid via
-    :func:`_effective_le_threshold` so the IR's float64 routing matches
+    :func:`effective_le_threshold` so the IR's float64 routing matches
     sklearn's float32-cast routing bit-for-bit.
     """
     left = tree.children_left
@@ -268,7 +242,7 @@ def _tree_from_arrays(tree: Any, scale: float, classifier: bool) -> Tree:
                 Node(
                     node_id=i,
                     feature=int(feature[i]),
-                    threshold=_effective_le_threshold(float(threshold[i])),
+                    threshold=effective_le_threshold(float(threshold[i])),
                     op=SplitOp.LE,
                     missing_left=missing_left,
                     left=int(left[i]),
@@ -364,7 +338,7 @@ def parse_isolation_forest(model: Any) -> EnsembleIR:
                     Node(
                         node_id=i,
                         feature=int(tree.feature[i]),
-                        threshold=_effective_le_threshold(float(tree.threshold[i])),
+                        threshold=effective_le_threshold(float(tree.threshold[i])),
                         op=SplitOp.LE,
                         missing_left=None,
                         left=int(tree.children_left[i]),

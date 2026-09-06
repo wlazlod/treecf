@@ -27,6 +27,7 @@ import numpy as np
 import numpy.typing as npt
 
 from treecf._errors import TreecfError, TreecfWarning
+from treecf._portfolio import portfolio_report
 from treecf.constraints.objects import (
     AllowedCategories,
     AllowMissing,
@@ -51,6 +52,7 @@ __all__ = [
     "check_certificate",
     "constraints_fingerprint",
     "ir_fingerprint",
+    "portfolio_report",
 ]
 
 FloatArray = npt.NDArray[np.float64]
@@ -254,17 +256,19 @@ def _backend_of(stats: dict[str, object]) -> str:
 def _json_stats(stats: dict[str, object]) -> dict[str, object]:
     """A JSON-safe copy of solver stats (numpy scalars unwrapped, floats
     encoded per the non-finite rule, anything exotic stringified)."""
-    out: dict[str, object] = {}
-    for key, value in stats.items():
-        if isinstance(value, np.generic):
-            value = value.item()
-        if isinstance(value, bool | int | str):
-            out[key] = value
-        elif isinstance(value, float):
-            out[key] = _json_float(value)
-        else:
-            out[key] = repr(value)
-    return out
+    return {key: _json_stat_value(value) for key, value in stats.items()}
+
+
+def _json_stat_value(value: object) -> object:
+    if isinstance(value, np.generic):
+        value = value.item()
+    if value is None or isinstance(value, bool | int | str):
+        return value
+    if isinstance(value, float):
+        return _json_float(value)
+    if isinstance(value, list | tuple):
+        return [_json_stat_value(item) for item in value]
+    return repr(value)
 
 
 def _region_points(
@@ -447,6 +451,7 @@ def build_certificate(
     gap: float | None = None,
     time_budget_s: float | None = None,
     warm_start: bool | None = None,
+    search: str | None = None,
 ) -> dict[str, object]:
     """Body of ``Explainer.certificate``; see its docstring."""
     from treecf import __version__
@@ -478,6 +483,8 @@ def build_certificate(
         declared["time_budget_s"] = _json_float(time_budget_s)
     if warm_start is not None:
         declared["warm_start"] = warm_start
+    if search is not None:
+        declared["search"] = search
     solve: dict[str, object] = {
         "backend": _backend_of(result.solver_stats),
         "proof": result.proof,
@@ -525,6 +532,17 @@ def build_certificate(
                 region_categories = dict(result.region.feature_categories)
                 plan["region_feature_categories"] = {
                     name: list(codes) for name, codes in region_categories.items()
+                }
+            # the maximal mode's claims travel as additive keys; a fast-mode
+            # region writes none, so its certificates keep their exact shape
+            if result.region.maximal:
+                plan["region_maximal"] = {
+                    name: [bool(lo_ok), bool(hi_ok)]
+                    for name, (lo_ok, hi_ok) in result.region.maximal.items()
+                }
+            if result.region.maximal_categories:
+                plan["region_maximal_categories"] = {
+                    name: bool(ok) for name, ok in result.region.maximal_categories.items()
                 }
         cert["plan"] = plan
         verification, failed = _verify_plan(

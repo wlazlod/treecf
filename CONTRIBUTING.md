@@ -76,3 +76,6 @@ release if any location disagrees.
 - [ ] behavior changes covered by a test and a `CHANGELOG.md` entry
 - [ ] no fixture regenerated without a documented reason
 - [ ] docs updated for user-visible changes (`uv run mkdocs build --strict`)
+- [ ] commit subjects and bodies describe behavior — no planning-document
+      names, work-item shorthand, or "as decided" language (CI runs
+      `scripts/check_commit_messages.py` over the PR's commits)

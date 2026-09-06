@@ -40,7 +40,7 @@ def exp() -> Explainer:
     return Explainer(_ir(), normalizers=np.ones(3))
 
 
-X0 = np.zeros(3)
+x0 = np.zeros(3)
 TARGET = Target.raw(op=">=", value=0.5)  # any single lever suffices
 COALITIONS = {"first": ["a"], "rest": ["b", "c"]}
 
@@ -48,46 +48,46 @@ COALITIONS = {"first": ["a"], "rest": ["b", "c"]}
 class TestValidation:
     def test_unknown_feature_raises_with_name(self, exp: Explainer) -> None:
         with pytest.raises(TreecfError, match="ghost"):
-            exp.explain_coalitions(X0, TARGET, {"g": ["a", "ghost"]})
+            exp.explain_coalitions(x0, TARGET, {"g": ["a", "ghost"]})
 
     def test_empty_mapping_and_empty_coalition_raise(self, exp: Explainer) -> None:
         with pytest.raises(TreecfError):
-            exp.explain_coalitions(X0, TARGET, {})
+            exp.explain_coalitions(x0, TARGET, {})
         with pytest.raises(TreecfError):
-            exp.explain_coalitions(X0, TARGET, {"g": []})
+            exp.explain_coalitions(x0, TARGET, {"g": []})
 
     def test_reserved_name_collides_with_include_full(self, exp: Explainer) -> None:
         with pytest.raises(TreecfError, match="reserved"):
             exp.explain_coalitions(
-                X0, TARGET, {"(all levers)": ["a"]}, include_full=True
+                x0, TARGET, {"(all levers)": ["a"]}, include_full=True
             )
         # without the baseline the name is just a name
-        result = exp.explain_coalitions(X0, TARGET, {"(all levers)": ["a"]})
+        result = exp.explain_coalitions(x0, TARGET, {"(all levers)": ["a"]})
         assert set(result) == {"(all levers)"}
 
     def test_overlapping_coalitions_accepted(self, exp: Explainer) -> None:
         result = exp.explain_coalitions(
-            X0, TARGET, {"g1": ["a", "b"], "g2": ["b", "c"]}, seed=0
+            x0, TARGET, {"g1": ["a", "b"], "g2": ["b", "c"]}, seed=0
         )
         assert set(result) == {"g1", "g2"}
 
     def test_bands_target_rejected(self, exp: Explainer) -> None:
         bands = Target.bands({"lo": (0.4, 0.7), "hi": (0.7, 2.0)}, space="raw")
         with pytest.raises(TreecfError, match="bands"):
-            exp.explain_coalitions(X0, bands, COALITIONS)
+            exp.explain_coalitions(x0, bands, COALITIONS)
 
 
 class TestSingleRow:
     def test_plans_only_touch_their_coalition(self, exp: Explainer) -> None:
-        result = exp.explain_coalitions(X0, TARGET, COALITIONS, seed=0)
+        result = exp.explain_coalitions(x0, TARGET, COALITIONS, seed=0)
         for name, outcome in result.items():
             assert isinstance(outcome, Counterfactual)
             assert set(outcome.changes) <= set(COALITIONS[name])
 
     def test_coalition_plan_equals_manual_freeze_complement(self, exp: Explainer) -> None:
-        result = exp.explain_coalitions(X0, TARGET, COALITIONS, seed=3)
+        result = exp.explain_coalitions(x0, TARGET, COALITIONS, seed=3)
         clone = exp._with_extra_freezes(["b", "c"])  # complement of "first"
-        manual = clone.explain(X0, TARGET, seed=3)
+        manual = clone.explain(x0, TARGET, seed=3)
         assert isinstance(manual, Counterfactual)
         first = result["first"]
         assert isinstance(first, Counterfactual)
@@ -98,10 +98,10 @@ class TestSingleRow:
         self, exp: Explainer
     ) -> None:
         result = exp.explain_coalitions(
-            X0, TARGET, COALITIONS, include_full=True, seed=1
+            x0, TARGET, COALITIONS, include_full=True, seed=1
         )
         assert next(iter(result)) == "(all levers)"
-        plain = exp.explain(X0, TARGET, seed=1)
+        plain = exp.explain(x0, TARGET, seed=1)
         baseline = result["(all levers)"]
         assert isinstance(baseline, Counterfactual) and isinstance(plain, Counterfactual)
         assert np.array_equal(baseline.x_cf, plain.x_cf, equal_nan=True)
@@ -116,14 +116,14 @@ class TestSingleRow:
         )
         # freezing the complement of {"a"} freezes "c"; AllowMissing("c") must
         # not blow up the clone, and "a"-only plans must still be found
-        result = exp.explain_coalitions(X0, TARGET, {"first": ["a"]}, seed=0)
+        result = exp.explain_coalitions(x0, TARGET, {"first": ["a"]}, seed=0)
         outcome = result["first"]
         assert isinstance(outcome, Counterfactual)
         assert set(outcome.changes) == {"a"}
 
     def test_frozen_coalition_is_infeasible_alone(self) -> None:
         frozen_a = Explainer(_ir(), normalizers=np.ones(3), constraints=[Freeze("a")])
-        result = frozen_a.explain_coalitions(X0, TARGET, COALITIONS, seed=0)
+        result = frozen_a.explain_coalitions(x0, TARGET, COALITIONS, seed=0)
         assert isinstance(result["first"], Infeasible)  # its only lever is frozen
         assert isinstance(result["rest"], Counterfactual)
 

@@ -10,6 +10,7 @@ from treecf._errors import (
     TreecfWarning,
     UnsupportedModelError,
 )
+from treecf._menu import DiverseSet, RecourseMenu
 from treecf.api import Counterfactual, Explainer, Grid, Infeasible
 from treecf.audit import constraints_fingerprint, ir_fingerprint
 from treecf.batch import BatchRecord, BatchResult
@@ -30,7 +31,7 @@ from treecf.plausibility import Plausibility
 from treecf.regions import RecourseRegion
 from treecf.targets import Target
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 __all__ = [
     "AllowMissing",
@@ -41,6 +42,7 @@ __all__ = [
     "ConstraintValidationError",
     "Counterfactual",
     "DataQualityFinding",
+    "DiverseSet",
     "Equals",
     "Explainer",
     "Freeze",
@@ -54,6 +56,7 @@ __all__ = [
     "ParserError",
     "Plausibility",
     "Range",
+    "RecourseMenu",
     "RecourseRegion",
     "SuggestedConstraint",
     "Target",

@@ -24,6 +24,7 @@ from treecf.plausibility import Plausibility
 from treecf.targets import Target
 
 if TYPE_CHECKING:
+    from treecf._menu import DiverseSet, RecourseMenu
     from treecf.backends.exact import ExactResult
     from treecf.backends.genetic import GeneticResult
     from treecf.regions import RecourseRegion
@@ -220,6 +221,9 @@ def _calibrated_readout(target: Target, score_raw: float) -> float | None:
 _DEFAULT_WARM_START = True
 _DEFAULT_NODE_BUDGET = 2_000_000
 _DEFAULT_GAP = 0.0
+_DEFAULT_SEARCH = "classic"
+_DEFAULT_TIME_BUDGET_S = 10.0
+_SEARCH_MODES = ("classic", "refine")
 
 
 def _resolve_exact_kwargs(
@@ -227,26 +231,53 @@ def _resolve_exact_kwargs(
     warm_start: bool | None,
     node_budget: int | None,
     gap: float | None,
-) -> tuple[bool, int, float]:
+    search: str | None = None,
+) -> tuple[bool, int, float, str]:
     """Normalize the exact-only kwargs and reject them for other backends.
 
     ``None`` means "not explicitly passed" and normalizes to the documented
     default. An explicit non-default value together with a backend other
     than ``"exact"`` raises ``ValueError`` — a Python-level argument
-    combination error, deliberately not the usual ``TreecfError``.
+    combination error, deliberately not the usual ``TreecfError``. An
+    unknown ``search`` mode raises ``ValueError`` on every backend.
     """
     resolved_warm_start = _DEFAULT_WARM_START if warm_start is None else warm_start
     resolved_node_budget = _DEFAULT_NODE_BUDGET if node_budget is None else node_budget
     resolved_gap = _DEFAULT_GAP if gap is None else gap
+    resolved_search = _DEFAULT_SEARCH if search is None else search
+    if resolved_search not in _SEARCH_MODES:
+        raise ValueError(f"search must be one of {_SEARCH_MODES}, got {search!r}")
     if backend != "exact" and (
         resolved_warm_start is not _DEFAULT_WARM_START
         or resolved_node_budget != _DEFAULT_NODE_BUDGET
         or resolved_gap != _DEFAULT_GAP
+        or resolved_search != _DEFAULT_SEARCH
     ):
         raise ValueError(
-            "warm_start, node_budget, and gap are only valid with backend='exact'"
+            "warm_start, node_budget, gap, and search are only valid with backend='exact'"
         )
-    return resolved_warm_start, resolved_node_budget, resolved_gap
+    return resolved_warm_start, resolved_node_budget, resolved_gap, resolved_search
+
+
+_DEFAULT_REGION_MODE = "fast"
+_DEFAULT_REGION_BUDGET = 100_000
+_REGION_MODES = ("fast", "maximal")
+
+
+def _resolve_region_kwargs(region: bool, region_mode: str, region_budget: int) -> tuple[str, int]:
+    """Validate the region kwargs the way ``_resolve_exact_kwargs`` validates
+    the exact-only ones: an unknown mode raises ``TreecfError``, a budget
+    below one raises ``ValueError``, and a non-default value without
+    ``region=True`` raises ``ValueError``."""
+    if region_mode not in _REGION_MODES:
+        raise TreecfError(f"unknown region mode {region_mode!r}; use 'fast' or 'maximal'")
+    if region_budget < 1:
+        raise ValueError(f"region_budget must be at least 1, got {region_budget!r}")
+    if not region and (
+        region_mode != _DEFAULT_REGION_MODE or region_budget != _DEFAULT_REGION_BUDGET
+    ):
+        raise ValueError("region_mode and region_budget are only valid with region=True")
+    return region_mode, region_budget
 
 
 @dataclass(frozen=True)
@@ -276,19 +307,26 @@ def _gap_parenthetical(distance: float | None, lower_bound: float) -> str:
 
 
 def _exhausted_message(
-    nodes_expanded: int, has_row: bool, distance: float | None, lower_bound: float
+    nodes_expanded: int,
+    has_row: bool,
+    distance: float | None,
+    lower_bound: float,
+    log10_states: float | None = None,
 ) -> str:
+    size = ""
+    if log10_states is not None and math.isfinite(log10_states):
+        size = f" search space ≈ 10^{log10_states:.0f} states; see Explainer.search_profile."
     if has_row:
         return (
             f"exact search exhausted its budget after {nodes_expanded:,} nodes; the "
             "result is the best found, not proven optimal"
             f"{_gap_parenthetical(distance, lower_bound)}; raise node_budget/time_budget_s "
-            "or set gap= to accept a proven tolerance."
+            "or set gap= to accept a proven tolerance." + size
         )
     return (
         f"exact search exhausted its budget after {nodes_expanded:,} nodes without "
         "finding a feasible counterfactual; this is NOT a certified infeasibility — "
-        "raise budgets or use backend='genetic'."
+        "raise budgets or use backend='genetic'." + size
     )
 
 
@@ -307,7 +345,12 @@ def _withdrawn_message(has_row: bool, distance: float | None, lower_bound: float
 
 
 def _degradation_for(
-    res: ExactResult, node_budget: int, time_budget_s: float, elapsed: float, seed: int | None
+    res: ExactResult,
+    node_budget: int,
+    time_budget_s: float,
+    elapsed: float,
+    seed: int | None,
+    log10_states: float | None = None,
 ) -> _Degradation:
     """Classify one degraded exact-search result (``stats["completed"] is False``).
 
@@ -324,7 +367,9 @@ def _degradation_for(
     unseeded = seed is None and bool(stats["warm_start_used"])
     if exhausted:
         kind = "exhausted"
-        message = _exhausted_message(nodes_expanded, has_row, res.distance, lower_bound)
+        message = _exhausted_message(
+            nodes_expanded, has_row, res.distance, lower_bound, log10_states
+        )
     else:
         kind = "withdrawn"
         message = _withdrawn_message(has_row, res.distance, lower_bound)
@@ -457,6 +502,9 @@ class Explainer:
         )
         if self.background is not None:
             validate_feature_matrix(self.ir, self.background, where="background")
+        self._data_bounds = (
+            None if self.background is None else _observed_bounds(self.background)
+        )
         self.sigma = _resolve_sigma(names, background, normalizers, frozenset(self.ir.categorical))
         self.weights = np.array([(weights or {}).get(name, 1.0) for name in names])
         self.value_policy = value_policy or {}
@@ -483,7 +531,10 @@ class Explainer:
         warm_start: bool | None = None,
         node_budget: int | None = None,
         gap: float | None = None,
+        search: str | None = None,
         region: bool = False,
+        region_mode: str = "fast",
+        region_budget: int = 100_000,
     ) -> Counterfactual | Infeasible | dict[str, object]:
         """Search for a counterfactual (or one per band for ``Target.bands``).
 
@@ -523,6 +574,13 @@ class Explainer:
         additive rather than deducted from the budget. ``gap`` lets the exact
         search settle for a counterfactual within that relative fraction of
         the true optimum, reported through ``proof="optimal_within_gap"``.
+        ``search`` picks the exact engine: ``"classic"`` (the default)
+        assigns one candidate value per feature at a time; ``"refine"``
+        first holds each numeric feature to a range of routing cells and
+        descends only where the score bound forces it, which proves the same
+        optimum and the same infeasibility certificates — often in far fewer
+        nodes on models with many thresholds per feature — though the row it
+        returns may be a different argmin of the same cost.
 
         An exact search can return a feasible row with ``proof="heuristic"``
         without exhausting ``node_budget`` or ``time_budget_s``: conservative
@@ -545,7 +603,11 @@ class Explainer:
         certified ``RecourseRegion`` (``cf.region``) —
         works with any backend, genetic included. Costs one oracle call per
         attempted per-feature, per-direction expansion; see
-        ``Explainer.recourse_region``.
+        ``Explainer.recourse_region``. ``region_mode="maximal"`` settles
+        every side the fast growth stops with a budgeted search
+        (``region_budget`` nodes per side) and records what it proved in
+        ``RecourseRegion.maximal``; both arguments are only valid with
+        ``region=True``.
 
         Returns
         -------
@@ -560,7 +622,7 @@ class Explainer:
         Raises
         ------
         ValueError
-            If ``warm_start``, ``node_budget``, or ``gap`` is
+            If ``warm_start``, ``node_budget``, ``gap``, or ``search`` is
             given a non-default value together with a ``backend`` other
             than ``"exact"``.
         TreecfError
@@ -575,7 +637,8 @@ class Explainer:
         """
         return self._explain(
             x, target, backend, time_budget_s, sparsity_weight, seed, warn_factual=True,
-            warm_start=warm_start, node_budget=node_budget, gap=gap, region=region,
+            warm_start=warm_start, node_budget=node_budget, gap=gap, search=search,
+            region=region, region_mode=region_mode, region_budget=region_budget,
         )
 
     def _explain(
@@ -591,7 +654,10 @@ class Explainer:
         warm_start: bool | None = None,
         node_budget: int | None = None,
         gap: float | None = None,
+        search: str | None = None,
         region: bool = False,
+        region_mode: str = "fast",
+        region_budget: int = 100_000,
         degraded: list[_Degradation] | None = None,
         incumbent: tuple[float, FloatArray] | None = None,
     ) -> Counterfactual | Infeasible | dict[str, object]:
@@ -619,8 +685,11 @@ class Explainer:
             raise TreecfError("plausibility with missing factual values is not supported")
         if backend not in ("genetic", "genetic-rust", "python", "exact"):
             raise TreecfError(f"unknown backend {backend!r}; use 'genetic', 'python', or 'exact'")
-        resolved_warm_start, resolved_node_budget, resolved_gap = _resolve_exact_kwargs(
-            backend, warm_start, node_budget, gap
+        resolved_warm_start, resolved_node_budget, resolved_gap, resolved_search = (
+            _resolve_exact_kwargs(backend, warm_start, node_budget, gap, search)
+        )
+        resolved_mode, resolved_budget = _resolve_region_kwargs(
+            region, region_mode, region_budget
         )
         rust = backend in ("genetic", "genetic-rust")
 
@@ -633,7 +702,7 @@ class Explainer:
                     self._explain_exact(
                         x, interval, time_budget_s, resolved_warm_start,
                         resolved_node_budget, resolved_gap, sparsity_weight, seed,
-                        degraded=band_degraded,
+                        degraded=band_degraded, search=resolved_search,
                     )
                     if backend == "exact"
                     else self._explain_genetic(
@@ -641,7 +710,12 @@ class Explainer:
                     )
                 )
                 if region and isinstance(outcome, Counterfactual):
-                    outcome = replace(outcome, region=self._region_for(x, outcome.x_cf, interval))
+                    outcome = replace(
+                        outcome,
+                        region=self._region_for(
+                            x, outcome.x_cf, interval, mode=resolved_mode, budget=resolved_budget
+                        ),
+                    )
                 if isinstance(outcome, Counterfactual) and target.space == "calibrated":
                     outcome = replace(
                         outcome, score_calibrated=_calibrated_readout(target, outcome.score_raw)
@@ -658,7 +732,7 @@ class Explainer:
             self._explain_exact(
                 x, interval, time_budget_s, resolved_warm_start,
                 resolved_node_budget, resolved_gap, sparsity_weight, seed,
-                incumbent=incumbent, degraded=degraded,
+                incumbent=incumbent, degraded=degraded, search=resolved_search,
             )
             if backend == "exact"
             else self._explain_genetic(
@@ -666,7 +740,12 @@ class Explainer:
             )
         )
         if region and isinstance(result, Counterfactual):
-            result = replace(result, region=self._region_for(x, result.x_cf, interval))
+            result = replace(
+                result,
+                region=self._region_for(
+                    x, result.x_cf, interval, mode=resolved_mode, budget=resolved_budget
+                ),
+            )
         if isinstance(result, Counterfactual) and target.space == "calibrated":
             result = replace(
                 result, score_calibrated=_calibrated_readout(target, result.score_raw)
@@ -689,7 +768,10 @@ class Explainer:
         warm_start: bool | None = None,
         node_budget: int | None = None,
         gap: float | None = None,
+        search: str | None = None,
         region: bool = False,
+        region_mode: str = "fast",
+        region_budget: int = 100_000,
         allow_exact_batch: bool = False,
     ) -> Any:
         """Mass-produce counterfactuals for a dataset; see ``treecf.batch``.
@@ -752,7 +834,7 @@ class Explainer:
             outside ``diversity="coalitions"`` (or omitted inside it), or
             if ``ids`` does not have one entry per row of ``X``.
         ValueError
-            If ``warm_start``, ``node_budget``, or ``gap`` is
+            If ``warm_start``, ``node_budget``, ``gap``, or ``search`` is
             given a non-default value together with a ``backend`` other
             than ``"exact"``; if ``backend="exact"`` is requested without
             ``allow_exact_batch=True`` (message names the wall time
@@ -767,7 +849,8 @@ class Explainer:
             ids=ids, backend=backend, time_budget_s=time_budget_s,
             sparsity_weight=sparsity_weight, seed=seed,
             coalitions=coalitions, include_full=include_full,
-            warm_start=warm_start, node_budget=node_budget, gap=gap, region=region,
+            warm_start=warm_start, node_budget=node_budget, gap=gap, search=search,
+            region=region, region_mode=region_mode, region_budget=region_budget,
             allow_exact_batch=allow_exact_batch,
         )
 
@@ -784,7 +867,10 @@ class Explainer:
         warm_start: bool | None = None,
         node_budget: int | None = None,
         gap: float | None = None,
+        search: str | None = None,
         region: bool = False,
+        region_mode: str = "fast",
+        region_budget: int = 100_000,
     ) -> dict[str, Counterfactual | Infeasible]:
         """One counterfactual per named feature coalition (opt-in mode).
 
@@ -819,7 +905,7 @@ class Explainer:
             references an unknown feature, or if ``include_full=True`` and
             a coalition is named ``"(all levers)"`` (the reserved key).
         ValueError
-            If ``warm_start``, ``node_budget``, or ``gap`` is
+            If ``warm_start``, ``node_budget``, ``gap``, or ``search`` is
             given a non-default value together with a ``backend`` other
             than ``"exact"``.
         """
@@ -833,13 +919,15 @@ class Explainer:
         if include_full:
             results[_ALL_LEVERS] = self._explain_one(
                 x, target, backend, time_budget_s, sparsity_weight, seed,
-                warm_start=warm_start, node_budget=node_budget, gap=gap, region=region,
+                warm_start=warm_start, node_budget=node_budget, gap=gap, search=search,
+                region=region, region_mode=region_mode, region_budget=region_budget,
                 degraded=degraded,
             )
         for name, clone in self._coalition_explainers(normalized).items():
             results[name] = clone._explain_one(
                 x, target, backend, time_budget_s, sparsity_weight, seed,
-                warm_start=warm_start, node_budget=node_budget, gap=gap, region=region,
+                warm_start=warm_start, node_budget=node_budget, gap=gap, search=search,
+                region=region, region_mode=region_mode, region_budget=region_budget,
                 degraded=degraded,
             )
         message = _degraded_summary(degraded, len(degraded), len(results), "coalitions")
@@ -859,7 +947,10 @@ class Explainer:
         warm_start: bool | None = None,
         node_budget: int | None = None,
         gap: float | None = None,
+        search: str | None = None,
         region: bool = False,
+        region_mode: str = "fast",
+        region_budget: int = 100_000,
         degraded: list[_Degradation] | None = None,
         incumbent: tuple[float, FloatArray] | None = None,
     ) -> Counterfactual | Infeasible:
@@ -867,7 +958,8 @@ class Explainer:
         result = self._explain(
             x, target, backend, time_budget_s, sparsity_weight, seed,
             warn_factual=warn_factual,
-            warm_start=warm_start, node_budget=node_budget, gap=gap, region=region,
+            warm_start=warm_start, node_budget=node_budget, gap=gap, search=search,
+            region=region, region_mode=region_mode, region_budget=region_budget,
             degraded=degraded, incumbent=incumbent,
         )
         assert not isinstance(result, dict)  # bands are rejected by the callers
@@ -1004,6 +1096,7 @@ class Explainer:
         seed: int | None,
         incumbent: tuple[float, FloatArray] | None = None,
         degraded: list[_Degradation] | None = None,
+        search: str = "classic",
     ) -> Counterfactual | Infeasible:
         """Exact-backend counterfactual for one target interval.
 
@@ -1079,6 +1172,7 @@ class Explainer:
                 time_budget_s=time_budget_s,
                 incumbent=incumbent,
                 cache=self._rust_cache,
+                search=search,
             )
         else:
             from treecf.backends.exact import solve_exact
@@ -1097,11 +1191,19 @@ class Explainer:
                 gap=gap,
                 time_budget_s=time_budget_s,
                 incumbent=incumbent,
+                search=search,
             )
         elapsed = time.monotonic() - start
 
         if res.stats["completed"] is False:
-            degradation = _degradation_for(res, node_budget, time_budget_s, elapsed, seed)
+            # the size of the space is computed only on this path: it costs a
+            # domain build, cheap next to an exhausted search
+            log10_states: float | None = None
+            if cast(int, res.stats["nodes_expanded"]) >= node_budget or elapsed >= time_budget_s:
+                log10_states = cast(float, self._search_profile(x, interval)["log10_states"])
+            degradation = _degradation_for(
+                res, node_budget, time_budget_s, elapsed, seed, log10_states
+            )
             if degraded is None:
                 warnings.warn(
                     degradation.message + (_SEED_CLAUSE if degradation.unseeded else ""),
@@ -1291,8 +1393,223 @@ class Explainer:
             return None
         return self.plausibility.if_ir, self.plausibility.min_total_path
 
+    def search_profile(
+        self, x: FloatArray, target: Target | None = None
+    ) -> dict[str, object]:
+        """Size the exact search for one factual before running it.
+
+        Per feature: its kind (``"numeric"``/``"categorical"``), the number of
+        atomic routing cells (or category blocks), the number of candidate
+        values left after the instance bounds (``"domain"``), whether it is
+        frozen, and whether the search would branch on it at all
+        (``"influential"``). The totals ``"influential_features"`` and
+        ``"log10_states"`` (the sum of ``log10`` domain sizes over the
+        influential features — the exponent of the number of complete
+        assignments) size the space the classic search enumerates in the
+        worst case. With ``target``, the presolve filter runs too and adds
+        the ``"presolved"`` size per feature, ``"log10_states_presolved"``,
+        and ``"presolve_certified"`` (whether presolve alone certifies
+        infeasibility). Cheap and deterministic: no search runs.
+
+        Parameters
+        ----------
+        x
+            The factual instance.
+        target
+            Optional single-interval target; enables the presolve figures.
+
+        Returns
+        -------
+        The profile as a plain ``dict``.
+
+        Raises
+        ------
+        TreecfError
+            If ``target`` is a ``Target.bands`` ladder.
+        """
+        x = np.asarray(x, dtype=np.float64)
+        interval = None
+        if target is not None:
+            if target.bands_spec is not None:
+                raise TreecfError("search_profile takes a single-interval target, not bands")
+            interval = target.raw_interval(self.ir.link)
+        return self._search_profile(x, interval)
+
+    def _search_profile(
+        self, x: FloatArray, interval: tuple[float, float] | None
+    ) -> dict[str, object]:
+        from treecf.backends._exact_profile import search_space_profile
+
+        return search_space_profile(
+            self.ir, x, self.compiled, self.sigma, self.weights, 0.0, self.value_policy,
+            self._plausibility_bound(), interval,
+        )
+
+    def recourse_menu(
+        self,
+        x: FloatArray,
+        target: Target,
+        *,
+        max_levers: int = 3,
+        mode: str = "minimal",
+        backend: str = "exact",
+        search: str = "classic",
+        seed: int | None = None,
+        time_budget_s: float | None = None,
+        total_budget_s: float | None = None,
+        warm_start: bool | None = None,
+        node_budget: int | None = None,
+        gap: float | None = None,
+    ) -> RecourseMenu:
+        """Every lever set up to ``max_levers`` solved as its own coalition.
+
+        The candidate levers are the features the search would branch on for
+        ``x`` (see ``search_profile``: not frozen, more than one candidate
+        value, influential). Sets are enumerated by ascending size, sets of
+        one size in lexicographic feature order, and each is solved with
+        every other feature frozen — the same clone path
+        ``explain_coalitions`` uses — so an entry is exactly the plan that
+        changing only those levers admits, with the proof the backend
+        attaches. Entries are keyed by the features the plan actually changed
+        (sorted names joined by ``"+"``); a set whose plan changed a strict
+        subset is filed under the subset and listed in ``implied``.
+
+        ``mode="minimal"`` (the default) skips every set that contains a set
+        already found feasible — those are feasible by monotonicity and not
+        minimal — and ``RecourseMenu.minimal`` lists the frontier;
+        ``mode="all"`` solves every set. An ``Infeasible`` entry keeps its
+        proof: ``"certified"`` from a completed exact search means no
+        acceptance is reachable by changing only those levers.
+
+        ``time_budget_s`` caps each solve (``explain``'s default when
+        ``None``); ``total_budget_s`` caps the whole enumeration, and sets
+        not reached go to ``RecourseMenu.unresolved``. One aggregate
+        ``TreecfWarning`` reports unresolved and uncertified counts; the
+        genetic backend never certifies, so it never warns about that and its
+        menus are never ``complete``. ``warm_start``/``node_budget``/``gap``/
+        ``search`` are the exact backend's options, as in ``explain``.
+
+        Parameters
+        ----------
+        x
+            The factual instance.
+        target
+            A single-interval target.
+        max_levers
+            Largest lever-set size to enumerate.
+        mode
+            ``"minimal"`` or ``"all"``.
+        backend
+            ``"exact"`` (certifies) or ``"genetic"``.
+        search
+            Exact search mode, ``"classic"`` or ``"refine"``.
+        seed
+            Passed to every solve.
+        time_budget_s
+            Per-solve wall budget; ``None`` for ``explain``'s default.
+        total_budget_s
+            Wall budget for the whole menu; ``None`` for no cap.
+        warm_start, node_budget, gap
+            Exact-backend options, as in ``explain``.
+
+        Returns
+        -------
+        The ``RecourseMenu``: a mapping from lever-set key to result, in
+        display order (minimal feasible sets by cost, other feasible sets by
+        cost, infeasible sets by size).
+
+        Raises
+        ------
+        TreecfError
+            If ``target`` is a ``Target.bands`` ladder, if the factual already
+            satisfies the target (nothing to enumerate), or if two solves
+            contradict monotonicity (a certified-infeasible set containing a
+            feasible one — a solver inconsistency).
+        ValueError
+            If ``mode`` is unknown, ``max_levers`` is below one,
+            ``total_budget_s`` is negative, or an exact-only option is given
+            with another backend.
+        """
+        from treecf._menu import build_menu
+
+        return build_menu(
+            self, x, target, max_levers=max_levers, mode=mode, backend=backend,
+            search=search, seed=seed, time_budget_s=time_budget_s,
+            total_budget_s=total_budget_s, warm_start=warm_start, node_budget=node_budget,
+            gap=gap,
+        )
+
+    def explain_diverse(
+        self,
+        x: FloatArray,
+        target: Target,
+        *,
+        k: int = 5,
+        diversity: str = "levers",
+        coalitions: Mapping[str, Sequence[str]] | None = None,
+        max_levers: int = 3,
+        **menu_kwargs: Any,
+    ) -> DiverseSet:
+        """Up to ``k`` plans that reach the target through different lever sets.
+
+        Diversity means distinct changed feature sets. ``diversity="levers"``
+        takes the ``k`` cheapest entries of ``recourse_menu(mode="minimal",
+        max_levers=...)``, so the plans are pairwise distinct in what they
+        change by construction. ``diversity="coalitions"`` needs
+        ``coalitions=`` in the ``explain_coalitions`` form: each declared
+        coalition is solved as itself, and only when fewer than ``k`` are
+        feasible are unions of two, then three, ... coalitions tried, level by
+        level; plans from disjoint coalitions are the diverse set a customer
+        can act on. ``menu_kwargs`` (``backend``, ``search``, ``seed``,
+        ``time_budget_s``, ``total_budget_s``, ``warm_start``,
+        ``node_budget``, ``gap``) go to the menu or the ladder solves.
+
+        Parameters
+        ----------
+        x
+            The factual instance.
+        target
+            A single-interval target.
+        k
+            How many plans to return at most.
+        diversity
+            ``"levers"`` or ``"coalitions"``.
+        coalitions
+            ``{name: [features]}``; required for ``"coalitions"``.
+        max_levers
+            Largest lever-set size for the ``"levers"`` criterion.
+
+        Returns
+        -------
+        The ``DiverseSet``, cheapest plan first; ``complete`` says whether
+        the criterion was exhausted with certificates before ``k`` was
+        reached.
+
+        Raises
+        ------
+        ValueError
+            If ``diversity`` is not one of the two criteria, ``k`` is below
+            one, or ``coalitions=`` accompanies the ``"levers"`` criterion.
+        TreecfError
+            If ``diversity="coalitions"`` has no ``coalitions=``, or for the
+            reasons ``recourse_menu``/``explain_coalitions`` raise.
+        """
+        from treecf._menu import build_diverse
+
+        return build_diverse(
+            self, x, target, k=k, diversity=diversity, coalitions=coalitions,
+            max_levers=max_levers, menu_kwargs=dict(menu_kwargs),
+        )
+
     def recourse_region(
-        self, x: FloatArray, x_cf: FloatArray, target: Target
+        self,
+        x: FloatArray,
+        x_cf: FloatArray,
+        target: Target,
+        *,
+        mode: str = "fast",
+        budget: int = 100_000,
+        keep_witnesses: bool = False,
     ) -> RecourseRegion:
         """Certify a per-feature box around an already-verified counterfactual.
 
@@ -1305,10 +1622,33 @@ class Explainer:
         widen. Works for a counterfactual from any backend. Costs one oracle
         call — a full interval-tree walk of every ensemble tree — per
         attempted per-feature, per-direction expansion; see
-        ``RecourseRegion``. The returned region is certified
-        but neither maximal nor monotone in ``target``: a strictly narrower
-        target can still grow a strictly wider region on some feature. See
+        ``RecourseRegion``. The returned region is certified but not monotone
+        in ``target``: a strictly narrower target can still grow a strictly
+        wider region on some feature. See
         [Certification](../concepts/certification.md#regions-certified-not-maximal-not-monotone).
+
+        A side no constraint bounds is grown no further than the explainer's
+        background data reaches on that side (widened to include ``x_cf``
+        itself), so a feature without a ``Range`` does not come back
+        unbounded; ``RecourseRegion.data_limited`` names those sides. With
+        no background data every such side runs to infinity.
+
+        ``mode="fast"`` (the default) stops a side as soon as the conservative
+        interval bound fails, so the region is sound but not necessarily
+        maximal. ``mode="maximal"`` settles every such side with a budgeted
+        search for a violating point in the next routing cell: the side
+        extends when the search proves the slab empty, is marked proved in
+        ``RecourseRegion.maximal`` when a witness is found, and is left
+        unproven when the search spends its ``budget`` (search nodes per
+        side). A proved side is maximal in a precise, local sense: the region
+        cannot be extended into the next cell on that side without leaving
+        the target or breaking a constraint, given every other coordinate
+        ranges over the box as certified — a different box that also shrinks
+        another feature is not excluded, and the maximal region need not
+        contain the fast one. ``keep_witnesses=True`` keeps the violating
+        points in ``RecourseRegion.witnesses``. The maximal mode can cost up
+        to ``budget`` search nodes per side per feature, each a partial
+        ensemble walk.
 
         Returns
         -------
@@ -1318,9 +1658,11 @@ class Explainer:
         ------
         TreecfError
             If ``target`` is a ``Target.bands`` ladder (pass the
-            single band's own interval instead), or if ``x_cf`` fails the
+            single band's own interval instead), if ``x_cf`` fails the
             float-space re-check against ``x``/``target`` — the message
-            names the specific check that failed.
+            names the specific check that failed — or if ``mode`` is unknown.
+        ValueError
+            If ``budget`` is below one.
         """
         x = np.asarray(x, dtype=np.float64)
         x_cf = np.asarray(x_cf, dtype=np.float64)
@@ -1345,7 +1687,9 @@ class Explainer:
             raise TreecfError(
                 f"cannot certify a region for an unverified counterfactual: {verification}"
             )
-        return self._region_for(x, x_cf, interval)
+        return self._region_for(
+            x, x_cf, interval, mode=mode, budget=budget, keep_witnesses=keep_witnesses
+        )
 
     def certificate(
         self,
@@ -1357,6 +1701,7 @@ class Explainer:
         seed: int | None = None,
         node_budget: int | None = None,
         gap: float | None = None,
+        search: str | None = None,
         time_budget_s: float | None = None,
         warm_start: bool | None = None,
     ) -> dict[str, object]:
@@ -1385,10 +1730,10 @@ class Explainer:
         whose fresh verification fails is still returned, with the failing
         booleans recorded — but a ``TreecfWarning`` names the failed check.
 
-        ``seed``/``node_budget``/``gap``/``time_budget_s``/``warm_start`` are
-        recorded under ``solve.declared`` when given: the result object does
-        not carry them, so they are caller-supplied, and the block's name
-        makes that provenance explicit.
+        ``seed``/``node_budget``/``gap``/``time_budget_s``/``warm_start``/
+        ``search`` are recorded under ``solve.declared`` when given: the
+        result object does not carry them, so they are caller-supplied, and
+        the block's name makes that provenance explicit.
 
         Parameters
         ----------
@@ -1411,6 +1756,9 @@ class Explainer:
             The time budget the solve ran with, likewise.
         warm_start
             The warm-start setting the solve ran with, likewise.
+        search
+            The exact search mode (``"classic"`` or ``"refine"``) the solve
+            ran with, likewise.
 
         Returns
         -------
@@ -1427,7 +1775,7 @@ class Explainer:
 
         return build_certificate(
             self, x, result, target, band=band, seed=seed, node_budget=node_budget,
-            gap=gap, time_budget_s=time_budget_s, warm_start=warm_start,
+            gap=gap, time_budget_s=time_budget_s, warm_start=warm_start, search=search,
         )
 
     def check_certificate(
@@ -1474,7 +1822,14 @@ class Explainer:
         return check_certificate(self, cert, calibrator=calibrator)
 
     def _region_for(
-        self, x: FloatArray, x_cf: FloatArray, interval: tuple[float, float]
+        self,
+        x: FloatArray,
+        x_cf: FloatArray,
+        interval: tuple[float, float],
+        *,
+        mode: str = "fast",
+        budget: int = 100_000,
+        keep_witnesses: bool = False,
     ) -> RecourseRegion:
         """Build the region for an already-verified ``x_cf`` (no re-verification)."""
         from treecf.regions import _recourse_region
@@ -1483,9 +1838,13 @@ class Explainer:
         plaus = self._plausibility_bound()
         if plaus is not None:
             if_ir, min_total_path = plaus
+        integer_features = tuple(
+            name for name in self.ir.feature_names if self.value_policy.get(name) == "integer"
+        )
         return _recourse_region(
             self.ir, x, x_cf, interval, self.compiled, if_ir, min_total_path,
-            cache=self._rust_cache,
+            cache=self._rust_cache, mode=mode, budget=budget, keep_witnesses=keep_witnesses,
+            integer_features=integer_features, data_bounds=self._data_bounds,
         )
 
     def _apply_value_policies(
@@ -1600,6 +1959,16 @@ def _snap(
         if in_cell(c) and lo <= c <= hi:
             return c
     return None
+
+
+def _observed_bounds(background: FloatArray) -> tuple[FloatArray, FloatArray]:
+    """Per-feature minimum and maximum over the finite entries of
+    ``background``; NaN for a column with no finite entry."""
+    finite = np.isfinite(background)
+    any_finite = finite.any(axis=0)
+    lo = np.where(any_finite, np.min(np.where(finite, background, math.inf), axis=0), math.nan)
+    hi = np.where(any_finite, np.max(np.where(finite, background, -math.inf), axis=0), math.nan)
+    return lo.astype(np.float64), hi.astype(np.float64)
 
 
 def _resolve_sigma(
